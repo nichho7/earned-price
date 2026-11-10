@@ -13,6 +13,8 @@ credentials.json
 .near-credentials/
 near-credentials/
 **/near-credentials/**
+# earned init: throwaway testnet buyer key (0600). Never commit.
+.earned/
 
 # Build output
 target/
