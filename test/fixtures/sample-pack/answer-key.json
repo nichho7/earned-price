@@ -1,0 +1,11 @@
+{
+  "pack_id": "sample-0",
+  "version": 1,
+  "line_tolerance": 1,
+  "pass_min": 3,
+  "bugs": [
+    { "id": "B1", "file": "cart.js", "line_start": 4, "line_end": 5, "category": "off-by-one" },
+    { "id": "B2", "file": "cart.js", "line_start": 17, "line_end": 17, "category": "assignment-in-condition" },
+    { "id": "B3", "file": "cart.js", "line_start": 22, "line_end": 22, "category": "divide-by-zero" }
+  ]
+}

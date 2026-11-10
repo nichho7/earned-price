@@ -7,7 +7,7 @@
   "bin": {
     "earned": "cli/earned.js"
   },
-  "files": ["cli/", "names.json"],
+  "files": ["cli/", "grader/", "names.json"],
   "engines": {
     "node": ">=20"
   },

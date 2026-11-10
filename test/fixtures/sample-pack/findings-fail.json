@@ -1,0 +1,4 @@
+[
+  { "file": "cart.js", "line": 17, "note": "= instead of ===" },
+  { "file": "cart.js", "line": 12, "note": "false positive" }
+]
