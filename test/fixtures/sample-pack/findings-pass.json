@@ -1,6 +1,7 @@
 [
-  { "file": "cart.js", "line": 22, "note": "empty array divides by zero" },
-  { "file": "cart.js", "line": 4, "note": "loop runs one past the end" },
-  { "file": "cart.js", "line": 17, "note": "= instead of ===" },
-  { "file": "cart.js", "line": 11, "note": "false positive: discount tiers" }
+  { "file": "cart.js", "line": 22, "category": "divide-by-zero", "note": "empty array divides by zero" },
+  { "file": "cart.js", "line": 4, "category": "off-by-one", "note": "loop runs one past the end" },
+  { "file": "cart.js", "line": 17, "category": "wrong-operator", "note": "= instead of ===" },
+  { "file": "cart.js", "line": 26, "category": "missing-check", "note": "find may return undefined" },
+  { "file": "cart.js", "line": 11, "category": "float-money", "note": "false positive: discount tiers" }
 ]

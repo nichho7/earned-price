@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Grader in the browser</title>
+<script type="importmap">{ "imports": { "@noble/hashes/": "/node_modules/@noble/hashes/" } }</script>
+<pre id="out">pending</pre>
+<script type="module">
+  // Loads the exact grader/grade.js file Node uses and runs every golden case.
+  import { canonicalJson, commit, grade, sha256Hex } from "/grader/grade.js";
+  const out = document.getElementById("out");
+  try {
+    const getJson = async (p) => (await fetch(p)).json();
+    const golden = await getJson("/test/fixtures/grader-golden.json");
+    const key = await getJson("/test/fixtures/sample-pack/answer-key.json");
+    const { salt } = await getJson("/test/fixtures/sample-pack/reveal.json");
+    const results = golden.cases.map((c) => canonicalJson(grade(c.key ?? key, c.findings)));
+    const report = { env: typeof window, commitment: commit(key, salt), results, digest: sha256Hex(results.join("\n")) };
+    out.textContent = "RESULT " + canonicalJson(report);
+  } catch (e) {
+    out.textContent = "ERROR " + e.message;
+  }
+</script>

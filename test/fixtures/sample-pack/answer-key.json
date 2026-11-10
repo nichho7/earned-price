@@ -1,11 +1,13 @@
 {
   "pack_id": "sample-0",
   "version": 1,
-  "line_tolerance": 1,
-  "pass_min": 3,
+  "line_tolerance": 3,
+  "pass_min": 4,
   "bugs": [
-    { "id": "B1", "file": "cart.js", "line_start": 4, "line_end": 5, "category": "off-by-one" },
-    { "id": "B2", "file": "cart.js", "line_start": 17, "line_end": 17, "category": "assignment-in-condition" },
-    { "id": "B3", "file": "cart.js", "line_start": 22, "line_end": 22, "category": "divide-by-zero" }
+    { "id": "B1", "title": "Off-by-one in total", "file": "cart.js", "line_start": 4, "line_end": 5, "category": "off-by-one" },
+    { "id": "B2", "title": "Inverted comparison in discount", "file": "cart.js", "line_start": 12, "line_end": 12, "category": "wrong-comparison" },
+    { "id": "B3", "title": "Assignment in condition in applyCoupon", "file": "cart.js", "line_start": 17, "line_end": 17, "category": "wrong-operator" },
+    { "id": "B4", "title": "Divide by zero in average", "file": "cart.js", "line_start": 22, "line_end": 22, "category": "divide-by-zero" },
+    { "id": "B5", "title": "Missing not-found check in priceOf", "file": "cart.js", "line_start": 27, "line_end": 27, "category": "missing-check" }
   ]
 }
