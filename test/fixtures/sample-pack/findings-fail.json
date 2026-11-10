@@ -1,4 +1,5 @@
 [
-  { "file": "cart.js", "line": 17, "note": "= instead of ===" },
-  { "file": "cart.js", "line": 12, "note": "false positive" }
+  { "file": "cart.js", "line": 17, "category": "wrong-operator", "note": "= instead of ===" },
+  { "file": "cart.js", "line": 12, "category": "wrong-operator", "note": "right line, wrong category" },
+  { "file": "cart.js", "line": 22, "category": "divide-by-zero", "note": "empty array divides by zero" }
 ]

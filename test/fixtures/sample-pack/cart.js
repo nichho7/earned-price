@@ -9,7 +9,7 @@ export function total(items) {
 
 export function discount(sum) {
   if (sum > 100) return sum * 0.1;
-  if (sum > 50) return sum * 0.05;
+  if (sum < 50) return sum * 0.05;
   return 0;
 }
 
@@ -20,4 +20,9 @@ export function applyCoupon(sum, coupon) {
 
 export function average(xs) {
   return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+export function priceOf(items, sku) {
+  const item = items.find((i) => i.sku === sku);
+  return item.price;
 }
