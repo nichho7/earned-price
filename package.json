@@ -7,11 +7,19 @@
   "bin": {
     "earned": "cli/earned.js"
   },
-  "files": ["cli/", "grader/", "names.json"],
+  "files": [
+    "cli/",
+    "grader/",
+    "names.json"
+  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "test": "node --test test/"
+  },
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0"
   }
 }

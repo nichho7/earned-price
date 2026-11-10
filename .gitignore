@@ -21,6 +21,9 @@ dist/
 .next/
 out/
 
+# Spike run output (records are ~300 KB each; commit chosen ones by hand)
+spike/results/
+
 # Deploy tooling
 .vercel
 
