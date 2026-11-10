@@ -1,0 +1,30 @@
+# Secrets and credentials (never commit)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*-key.json
+*_key.json
+keys/
+credentials/
+credentials.json
+.near-credentials/
+near-credentials/
+**/near-credentials/**
+
+# Build output
+target/
+node_modules/
+dist/
+.next/
+out/
+
+# Deploy tooling
+.vercel
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
