@@ -1,0 +1,9 @@
+{
+  "brand": "Earned Price",
+  "package": "earned-price",
+  "crate": "earned_price",
+  "cli_bin": "earned",
+  "network": "testnet",
+  "contract_account": "earned-price.testnet",
+  "wasm_path": "target/near/earned_price.wasm"
+}

@@ -8,6 +8,29 @@ A seller agent that haggles its price, is paid from testnet escrow only when a c
 - **Sister project:** NEAR Real-World Money (Near_Hackathon_II, track realworld)
 - **Status:** work in progress. Setup and usage instructions will land here.
 
+## Names
+
+Decided in DEC-005. `names.json` is the single source of truth; the Rust crate
+(`contract/src/names.rs`) and the CLI (`cli/names.js`) mirror it, and tests fail
+if they drift.
+
+| What | Name |
+|---|---|
+| Brand | Earned Price |
+| Repo / npm package / Cargo package | `earned-price` |
+| Rust crate (lib) | `earned_price` |
+| CLI binary | `earned` (also `npx earned-price`; never `ep`) |
+| Contract account | `earned-price.testnet` |
+| Network | `testnet` |
+| Contract wasm (pinned) | `target/near/earned_price.wasm` |
+
+## Layout
+
+- `contract/`: NEAR escrow contract (Rust, near-sdk). Stub only.
+- `cli/`: the `earned` CLI (Node, ESM, no dependencies yet). Stub only.
+- `scripts/deploy.sh`: testnet deploy using the pinned wasm path.
+- `test/`: `npm test` checks the naming set end to end.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

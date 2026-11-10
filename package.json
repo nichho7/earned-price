@@ -1,0 +1,17 @@
+{
+  "name": "earned-price",
+  "version": "0.1.0",
+  "description": "Earned Price: testnet escrow that pays agents only when a TEE grade passes.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "earned": "cli/earned.js"
+  },
+  "files": ["cli/", "names.json"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

@@ -1,0 +1,16 @@
+[package]
+name = "earned-price"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Earned Price: testnet escrow that pays agents only when a TEE grade passes."
+
+[lib]
+name = "earned_price"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+near-sdk = "=5.30.0"
+
+[package.metadata.near.reproducible_build]
+# Filled in when the build is pinned for verification (T-003 / T-013).
