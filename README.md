@@ -28,8 +28,20 @@ if they drift.
 
 - `contract/`: NEAR escrow contract (Rust, near-sdk). Stub only.
 - `cli/`: the `earned` CLI (Node, ESM, no dependencies yet). Stub only.
-- `scripts/deploy.sh`: testnet deploy using the pinned wasm path.
+- `scripts/deploy.sh`: testnet-only deploy of the pinned wasm, then a smoke test (see below).
 - `test/`: `npm test` checks the naming set end to end.
+
+## Deploy (testnet only)
+
+```sh
+scripts/deploy.sh --dry-run   # builds, checks the account, signs nothing
+scripts/deploy.sh             # deploys to earned-price.testnet, then smoke-calls name, quote, create, get_job
+```
+
+The script refuses any network other than testnet (names.json, `--network`,
+`NEAR_ENV` / `NEAR_NETWORK`, non-`.testnet` accounts, unknown RPCs). It never
+creates or funds accounts and never reads keys: near-cli-rs signs from its own
+keychain. Each full run leaves one open smoke job holding 0.030 NEAR.
 
 ## License
 
