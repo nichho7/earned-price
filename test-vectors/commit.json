@@ -1,0 +1,56 @@
+{
+  "_doc": "Shared commit test vector (T-020). commit = sha256(u32_be(len(K)) || K || salt), K = UTF-8 bytes of canonicalJson(key) (keys sorted at every depth, no whitespace, grader/grade.js canonicalJson), salt = exactly 32 bytes. Contract (Rust tests), grader commit() and offline verify must all reproduce commit_hex from key + salt_hex.",
+  "format": "sha256(u32_be(len(K)) || K || salt32)",
+  "key": {
+    "pack_id": "sample-0",
+    "version": 1,
+    "line_tolerance": 3,
+    "pass_min": 4,
+    "bugs": [
+      {
+        "id": "B1",
+        "title": "Off-by-one in total",
+        "file": "cart.js",
+        "line_start": 4,
+        "line_end": 5,
+        "category": "off-by-one"
+      },
+      {
+        "id": "B2",
+        "title": "Inverted comparison in discount",
+        "file": "cart.js",
+        "line_start": 12,
+        "line_end": 12,
+        "category": "wrong-comparison"
+      },
+      {
+        "id": "B3",
+        "title": "Assignment in condition in applyCoupon",
+        "file": "cart.js",
+        "line_start": 17,
+        "line_end": 17,
+        "category": "wrong-operator"
+      },
+      {
+        "id": "B4",
+        "title": "Divide by zero in average",
+        "file": "cart.js",
+        "line_start": 22,
+        "line_end": 22,
+        "category": "divide-by-zero"
+      },
+      {
+        "id": "B5",
+        "title": "Missing not-found check in priceOf",
+        "file": "cart.js",
+        "line_start": 27,
+        "line_end": 27,
+        "category": "missing-check"
+      }
+    ]
+  },
+  "key_canonical": "{\"bugs\":[{\"category\":\"off-by-one\",\"file\":\"cart.js\",\"id\":\"B1\",\"line_end\":5,\"line_start\":4,\"title\":\"Off-by-one in total\"},{\"category\":\"wrong-comparison\",\"file\":\"cart.js\",\"id\":\"B2\",\"line_end\":12,\"line_start\":12,\"title\":\"Inverted comparison in discount\"},{\"category\":\"wrong-operator\",\"file\":\"cart.js\",\"id\":\"B3\",\"line_end\":17,\"line_start\":17,\"title\":\"Assignment in condition in applyCoupon\"},{\"category\":\"divide-by-zero\",\"file\":\"cart.js\",\"id\":\"B4\",\"line_end\":22,\"line_start\":22,\"title\":\"Divide by zero in average\"},{\"category\":\"missing-check\",\"file\":\"cart.js\",\"id\":\"B5\",\"line_end\":27,\"line_start\":27,\"title\":\"Missing not-found check in priceOf\"}],\"line_tolerance\":3,\"pack_id\":\"sample-0\",\"pass_min\":4,\"version\":1}",
+  "key_len": 707,
+  "salt_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+  "commit_hex": "d4d3062163c9d30df3b492e1d2de2ecceae5593fdaef20ce548d094c5af45096"
+}

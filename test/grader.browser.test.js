@@ -1,6 +1,7 @@
 // Proves the same grader/grade.js file runs in a real browser and gives byte-identical output.
 // Serves the repo on 127.0.0.1, opens test/browser/grader.html in headless Chrome and reads the DOM.
-// Skips (does not fail) when no Chrome is installed; set CHROME_PATH to point at one.
+// Skips when no Chrome is installed (set CHROME_PATH to point at one). With REQUIRE_BROWSER=1 or
+// CI=true a missing Chrome FAILS the test instead, so a clean-machine run can't hide a skip.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -12,14 +13,19 @@ import { promisify } from "node:util";
 import { canonicalJson, commit, grade, sha256Hex } from "../grader/grade.js";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const ALLOWED = ["/grader/", "/node_modules/@noble/hashes/", "/test/browser/", "/test/fixtures/"];
+const ALLOWED = ["/grader/", "/node_modules/@noble/hashes/", "/test/browser/", "/test/fixtures/", "/test-vectors/"];
 const TYPES = { ".js": "text/javascript", ".json": "application/json", ".html": "text/html" };
 const CHROME = [
   process.env.CHROME_PATH,
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
   "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
   "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/snap/bin/chromium",
 ].find((p) => p && existsSync(p));
+const REQUIRE_BROWSER = process.env.REQUIRE_BROWSER === "1" || process.env.CI === "true";
 
 function serve() {
   const server = createServer((req, res) => {
@@ -40,9 +46,14 @@ function nodeReport() {
   const golden = load("grader-golden.json");
   const key = load("sample-pack/answer-key.json");
   const { salt } = load("sample-pack/reveal.json");
+  const vector = JSON.parse(readFileSync(join(ROOT, "test-vectors/commit.json"), "utf8"));
   const results = golden.cases.map((c) => canonicalJson(grade(c.key ?? key, c.findings)));
-  return { commitment: commit(key, salt), results, digest: sha256Hex(results.join("\n")) };
+  return { commitment: commit(key, salt), vector_commit: commit(vector.key, vector.salt_hex), results, digest: sha256Hex(results.join("\n")) };
 }
+
+test("a browser is available when REQUIRE_BROWSER=1 or CI=true", { skip: !REQUIRE_BROWSER && "browser not required" }, () => {
+  assert.ok(CHROME, "no Chrome/Chromium found; install one or set CHROME_PATH");
+});
 
 test("same grade.js runs in headless Chrome with byte-identical results", { skip: !CHROME && "no Chrome found", timeout: 60_000 }, async () => {
   const server = await serve();
@@ -61,6 +72,7 @@ test("same grade.js runs in headless Chrome with byte-identical results", { skip
     assert.equal(browser.env, "object", "ran with a real window object");
     const node = nodeReport();
     assert.equal(browser.commitment, node.commitment);
+    assert.equal(browser.vector_commit, node.vector_commit);
     assert.deepEqual(browser.results, node.results);
     assert.equal(browser.digest, node.digest);
   } finally {

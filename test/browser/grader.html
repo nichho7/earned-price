@@ -12,8 +12,15 @@
     const golden = await getJson("/test/fixtures/grader-golden.json");
     const key = await getJson("/test/fixtures/sample-pack/answer-key.json");
     const { salt } = await getJson("/test/fixtures/sample-pack/reveal.json");
+    const vector = await getJson("/test-vectors/commit.json");
     const results = golden.cases.map((c) => canonicalJson(grade(c.key ?? key, c.findings)));
-    const report = { env: typeof window, commitment: commit(key, salt), results, digest: sha256Hex(results.join("\n")) };
+    const report = {
+      env: typeof window,
+      commitment: commit(key, salt),
+      vector_commit: commit(vector.key, vector.salt_hex),
+      results,
+      digest: sha256Hex(results.join("\n")),
+    };
     out.textContent = "RESULT " + canonicalJson(report);
   } catch (e) {
     out.textContent = "ERROR " + e.message;

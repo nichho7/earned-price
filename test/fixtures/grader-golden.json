@@ -3,7 +3,8 @@
  "commitment": {
   "key": "sample-pack/answer-key.json",
   "reveal": "sample-pack/reveal.json",
-  "expected": "8f3dd28220dcad875ae9809405f1ae3a85a901400944277f36eb4683718741e8"
+  "expected": "41bbb4134ccb56a188245f3dbf8ca40f7baa4a3e12773af56fea414b5ebc4843",
+  "_doc": "sha256(u32_be(len K) || K || salt32), K = canonicalJson(key); cross-checked with node:crypto in grader.test.js"
  },
  "cases": [
   {
@@ -604,6 +605,329 @@
      "B5"
     ],
     "false_positives": 0
+   }
+  },
+  {
+   "name": "tolerance edge: line_end + 3 on a multi-line bug still hits",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 8,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    }
+   ],
+   "expected": {
+    "pack_id": "sample-0",
+    "total": 5,
+    "found": 4,
+    "pass_min": 4,
+    "passed": true,
+    "matched": [
+     {
+      "bug": "B1",
+      "line": 8
+     },
+     {
+      "bug": "B2",
+      "line": 12
+     },
+     {
+      "bug": "B3",
+      "line": 17
+     },
+     {
+      "bug": "B4",
+      "line": 22
+     }
+    ],
+    "missed": [
+     "B5"
+    ],
+    "false_positives": 0
+   }
+  },
+  {
+   "name": "two different findings in one window: the lowest line is the match in any order",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 6,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    }
+   ],
+   "expected": {
+    "pack_id": "sample-0",
+    "total": 5,
+    "found": 4,
+    "pass_min": 4,
+    "passed": true,
+    "matched": [
+     {
+      "bug": "B1",
+      "line": 4
+     },
+     {
+      "bug": "B2",
+      "line": 12
+     },
+     {
+      "bug": "B3",
+      "line": 17
+     },
+     {
+      "bug": "B4",
+      "line": 22
+     }
+    ],
+    "missed": [
+     "B5"
+    ],
+    "false_positives": 1
+   }
+  },
+  {
+   "name": "exactly 10 findings are accepted",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    },
+    {
+     "file": "cart.js",
+     "line": 27,
+     "category": "missing-check"
+    },
+    {
+     "file": "other.js",
+     "line": 1,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 2,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 3,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 5,
+     "category": "off-by-one"
+    }
+   ],
+   "expected": {
+    "pack_id": "sample-0",
+    "total": 5,
+    "found": 5,
+    "pass_min": 4,
+    "passed": true,
+    "matched": [
+     {
+      "bug": "B1",
+      "line": 4
+     },
+     {
+      "bug": "B2",
+      "line": 12
+     },
+     {
+      "bug": "B3",
+      "line": 17
+     },
+     {
+      "bug": "B4",
+      "line": 22
+     },
+     {
+      "bug": "B5",
+      "line": 27
+     }
+    ],
+    "missed": [],
+    "false_positives": 5
+   }
+  },
+  {
+   "name": "11 findings is a fixed FAIL, never truncated",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    },
+    {
+     "file": "cart.js",
+     "line": 27,
+     "category": "missing-check"
+    },
+    {
+     "file": "other.js",
+     "line": 1,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 2,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 3,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 5,
+     "category": "off-by-one"
+    },
+    {
+     "file": "other.js",
+     "line": 6,
+     "category": "off-by-one"
+    }
+   ],
+   "expected": {
+    "pack_id": "sample-0",
+    "total": 5,
+    "found": 0,
+    "pass_min": 4,
+    "passed": false,
+    "matched": [],
+    "missed": [
+     "B1",
+     "B2",
+     "B3",
+     "B4",
+     "B5"
+    ],
+    "false_positives": 0,
+    "error": "too_many_findings"
+   }
+  },
+  {
+   "name": "one malformed finding is a fixed FAIL, never dropped",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    },
+    {
+     "file": "cart.js",
+     "line": "27",
+     "category": "missing-check"
+    }
+   ],
+   "expected": {
+    "pack_id": "sample-0",
+    "total": 5,
+    "found": 0,
+    "pass_min": 4,
+    "passed": false,
+    "matched": [],
+    "missed": [
+     "B1",
+     "B2",
+     "B3",
+     "B4",
+     "B5"
+    ],
+    "false_positives": 0,
+    "error": "malformed_finding"
    }
   }
  ]
