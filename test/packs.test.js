@@ -207,8 +207,15 @@ test("results: every logged review re-grades offline to the same result with the
     for (const entry of summary.packs) {
       const pack = packs.find((p) => p.id === entry.pack);
       if (entry.hash !== pack.hash) assert.equal(typeof entry.hash_note, "string", `${round} pack ${entry.pack}: hash differs from frozen and has no hash_note`);
-      if (entry.superseded) continue; // older pack code, kept as history (hash_note says which)
       const request = buildReviewRequest(pack.reviewFiles);
+      if (entry.superseded) {
+        // older pack code, kept as history (hash_note says which); the flag may only skip runs whose
+        // review request really differs from the frozen pack's, so it cannot hide a live result
+        const first = entry.rows.find((r) => r.found !== undefined);
+        const raw = JSON.parse(readFileSync(join(resultsDir, round, "raw", `pack-${entry.pack}-run${String(first.run).padStart(2, "0")}.json`), "utf8"));
+        assert.notEqual(raw.request_body, request, `${round} pack ${entry.pack}: marked superseded but its request is the frozen pack's`);
+        continue;
+      }
       const done = entry.rows.filter((r) => r.found !== undefined);
       assert.equal(entry.passed, done.filter((r) => r.passed).length);
       for (const row of done) {

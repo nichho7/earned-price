@@ -8,14 +8,16 @@
 // never printed or written. Writes packs/results/round-<n>/summary.json (per-pack and per-bug hit
 // rates) and raw/<pack>-run<NN>.json (exact request + response bodies, no key).
 // Cost = usage tokens x public catalog price (https://cloud-api.near.ai/v1/model/list), an estimate.
-// A failed request (non-200, timeout, network error) may still be billed, so it counts too: its
-// usage if the body has one, else the WORST_RUN_USD reserve. Stops before a run would push the
-// estimated spend over --max-usd.
+// Every request that may have been billed counts (non-200, timeout, network error, and a 200 with an
+// unreadable body or no usage): its usage if the body has one, else the per-run reserve, an upper
+// bound from the request size + MAX_TOKENS (scripts/review-spend.mjs; assumes reasoning off). Stops
+// before a run would push the estimated spend over --max-usd.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { findingsFromResponse, grade } from "../grader/grade.js";
 import { loadPack } from "../packs/packs.js";
 import { PROMPT_VERSION, REVIEW_MODEL, buildReviewRequest } from "../seller/review-prompt.js";
+import { chargeFor, worstRunUsd } from "./review-spend.mjs";
 
 const BASE = "https://cloud-api.near.ai/v1";
 const arg = (name, dflt) => {
@@ -26,7 +28,6 @@ const ROUND = arg("round");
 const PACKS = arg("packs", "1,2,3").split(",");
 const RUNS = Number(arg("runs", 10));
 const MAX_USD = Number(arg("max-usd", 0.25));
-const WORST_RUN_USD = 0.01; // pessimistic per-run reserve for the budget stop
 if (!ROUND) {
   console.error("usage: measure-packs.mjs --round <n> [--packs 1,2,3] [--runs 10] [--max-usd 0.25]");
   process.exit(2);
@@ -52,16 +53,7 @@ async function price(model) {
 }
 
 let spent = 0;
-
-/** Estimated cost of one response body: its usage x price, or null when it has no usage. */
-function usageCost(responseBody, p) {
-  let usage;
-  try {
-    usage = JSON.parse(responseBody).usage;
-  } catch {}
-  if (!usage || typeof usage !== "object") return null;
-  return (usage.prompt_tokens ?? 0) * p.in + (usage.completion_tokens ?? 0) * p.out;
-}
+let reserve = 0; // worst single-run cost over the packs in this round, set in main()
 
 async function review(pack, run, p) {
   const requestBody = buildReviewRequest(pack.reviewFiles);
@@ -77,17 +69,17 @@ async function review(pack, run, p) {
     });
     responseBody = await r.text();
   } catch (e) {
-    spent += WORST_RUN_USD; // timed out or dropped: the server may still have run (and billed) it
+    spent += reserve; // timed out or dropped: the server may still have run (and billed) it
     throw e;
   }
   const wall_ms = Math.round(performance.now() - t0);
-  if (!r.ok) {
-    spent += usageCost(responseBody, p) ?? WORST_RUN_USD;
-    throw new Error(`chat -> HTTP ${r.status}`);
-  }
-  const usage = JSON.parse(responseBody).usage ?? {};
-  const cost_usd = usageCost(responseBody, p) ?? 0;
+  const cost_usd = chargeFor(responseBody, p, reserve); // before any parsing, so it always counts
   spent += cost_usd;
+  if (!r.ok) throw new Error(`chat -> HTTP ${r.status}`);
+  let usage = {};
+  try {
+    usage = JSON.parse(responseBody)?.usage ?? {};
+  } catch {} // unreadable 200: graded below as malformed (a FAIL), charged the reserve above
   const findings = findingsFromResponse(responseBody);
   const g = grade(pack.key, findings);
   writeFileSync(join(OUT, "raw", `pack-${pack.id}-run${String(run).padStart(2, "0")}.json`), JSON.stringify({ request_body: requestBody, response_body: responseBody }));
@@ -110,7 +102,7 @@ async function measurePack(id, p) {
   const pack = loadPack(id);
   const rows = [];
   for (let run = 1; run <= RUNS; run++) {
-    if (spent + WORST_RUN_USD * PACKS.length > MAX_USD) {
+    if (spent + reserve * PACKS.length > MAX_USD) {
       rows.push({ run, skipped: `budget stop at $${spent.toFixed(4)}` });
       continue;
     }
@@ -148,6 +140,7 @@ async function measurePack(id, p) {
 async function main() {
   mkdirSync(join(OUT, "raw"), { recursive: true });
   const p = await price(REVIEW_MODEL);
+  reserve = Math.max(...PACKS.map((id) => worstRunUsd(buildReviewRequest(loadPack(id).reviewFiles), p)));
   const started = new Date().toISOString();
   const packs = await Promise.all(PACKS.map((id) => measurePack(id, p))); // packs in parallel, runs in order
   const summary = {
@@ -159,6 +152,7 @@ async function main() {
     runs_per_pack: RUNS,
     price_usd_per_mtok: { in: Number((p.in * 1e6).toFixed(4)), out: Number((p.out * 1e6).toFixed(4)) },
     estimated_spend_usd: Number(spent.toFixed(6)),
+    reserve_usd_per_run: Number(reserve.toFixed(6)),
     gate: "packs 1-2: passed >= 8/10; pack 3: failed >= 9/10 (pass = found >= 4 of 5)",
     packs,
   };
