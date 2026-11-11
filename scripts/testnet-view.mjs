@@ -24,8 +24,11 @@ export function rpcUrls(env = process.env) {
   throw new Error(`refusing RPC ${custom}: not a known testnet RPC`);
 }
 
-function assertTestnet(id) {
-  if (typeof id !== "string" || !id.endsWith(".testnet")) {
+// NEAR account id rules, ending in .testnet (same pattern as scripts/deploy.sh).
+const TESTNET_ACCOUNT = /^[a-z0-9]+([_-][a-z0-9]+)*(\.[a-z0-9]+([_-][a-z0-9]+)*)*\.testnet$/;
+
+export function assertTestnet(id) {
+  if (typeof id !== "string" || id.length > 64 || !TESTNET_ACCOUNT.test(id)) {
     throw new Error(`refusing account ${id}: not a .testnet account`);
   }
 }
