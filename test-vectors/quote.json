@@ -1,0 +1,18 @@
+{
+  "about": "T-026: quote vectors read by both contract/src/quote.rs (include_str) and test/quote.test.js, so the JS formula cannot drift from the contract. quote = clamp(30 + 10*unique_buyers - 5*fails, 25, 100) milliNEAR.",
+  "vectors": [
+    { "name": "empty record", "passes": 0, "fails": 0, "unique_buyers": 0, "quote_mnear": 30, "formula": "0.030 + 0.010×0 − 0.005×0 = 0.030 NEAR" },
+    { "name": "demo after one pass", "passes": 1, "fails": 0, "unique_buyers": 1, "quote_mnear": 40, "formula": "0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR" },
+    { "name": "demo after pass then fail", "passes": 1, "fails": 1, "unique_buyers": 1, "quote_mnear": 35, "formula": "0.030 + 0.010×1 − 0.005×1 = 0.035 NEAR" },
+    { "name": "repeat buyer counts once", "passes": 3, "fails": 0, "unique_buyers": 1, "quote_mnear": 40, "formula": "0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR" },
+    { "name": "one fail hits floor exactly", "passes": 0, "fails": 1, "unique_buyers": 0, "quote_mnear": 25, "formula": "0.030 + 0.010×0 − 0.005×1 = 0.025 NEAR" },
+    { "name": "below floor clamps", "passes": 0, "fails": 2, "unique_buyers": 0, "quote_mnear": 25, "formula": "0.030 + 0.010×0 − 0.005×2 = 0.020 → floor 0.025 NEAR" },
+    { "name": "many fails clamp", "passes": 0, "fails": 1000, "unique_buyers": 0, "quote_mnear": 25, "formula": "0.030 + 0.010×0 − 0.005×1000 = -4.970 → floor 0.025 NEAR" },
+    { "name": "7 buyers reach cap exactly", "passes": 7, "fails": 0, "unique_buyers": 7, "quote_mnear": 100, "formula": "0.030 + 0.010×7 − 0.005×0 = 0.100 NEAR" },
+    { "name": "8 buyers clamp at cap", "passes": 8, "fails": 0, "unique_buyers": 8, "quote_mnear": 100, "formula": "0.030 + 0.010×8 − 0.005×0 = 0.110 → cap 0.100 NEAR" },
+    { "name": "passes and fails cancel", "passes": 4, "fails": 8, "unique_buyers": 4, "quote_mnear": 30, "formula": "0.030 + 0.010×4 − 0.005×8 = 0.030 NEAR" },
+    { "name": "u32 max buyers", "passes": 4294967295, "fails": 0, "unique_buyers": 4294967295, "quote_mnear": 100, "formula": "0.030 + 0.010×4294967295 − 0.005×0 = 42949672.980 → cap 0.100 NEAR" },
+    { "name": "u32 max fails", "passes": 0, "fails": 4294967295, "unique_buyers": 0, "quote_mnear": 25, "formula": "0.030 + 0.010×0 − 0.005×4294967295 = -21474836.445 → floor 0.025 NEAR" },
+    { "name": "u32 max both", "passes": 4294967295, "fails": 4294967295, "unique_buyers": 4294967295, "quote_mnear": 100, "formula": "0.030 + 0.010×4294967295 − 0.005×4294967295 = 21474836.505 → cap 0.100 NEAR" }
+  ]
+}
