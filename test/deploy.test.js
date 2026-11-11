@@ -59,7 +59,11 @@ function fixtureWasm(names) {
   bytes.push(0x0a, code.length, ...code);
   return Buffer.from(bytes);
 }
-const CONTRACT_EXPORTS = ["accept", "create", "decline", "get_job", "name", "next_job_id", "on_payout", "quote", "submit_review"];
+// A representative subset: fixtureWasm writes one-byte section sizes, so the export
+// section must stay under 128 bytes (with test_pay_seller added below).
+const CONTRACT_EXPORTS = ["accept", "create", "decline", "get_job", "name", "next_job_id", "on_payout", "quote", "reveal", "submit_review"];
+const SIGNERS = JSON.parse(readFileSync(join(repo, "contract/tee-signers.json"), "utf8")).signers;
+const INIT_ARGS = JSON.stringify({ owner: "earned-price.testnet", signers: SIGNERS });
 const WASM = wasmInfo(fixtureWasm(CONTRACT_EXPORTS));
 
 // near stub: `--version` answers like near-cli-rs (or `nearVersion`), every other call
@@ -67,7 +71,7 @@ const WASM = wasmInfo(fixtureWasm(CONTRACT_EXPORTS));
 function sandbox(namesPatch = {}, { exports = CONTRACT_EXPORTS, nearVersion = "near-cli-rs 0.31.1", createOut = '"7"', cargo = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "earned-deploy-"));
   for (const d of ["scripts", "contract", "test-vectors", "bin"]) mkdirSync(join(dir, d));
-  for (const f of ["scripts/deploy.sh", "scripts/testnet-view.mjs", "scripts/wasm-info.mjs", "test-vectors/commit.json"]) {
+  for (const f of ["scripts/deploy.sh", "scripts/testnet-view.mjs", "scripts/wasm-info.mjs", "test-vectors/commit.json", "contract/tee-signers.json"]) {
     copyFileSync(join(repo, f), join(dir, f));
   }
   chmodSync(join(dir, "scripts/deploy.sh"), 0o755);
@@ -139,7 +143,7 @@ const goodJob = () => ({
 });
 
 async function withRpc(state, fn) {
-  const full = { calls: [], accountReads: 0, views: { name: "Earned Price", quote: QUOTE, get_job: goodJob() }, ...state };
+  const full = { calls: [], accountReads: 0, views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_job: goodJob() }, ...state };
   const server = await fakeRpc(full);
   try {
     return await fn(server.address().port, full);
@@ -216,19 +220,19 @@ test("deploy.sh refuses a first deploy the balance cannot cover (exit 4)", async
   });
 });
 
-test("deploy.sh deploys the pinned wasm, checks the on-chain code_hash, then smoke-calls name, quote, create, get_job", async () => {
+test("deploy.sh first deploy calls new(owner, signers), checks the on-chain code_hash, then smoke-calls name, owner, signers, quote, create, get_job", async () => {
   await withRpc(fresh(), async (port, rpc) => {
     const box = sandbox();
     const r = await run(box, [], { rpcPort: port });
     assert.equal(r.code, 0, r.stderr);
     const near = box.calls().filter((c) => c.startsWith("near"));
     assert.deepEqual(near, [
-      "near contract deploy earned-price.testnet use-file target/near/earned_price.wasm without-init-call network-config testnet sign-with-keychain send",
+      `near contract deploy earned-price.testnet use-file target/near/earned_price.wasm with-init-call new json-args ${INIT_ARGS} prepaid-gas 30 Tgas attached-deposit 0 NEAR network-config testnet sign-with-keychain send`,
       `near contract call-function as-transaction earned-price.testnet create json-args {"seller":"${SELLER}","commit_hash":"${vector.commit_hex}"} prepaid-gas 30 Tgas attached-deposit ${QUOTE} yoctoNEAR sign-as earned-price.testnet network-config testnet sign-with-keychain send`,
     ]);
-    assert.deepEqual(rpc.calls, ["view_account", "view_account", "name", "quote", "get_job"]);
+    assert.deepEqual(rpc.calls, ["view_account", "view_account", "name", "owner", "signers", "quote", "get_job"]);
     assert.match(r.stdout, new RegExp(`deployed: on-chain code_hash ${WASM.code_hash} = base58\\(sha256 ${WASM.sha256}\\)`));
-    assert.match(r.stdout, /smoke OK: name, quote, create \(job 7/);
+    assert.match(r.stdout, /smoke OK: name, owner, signers, quote, create \(job 7/);
     assert.ok(!existsSync(join(box.dir, "target/near/smoke-unconfirmed.txt")), "marker cleared once the job id is known");
   });
 });
@@ -250,10 +254,12 @@ for (const [label, views, msg] of [
   ["a job with the wrong price", { get_job: { ...goodJob(), price: "1" } }, /SMOKE FAIL get_job.price/],
   ["a job with the wrong commit", { get_job: { ...goodJob(), commit_hash: "00" } }, /SMOKE FAIL get_job.commit_hash/],
   ["a missing job", { get_job: null }, /SMOKE FAIL get_job.id/],
+  ["the wrong owner", { owner: "mallory.testnet" }, /SMOKE FAIL owner/],
+  ["a first deploy whose signers differ from tee-signers.json", { signers: [] }, /SMOKE FAIL signers/],
   ["a job with pre-T-022 status casing", { get_job: { ...goodJob(), status: "Open" } }, /SMOKE FAIL get_job.status/],
 ]) {
   test(`deploy.sh smoke fails (exit 5) on ${label}`, async () => {
-    const state = { ...fresh(), views: { name: "Earned Price", quote: QUOTE, get_job: goodJob(), ...views } };
+    const state = { ...fresh(), views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_job: goodJob(), ...views } };
     await withRpc(state, async (port) => {
       const box = sandbox();
       const r = await run(box, [], { rpcPort: port });
@@ -483,4 +489,49 @@ test("testnet-view refuses non-testnet accounts and RPCs", async () => {
   assert.equal(r.code, 1);
   assert.match(r.stderr, /not a \.testnet account/);
   assert.ok(existsSync(join(repo, "scripts/deploy.sh")));
+});
+
+// ---- T-023: init call (A-012 owner + signer allowlist) -----------------------
+test("deploy.sh --redeploy keeps state (no init call); differing live signers are only noted", async () => {
+  const old = "OLDhashOLDhashOLDhashOLDhashOLDh";
+  const views = { name: "Earned Price", owner: "earned-price.testnet", signers: [...SIGNERS, "0x" + "ab".repeat(20)], quote: QUOTE, get_job: goodJob() };
+  await withRpc({ accounts: [{ ...funded, code_hash: old }, deployed], views }, async (port) => {
+    const box = sandbox();
+    const r = await run(box, ["--redeploy"], { rpcPort: port });
+    assert.equal(r.code, 0, r.stderr);
+    const deploy = box.calls().find((c) => c.startsWith("near contract deploy"));
+    assert.match(deploy, / without-init-call /);
+    assert.doesNotMatch(deploy, /with-init-call/);
+    assert.match(r.stdout, /note: live signers .* differ from contract\/tee-signers.json/);
+  });
+});
+
+for (const [label, seed] of [
+  ["an empty list", { signers: [] }],
+  ["an uppercase address", { signers: ["0xFE0071895500A9755C18044948AB4F4E1A7F337E"] }],
+  ["a short address", { signers: ["0x1234"] }],
+  ["no signers key", {}],
+  ["nine signers", { signers: Array.from({ length: 9 }, (_, i) => "0x" + String(i).repeat(40)) }],
+]) {
+  test(`deploy.sh refuses tee-signers.json with ${label}, before building or any RPC call`, async () => {
+    await withRpc(fresh(), async (port, rpc) => {
+      const box = sandbox();
+      writeFileSync(join(box.dir, "contract/tee-signers.json"), JSON.stringify(seed));
+      const r = await run(box, ["--dry-run"], { rpcPort: port });
+      assert.equal(r.code, 1, r.stderr);
+      assert.match(r.stderr, /tee-signers.json must list 1 to 8 signer addresses/);
+      assert.deepEqual(rpc.calls, []);
+      assert.ok(!box.calls().some((c) => c.startsWith("cargo") || c.startsWith("near")));
+    });
+  });
+}
+
+test("deploy.sh --dry-run on a fresh account prints the init call it would send", async () => {
+  await withRpc(fresh(), async (port) => {
+    const box = sandbox();
+    const r = await run(box, ["--dry-run"], { rpcPort: port });
+    assert.equal(r.code, 0, r.stderr);
+    assert.ok(r.stdout.includes(`with-init-call new json-args ${INIT_ARGS} prepaid-gas 30 Tgas attached-deposit 0 NEAR`), r.stdout);
+    assert.ok(!box.calls().some((c) => c.startsWith("near")));
+  });
 });
