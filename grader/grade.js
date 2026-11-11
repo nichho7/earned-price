@@ -210,3 +210,30 @@ export function grade(key, findings) {
     false_positives: owner.filter((o) => o === -1).length,
   };
 }
+
+/**
+ * The findings a TEE review returned, from the raw NEAR AI chat-completion response body (the
+ * exact bytes whose sha256 the TEE signed). `choices[0].message.content` must be a string holding
+ * JSON that is either the findings array or an object with a `findings` member (JSON mode returns
+ * an object); that member is used as is. Anything else returns null, which grade() turns into the
+ * malformed_finding FAIL. Never throws. The escrow contract applies the same rule on-chain
+ * (contract/src/grade.rs); test/fixtures/review-extract.json is shared by both test suites.
+ */
+export function findingsFromResponse(responseBody) {
+  let content;
+  try {
+    content = JSON.parse(responseBody)?.choices?.[0]?.message?.content;
+  } catch {
+    return null;
+  }
+  if (typeof content !== "string") return null;
+  let v;
+  try {
+    v = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (Array.isArray(v)) return v;
+  if (v !== null && typeof v === "object") return v.findings === undefined ? null : v.findings;
+  return null;
+}
