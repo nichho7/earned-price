@@ -59,7 +59,7 @@ function fixtureWasm(names) {
   bytes.push(0x0a, code.length, ...code);
   return Buffer.from(bytes);
 }
-const CONTRACT_EXPORTS = ["create", "get_job", "name", "quote"];
+const CONTRACT_EXPORTS = ["accept", "create", "decline", "get_job", "name", "next_job_id", "on_payout", "quote", "submit_review"];
 const WASM = wasmInfo(fixtureWasm(CONTRACT_EXPORTS));
 
 // near stub: `--version` answers like near-cli-rs (or `nearVersion`), every other call
@@ -135,7 +135,7 @@ const goodJob = () => ({
   price: QUOTE,
   commit_hash: vector.commit_hex,
   reveal_deadline_ns: "1",
-  status: "Open",
+  status: "open",
 });
 
 async function withRpc(state, fn) {
@@ -250,6 +250,7 @@ for (const [label, views, msg] of [
   ["a job with the wrong price", { get_job: { ...goodJob(), price: "1" } }, /SMOKE FAIL get_job.price/],
   ["a job with the wrong commit", { get_job: { ...goodJob(), commit_hash: "00" } }, /SMOKE FAIL get_job.commit_hash/],
   ["a missing job", { get_job: null }, /SMOKE FAIL get_job.id/],
+  ["a job with pre-T-022 status casing", { get_job: { ...goodJob(), status: "Open" } }, /SMOKE FAIL get_job.status/],
 ]) {
   test(`deploy.sh smoke fails (exit 5) on ${label}`, async () => {
     const state = { ...fresh(), views: { name: "Earned Price", quote: QUOTE, get_job: goodJob(), ...views } };

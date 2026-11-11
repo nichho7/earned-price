@@ -230,7 +230,7 @@ JOB="$(retry view call "$ACCOUNT" get_job "$(json id "$JOB_ID")")"
 node -e '
   const [job, id, buyer, seller, price, commit] = process.argv.slice(1);
   const j = JSON.parse(job);
-  const want = { id, buyer, seller, price, commit_hash: commit, status: "Open" };
+  const want = { id, buyer, seller, price, commit_hash: commit, status: "open" };
   for (const [k, v] of Object.entries(want)) {
     if (j?.[k] !== v) { console.error(`[deploy] SMOKE FAIL get_job.${k}: got ${j?.[k]}, want ${v}`); process.exit(5); }
   }' "$JOB" "$JOB_ID" "$ACCOUNT" "$SMOKE_SELLER" "$QUOTE" "$COMMIT_HEX"

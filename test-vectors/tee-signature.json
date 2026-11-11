@@ -1,0 +1,10 @@
+{
+  "_source": "spike/evidence/runs/recorded-review-sample-0-run08.json (real NEAR AI Cloud provider_tee signature, T-003, 2026-11-10)",
+  "_signed_text_format": "<model>:<request_sha256>:<response_sha256>, EIP-191 personal_sign, secp256k1",
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "request_sha256": "658ca6c677b76246cbff621926378c1237a7c0e789be01c3490b91a706f207fe",
+  "response_sha256": "3830648577262862cb24072ac4a0c3a981956efaeeaab445cc4b9f8dd1fc4a2b",
+  "signed_text": "deepseek-ai/DeepSeek-V4.1-Flash-1017:658ca6c677b76246cbff621926378c1237a7c0e789be01c3490b91a706f207fe:3830648577262862cb24072ac4a0c3a981956efaeeaab445cc4b9f8dd1fc4a2b",
+  "signature": "0xebbdc506406251110ca0996fc17b985a12f9476a28b846e83e89f9c53e79be262c89daf69acfb4776055ad57519200cb8571afb2dab35b9909a2a7ff6eb5e8e91b",
+  "signing_address": "0xfe0071895500a9755c18044948ab4f4e1a7f337e"
+}
