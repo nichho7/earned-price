@@ -25,9 +25,9 @@ if (cmd === "names") {
     process.exitCode = 1;
   }
 } else if (cmd === "quote") {
-  const { runQuote } = await import("./quote-cmd.js");
+  const { parseQuoteArgs, runQuote } = await import("./quote-cmd.js");
   try {
-    await runQuote({ seller: args[1], offer: flag("offer") });
+    await runQuote(parseQuoteArgs(args.slice(1)));
   } catch (err) {
     console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "quote failed; retry"}`);
     process.exitCode = 1;

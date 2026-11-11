@@ -3,12 +3,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import {
   BASE_MNEAR, CAP_MNEAR, FAIL_MNEAR, FLOOR_MNEAR, PASS_MNEAR, YOCTO_PER_MNEAR,
   evaluateOffer, fetchQuote, formatMilli, formulaLine, parseNearToMilli, parseRecord,
   quoteLines, quoteMilli, viewFunction,
 } from "../cli/quote.js";
-import { quoteRpcUrls, runQuote } from "../cli/quote-cmd.js";
+import { parseQuoteArgs, quoteRpcUrls, runQuote } from "../cli/quote-cmd.js";
 import { RPC_URLS } from "../cli/init.js";
 
 const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
@@ -228,4 +229,88 @@ test("runQuote: bad offer or missing seller fails before any network call; RPC l
   assert.deepEqual(quoteRpcUrls({}), RPC_URLS);
   assert.deepEqual(quoteRpcUrls({ EARNED_RPC_URL: "https://test.rpc.fastnear.com" }), ["https://test.rpc.fastnear.com"]);
   assert.throws(() => quoteRpcUrls({ EARNED_RPC_URL: "https://rpc.mainnet.near.org" }), { code: "MAINNET_REFUSED" });
+});
+
+// ---- review fixes (T-026 rework, 2026-11-11) ----
+
+// Fix 1: literal units, not the module's own constant (a 10^3 unit slip must fail here).
+const Y030 = "30000000000000000000000"; // 0.030 NEAR in yoctoNEAR, written out
+const Y040 = "40000000000000000000000"; // 0.040 NEAR
+
+test("fix 1: YOCTO_PER_MNEAR is 10^21 and fetchQuote accepts literal yocto strings from chain", async () => {
+  assert.equal(YOCTO_PER_MNEAR, 1000000000000000000000n);
+  assert.equal(YOCTO_PER_MNEAR, 10n ** 21n);
+  let q = await fetchQuote({ fetch: fakeFetch(healthy(record(0, 0, 0), Y030)), urls: URLS, contractId: CONTRACT, seller: SELLER });
+  assert.equal(q.quoteMilli, 30);
+  assert.equal(q.quoteYocto, 30000000000000000000000n);
+  q = await fetchQuote({ fetch: fakeFetch(healthy(record(1, 0, 1), Y040)), urls: URLS, contractId: CONTRACT, seller: SELLER });
+  assert.equal(q.quoteYocto, 40000000000000000000000n);
+  // 0.030 written with 10^18 or 10^24 is refused, not printed.
+  for (const wrong of ["30000000000000000000", "30000000000000000000000000"]) {
+    await assert.rejects(fetchQuote({ fetch: fakeFetch(healthy(record(0, 0, 0), wrong)), urls: URLS, contractId: CONTRACT, seller: SELLER }), { code: "QUOTE_MISMATCH" }, wrong);
+  }
+});
+
+test("fix 2: an offer 1 mNEAR under the quote is refused", () => {
+  for (const [offer, quote] of [[29, 30], [34, 35], [99, 100], [39, 40]]) {
+    const r = evaluateOffer(offer, quote);
+    assert.equal(r.accept, false, `${offer} vs ${quote}`);
+    assert.equal(r.priceMilli, quote);
+    assert.match(r.reason, new RegExp(`below my quote ${formatMilli(quote).replace(".", "\\.")} NEAR`));
+  }
+});
+
+test("fix 3: evaluateOffer refuses an invalid quote instead of accepting at NaN", () => {
+  for (const bad of [undefined, null, NaN, "30", 30.5, 24, 101, -30, 2 ** 53]) {
+    assert.throws(() => evaluateOffer(30, bad), { code: "BAD_QUOTE" }, String(bad));
+  }
+  assert.equal(evaluateOffer(25, 25).accept, true, "floor is a valid quote");
+  assert.equal(evaluateOffer(100, 100).accept, true, "cap is a valid quote");
+});
+
+test("fix 4: a get_record answer without block_hash fails (no silent fallback to finality=final)", async () => {
+  for (const bh of [undefined, null, "", 7]) {
+    const f = fakeFetch((_url, p) => {
+      const body = callResult(p.method_name === "get_record" ? record(0, 0, 0) : Y030);
+      if (bh === undefined) delete body.result.block_hash; else body.result.block_hash = bh;
+      return body;
+    });
+    await assert.rejects(fetchQuote({ fetch: f, urls: URLS, contractId: CONTRACT, seller: SELLER }), { code: "VIEW_FAILED", message: /block_hash/ }, String(bh));
+    assert.deepEqual(f.calls.map((c) => c.params.method_name), ["get_record"], "quote is never read unpinned");
+  }
+});
+
+test("fix 5: mismatch is compared in yocto, not truncated mNEAR (quote + 1 yocto refused)", async () => {
+  for (const off of ["30000000000000000000001", "29999999999999999999999"]) {
+    await assert.rejects(fetchQuote({ fetch: fakeFetch(healthy(record(0, 0, 0), off)), urls: URLS, contractId: CONTRACT, seller: SELLER }), { code: "QUOTE_MISMATCH" }, off);
+  }
+});
+
+test("fix 6: the chain quote must be a plain digit string", async () => {
+  for (const bad of ["30000000000000000000000abc", " 30000000000000000000000", "-30000000000000000000000", "3e22", "", "0x1", 3e22, null]) {
+    await assert.rejects(fetchQuote({ fetch: fakeFetch(healthy(record(0, 0, 0), bad)), urls: URLS, contractId: CONTRACT, seller: SELLER }), { code: "VIEW_FAILED" }, String(bad));
+  }
+});
+
+test("fix 7: shared vectors cover both sides of the cap (95 / 100 / 105) and the floor (30 / 25 / 20)", () => {
+  const raws = new Set(VECTORS.map((v) => 30 + 10 * v.unique_buyers - 5 * v.fails));
+  for (const raw of [95, 100, 105, 30, 25, 20]) assert.ok(raws.has(raw), `vector with raw ${raw}`);
+});
+
+test("fix 8: parseQuoteArgs: seller + --offer, missing or flag-like values refused", () => {
+  assert.deepEqual(parseQuoteArgs([SELLER]), { seller: SELLER, offer: undefined });
+  assert.deepEqual(parseQuoteArgs([SELLER, "--offer", "0.02"]), { seller: SELLER, offer: "0.02" });
+  assert.deepEqual(parseQuoteArgs(["--offer", "0.02", SELLER]), { seller: SELLER, offer: "0.02" });
+  for (const argv of [[SELLER, "--offer"], [SELLER, "--offer", "--json"], [SELLER, "--offer", ""]]) {
+    assert.throws(() => parseQuoteArgs(argv), { code: "BAD_OFFER" }, argv.join(" "));
+  }
+  for (const argv of [[], ["--offer", "0.02"], [SELLER, "other.testnet"], [SELLER, "--offer", "0.02", "--offer", "0.03"], [SELLER, "--bogus"]]) {
+    assert.throws(() => parseQuoteArgs(argv), { code: "USAGE" }, argv.join(" "));
+  }
+});
+
+test("fix 8: `earned quote --offer 0.02` with no seller prints USAGE (no network)", () => {
+  const r = spawnSync(process.execPath, [new URL("../cli/earned.js", import.meta.url).pathname, "quote", "--offer", "0.02"], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^error USAGE: usage: earned quote <seller\.testnet> \[--offer 0\.02\]/);
 });

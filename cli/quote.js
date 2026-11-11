@@ -93,8 +93,7 @@ export function formulaLine(record) {
 }
 
 /** Lines the seller prints for a quote (CLI and site share the text). */
-export function quoteLines(record) {
-  const r = record;
+export function quoteLines(r) {
   const counted = r.passes === r.unique_buyers ? "" : ` (${r.passes} passes, ${r.unique_buyers} counted: one per buyer)`;
   return [
     `Quote: ${formatMilli(quoteMilli(r))} NEAR (testnet)`,
@@ -112,6 +111,10 @@ export function quoteLines(record) {
  */
 export function evaluateOffer(offerMilli, quoteM) {
   if (!Number.isSafeInteger(offerMilli) || offerMilli < 0) throw new QuoteError("BAD_OFFER", "offer must be a whole, non-negative milliNEAR amount");
+  // Pass fetchQuote's quoteMilli. Anything outside the contract's clamp is a caller bug: never accept at it.
+  if (!Number.isSafeInteger(quoteM) || quoteM < FLOOR_MNEAR || quoteM > CAP_MNEAR) {
+    throw new QuoteError("BAD_QUOTE", `quote must be whole milliNEAR in ${FLOOR_MNEAR}..${CAP_MNEAR} (got ${JSON.stringify(quoteM)})`);
+  }
   const offer = formatMilli(offerMilli);
   if (offerMilli < FLOOR_MNEAR) {
     return { accept: false, priceMilli: quoteM, reason: `Refused ${offer} NEAR: below my cost floor ${formatMilli(FLOOR_MNEAR)} NEAR. My price is ${formatMilli(quoteM)} NEAR.` };
@@ -206,6 +209,8 @@ export async function fetchQuote({ fetch: fetchFn, urls, contractId, seller }) {
   // Read quote at the same block as the record, so a job settling in between can't cause a false mismatch.
   const first = await view("get_record");
   const record = parseRecord(first.value);
+  // Without a block hash the next read would silently fall back to finality=final and lose the pin.
+  if (typeof first.blockHash !== "string" || !first.blockHash) throw new QuoteError("VIEW_FAILED", "get_record answer has no block_hash; cannot pin the quote read");
   const onChain = (await view("quote", first.blockHash)).value;
   if (typeof onChain !== "string" || !/^\d+$/.test(onChain)) throw new QuoteError("VIEW_FAILED", `quote returned ${JSON.stringify(onChain)}, expected a yoctoNEAR string`);
   const quoteYocto = BigInt(onChain);
