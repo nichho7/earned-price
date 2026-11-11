@@ -1,0 +1,1841 @@
+{
+  "round": 1,
+  "started": "2026-11-11T11:57:41.474Z",
+  "finished": "2026-11-11T11:58:10.098Z",
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "prompt_version": 1,
+  "runs_per_pack": 10,
+  "price_usd_per_mtok": {
+    "in": 0.3,
+    "out": 1.2
+  },
+  "estimated_spend_usd": 0.021105,
+  "gate": "packs 1-2: passed >= 8/10; pack 3: failed >= 9/10 (pass = found >= 4 of 5)",
+  "packs": [
+    {
+      "pack": "1",
+      "name": "Invoices",
+      "hash": "b22a4bd47a5a80de84bb79fce4157c6d1609c16bc48ae84ebc66304c77298590",
+      "hash_note": "Measured on b22a4bd4...; pack 1's frozen hash is now 9bf2b12b... because the T-013 rework changed only test_invoice.py (tests are not in the review request and not used by grading). Request bytes and grades re-checked offline against the frozen pack by test/packs.test.js. Re-measured on the frozen hash in round 3.",
+      "completed": 10,
+      "passed": 10,
+      "failed": 0,
+      "malformed_or_too_many": 0,
+      "found_histogram": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 10
+      },
+      "per_bug": {
+        "B1": {
+          "title": "Wrong operator in line_total",
+          "category": "wrong-operator",
+          "lines": "29-29",
+          "hits": 10,
+          "of": 10
+        },
+        "B2": {
+          "title": "Off-by-one in subtotal",
+          "category": "off-by-one",
+          "lines": "34-35",
+          "hits": 10,
+          "of": 10
+        },
+        "B3": {
+          "title": "Inverted comparison in is_overdue",
+          "category": "wrong-comparison",
+          "lines": "60-60",
+          "hits": 10,
+          "of": 10
+        },
+        "B4": {
+          "title": "Mutable default argument in add_line",
+          "category": "mutable-default",
+          "lines": "69-76",
+          "hits": 10,
+          "of": 10
+        },
+        "B5": {
+          "title": "Wrong initial value in cheapest_line",
+          "category": "wrong-initial-value",
+          "lines": "91-93",
+          "hits": 10,
+          "of": 10
+        }
+      },
+      "wall_ms_median": 2155,
+      "wall_ms_max": 3524,
+      "cost_usd_total": 0.00704,
+      "rows": [
+        {
+          "run": 1,
+          "wall_ms": 2155,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 2,
+          "wall_ms": 3524,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 3,
+          "wall_ms": 2310,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 4,
+          "wall_ms": 1796,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 5,
+          "wall_ms": 2654,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 6,
+          "wall_ms": 2358,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 7,
+          "wall_ms": 1408,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 8,
+          "wall_ms": 1824,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 9,
+          "wall_ms": 2681,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 10,
+          "wall_ms": 1890,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pack": "2",
+      "name": "Warehouse stock",
+      "hash": "c827d2285b945f69d3813e13686370165baaa2c2470544aba08e8ebd520f5c68",
+      "completed": 10,
+      "passed": 10,
+      "failed": 0,
+      "malformed_or_too_many": 0,
+      "found_histogram": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 10
+      },
+      "per_bug": {
+        "B1": {
+          "title": "File never closed in load_catalog",
+          "category": "resource-leak",
+          "lines": "13-14",
+          "hits": 10,
+          "of": 10
+        },
+        "B2": {
+          "title": "Swallowed error in save_snapshot",
+          "category": "error-handling",
+          "lines": "30-31",
+          "hits": 10,
+          "of": 10
+        },
+        "B3": {
+          "title": "Missing stock check in write_off",
+          "category": "missing-check",
+          "lines": "67-70",
+          "hits": 10,
+          "of": 10
+        },
+        "B4": {
+          "title": "Off-by-one in page",
+          "category": "off-by-one",
+          "lines": "95-95",
+          "hits": 10,
+          "of": 10
+        },
+        "B5": {
+          "title": "Inverted comparison in is_expired",
+          "category": "wrong-comparison",
+          "lines": "103-103",
+          "hits": 10,
+          "of": 10
+        }
+      },
+      "wall_ms_median": 2031,
+      "wall_ms_max": 3503,
+      "cost_usd_total": 0.00679,
+      "rows": [
+        {
+          "run": 1,
+          "wall_ms": 2178,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 2,
+          "wall_ms": 3503,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 3,
+          "wall_ms": 2265,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 4,
+          "wall_ms": 1800,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 5,
+          "wall_ms": 2551,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 6,
+          "wall_ms": 2031,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 7,
+          "wall_ms": 1798,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 8,
+          "wall_ms": 1829,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 9,
+          "wall_ms": 2742,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 75,
+              "category": "missing-check"
+            }
+          ]
+        },
+        {
+          "run": 10,
+          "wall_ms": 1922,
+          "prompt_tokens": 1856,
+          "completion_tokens": 102,
+          "cost_usd": 0.000679,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "stock.py",
+              "line": 13,
+              "category": "resource-leak"
+            },
+            {
+              "file": "stock.py",
+              "line": 31,
+              "category": "error-handling"
+            },
+            {
+              "file": "stock.py",
+              "line": 70,
+              "category": "missing-check"
+            },
+            {
+              "file": "stock.py",
+              "line": 95,
+              "category": "off-by-one"
+            },
+            {
+              "file": "stock.py",
+              "line": 103,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "stock.py",
+              "line": 112,
+              "category": "missing-check"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pack": "3",
+      "name": "Merchant settlement",
+      "hash": "9221f84ae92e5fc4604f576ae8065e88a0d0b81eeb3aabdbcc873cb1b47ea6eb",
+      "superseded": true,
+      "hash_note": "Old pack 3 (before the round-2 rework of B4/B5): code, key and request differ from the frozen pack 3. Kept as history; see round 2.",
+      "completed": 10,
+      "passed": 10,
+      "failed": 0,
+      "malformed_or_too_many": 0,
+      "found_histogram": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 10
+      },
+      "per_bug": {
+        "B1": {
+          "title": "Float money in card_surcharge",
+          "category": "float-money",
+          "lines": "38-38",
+          "hits": 10,
+          "of": 10
+        },
+        "B2": {
+          "title": "Local timezone in settlement_day",
+          "category": "timezone",
+          "lines": "54-54",
+          "hits": 10,
+          "of": 10
+        },
+        "B3": {
+          "title": "Unlocked check-then-act in payout",
+          "category": "race-condition",
+          "lines": "101-106",
+          "hits": 10,
+          "of": 10
+        },
+        "B4": {
+          "title": "Shared schedule mutated in schedule_for",
+          "category": "mutable-default",
+          "lines": "18-26",
+          "hits": 10,
+          "of": 10
+        },
+        "B5": {
+          "title": "Inclusive end in in_window",
+          "category": "off-by-one",
+          "lines": "68-68",
+          "hits": 10,
+          "of": 10
+        }
+      },
+      "wall_ms_median": 3011,
+      "wall_ms_max": 4014,
+      "cost_usd_total": 0.007276,
+      "rows": [
+        {
+          "run": 1,
+          "wall_ms": 4014,
+          "prompt_tokens": 1815,
+          "completion_tokens": 171,
+          "cost_usd": 0.00075,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 5,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 24,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 127,
+              "category": "wrong-operator"
+            }
+          ]
+        },
+        {
+          "run": 2,
+          "wall_ms": 3684,
+          "prompt_tokens": 1815,
+          "completion_tokens": 154,
+          "cost_usd": 0.000729,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 24,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 3,
+          "wall_ms": 2169,
+          "prompt_tokens": 1815,
+          "completion_tokens": 154,
+          "cost_usd": 0.000729,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 24,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 4,
+          "wall_ms": 3258,
+          "prompt_tokens": 1815,
+          "completion_tokens": 154,
+          "cost_usd": 0.000729,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 24,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 5,
+          "wall_ms": 3011,
+          "prompt_tokens": 1815,
+          "completion_tokens": 171,
+          "cost_usd": 0.00075,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 5,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 24,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 127,
+              "category": "wrong-operator"
+            }
+          ]
+        },
+        {
+          "run": 6,
+          "wall_ms": 3430,
+          "prompt_tokens": 1815,
+          "completion_tokens": 171,
+          "cost_usd": 0.00075,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 5,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 24,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 127,
+              "category": "wrong-operator"
+            }
+          ]
+        },
+        {
+          "run": 7,
+          "wall_ms": 1975,
+          "prompt_tokens": 1815,
+          "completion_tokens": 137,
+          "cost_usd": 0.000709,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 3,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 8,
+          "wall_ms": 2106,
+          "prompt_tokens": 1815,
+          "completion_tokens": 171,
+          "cost_usd": 0.00075,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 5,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 24,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 127,
+              "category": "wrong-operator"
+            }
+          ]
+        },
+        {
+          "run": 9,
+          "wall_ms": 3093,
+          "prompt_tokens": 1815,
+          "completion_tokens": 121,
+          "cost_usd": 0.00069,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 2,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 10,
+          "wall_ms": 1862,
+          "prompt_tokens": 1815,
+          "completion_tokens": 121,
+          "cost_usd": 0.00069,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 2,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 18,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 38,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 54,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 68,
+              "category": "off-by-one"
+            },
+            {
+              "file": "settlement.py",
+              "line": 103,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 113,
+              "category": "timezone"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,575 @@
+{
+  "round": 3,
+  "started": "2026-11-11T15:05:14.096Z",
+  "finished": "2026-11-11T15:06:08.357Z",
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "prompt_version": 1,
+  "runs_per_pack": 10,
+  "price_usd_per_mtok": {
+    "in": 0.3,
+    "out": 1.2
+  },
+  "estimated_spend_usd": 0.007038,
+  "gate": "packs 1-2: passed >= 8/10; pack 3: failed >= 9/10 (pass = found >= 4 of 5)",
+  "packs": [
+    {
+      "pack": "1",
+      "name": "Invoices",
+      "hash": "9bf2b12b3653819537c75330e29a2b080936aaf1215be0bfec3039a8884ed573",
+      "completed": 10,
+      "passed": 10,
+      "failed": 0,
+      "malformed_or_too_many": 0,
+      "found_histogram": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 0,
+        "5": 10
+      },
+      "per_bug": {
+        "B1": {
+          "title": "Wrong operator in line_total",
+          "category": "wrong-operator",
+          "lines": "29-29",
+          "hits": 10,
+          "of": 10
+        },
+        "B2": {
+          "title": "Off-by-one in subtotal",
+          "category": "off-by-one",
+          "lines": "34-35",
+          "hits": 10,
+          "of": 10
+        },
+        "B3": {
+          "title": "Inverted comparison in is_overdue",
+          "category": "wrong-comparison",
+          "lines": "60-60",
+          "hits": 10,
+          "of": 10
+        },
+        "B4": {
+          "title": "Mutable default argument in add_line",
+          "category": "mutable-default",
+          "lines": "69-76",
+          "hits": 10,
+          "of": 10
+        },
+        "B5": {
+          "title": "Wrong initial value in cheapest_line",
+          "category": "wrong-initial-value",
+          "lines": "91-93",
+          "hits": 10,
+          "of": 10
+        }
+      },
+      "wall_ms_median": 5787,
+      "wall_ms_max": 9164,
+      "cost_usd_total": 0.00704,
+      "rows": [
+        {
+          "run": 1,
+          "wall_ms": 6381,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 2,
+          "wall_ms": 1787,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 3,
+          "wall_ms": 5787,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 4,
+          "wall_ms": 9164,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 5,
+          "wall_ms": 8694,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 6,
+          "wall_ms": 4105,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 7,
+          "wall_ms": 1951,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 8,
+          "wall_ms": 7419,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 9,
+          "wall_ms": 5876,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        },
+        {
+          "run": 10,
+          "wall_ms": 3067,
+          "prompt_tokens": 1922,
+          "completion_tokens": 106,
+          "cost_usd": 0.000704,
+          "found": 5,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "false_positives": 1,
+          "error": null,
+          "findings": [
+            {
+              "file": "invoice.py",
+              "line": 29,
+              "category": "wrong-operator"
+            },
+            {
+              "file": "invoice.py",
+              "line": 34,
+              "category": "off-by-one"
+            },
+            {
+              "file": "invoice.py",
+              "line": 60,
+              "category": "wrong-comparison"
+            },
+            {
+              "file": "invoice.py",
+              "line": 69,
+              "category": "mutable-default"
+            },
+            {
+              "file": "invoice.py",
+              "line": 91,
+              "category": "wrong-initial-value"
+            },
+            {
+              "file": "invoice.py",
+              "line": 93,
+              "category": "wrong-comparison"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

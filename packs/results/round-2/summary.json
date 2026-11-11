@@ -1,0 +1,667 @@
+{
+  "round": 2,
+  "started": "2026-11-11T12:05:25.109Z",
+  "finished": "2026-11-11T12:05:44.714Z",
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "prompt_version": 1,
+  "runs_per_pack": 10,
+  "price_usd_per_mtok": {
+    "in": 0.3,
+    "out": 1.2
+  },
+  "estimated_spend_usd": 0.007726,
+  "gate": "packs 1-2: passed >= 8/10; pack 3: failed >= 9/10 (pass = found >= 4 of 5)",
+  "packs": [
+    {
+      "pack": "3",
+      "name": "Merchant settlement",
+      "hash": "dab51058f22defd87e024df862e7209fa121ce6b392b43fca2c5bc1b22f721d4",
+      "hash_note": "Measured on pack 3 v2 dab51058... (frozen as f2938af8..., which differed only in answer-key titles). Superseded by pack 3 v3 967c2b71... (A-015 round: cached fee_schedule factory), measured in round 4.",
+      "completed": 10,
+      "passed": 10,
+      "failed": 0,
+      "malformed_or_too_many": 0,
+      "found_histogram": {
+        "0": 0,
+        "1": 0,
+        "2": 0,
+        "3": 0,
+        "4": 10,
+        "5": 0
+      },
+      "per_bug": {
+        "B1": {
+          "title": "Float money in card_surcharge",
+          "category": "float-money",
+          "lines": "37-37",
+          "hits": 10,
+          "of": 10
+        },
+        "B2": {
+          "title": "Local timezone in settlement_day",
+          "category": "timezone",
+          "lines": "45-45",
+          "hits": 10,
+          "of": 10
+        },
+        "B3": {
+          "title": "Unlocked check-then-act in payout",
+          "category": "race-condition",
+          "lines": "85-90",
+          "hits": 10,
+          "of": 10
+        },
+        "B4": {
+          "title": "Shared default schedule returned by schedule_for",
+          "category": "mutable-default",
+          "lines": "19-25",
+          "hits": 10,
+          "of": 10
+        },
+        "B5": {
+          "title": "Exclusive end in statement_window",
+          "category": "off-by-one",
+          "lines": "57-63",
+          "hits": 0,
+          "of": 10
+        }
+      },
+      "wall_ms_median": 1658,
+      "wall_ms_max": 2550,
+      "cost_usd_total": 0.007723,
+      "rows": [
+        {
+          "run": 1,
+          "wall_ms": 2367,
+          "prompt_tokens": 2026,
+          "completion_tokens": 137,
+          "cost_usd": 0.000772,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 89,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 2,
+          "wall_ms": 2281,
+          "prompt_tokens": 2026,
+          "completion_tokens": 137,
+          "cost_usd": 0.000772,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 89,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 3,
+          "wall_ms": 1658,
+          "prompt_tokens": 2026,
+          "completion_tokens": 137,
+          "cost_usd": 0.000772,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 89,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 4,
+          "wall_ms": 1631,
+          "prompt_tokens": 2026,
+          "completion_tokens": 138,
+          "cost_usd": 0.000773,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 141,
+              "category": "wrong-operator"
+            }
+          ]
+        },
+        {
+          "run": 5,
+          "wall_ms": 1537,
+          "prompt_tokens": 2026,
+          "completion_tokens": 137,
+          "cost_usd": 0.000772,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 90,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 6,
+          "wall_ms": 1629,
+          "prompt_tokens": 2026,
+          "completion_tokens": 137,
+          "cost_usd": 0.000772,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 90,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 7,
+          "wall_ms": 1595,
+          "prompt_tokens": 2026,
+          "completion_tokens": 137,
+          "cost_usd": 0.000772,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 89,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            }
+          ]
+        },
+        {
+          "run": 8,
+          "wall_ms": 2456,
+          "prompt_tokens": 2026,
+          "completion_tokens": 138,
+          "cost_usd": 0.000773,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 135,
+              "category": "off-by-one"
+            }
+          ]
+        },
+        {
+          "run": 9,
+          "wall_ms": 2550,
+          "prompt_tokens": 2026,
+          "completion_tokens": 138,
+          "cost_usd": 0.000773,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 135,
+              "category": "off-by-one"
+            }
+          ]
+        },
+        {
+          "run": 10,
+          "wall_ms": 1877,
+          "prompt_tokens": 2026,
+          "completion_tokens": 137,
+          "cost_usd": 0.000772,
+          "found": 4,
+          "passed": true,
+          "matched": [
+            "B1",
+            "B2",
+            "B3",
+            "B4"
+          ],
+          "false_positives": 4,
+          "error": null,
+          "findings": [
+            {
+              "file": "settlement.py",
+              "line": 19,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 37,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 45,
+              "category": "timezone"
+            },
+            {
+              "file": "settlement.py",
+              "line": 87,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 89,
+              "category": "race-condition"
+            },
+            {
+              "file": "settlement.py",
+              "line": 96,
+              "category": "mutable-default"
+            },
+            {
+              "file": "settlement.py",
+              "line": 105,
+              "category": "float-money"
+            },
+            {
+              "file": "settlement.py",
+              "line": 128,
+              "category": "timezone"
+            }
+          ]
+        }
+      ],
+      "superseded": true
+    }
+  ]
+}

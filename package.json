@@ -10,6 +10,9 @@
   "files": [
     "cli/",
     "grader/",
+    "packs/",
+    "seller/",
+    "!packs/results/",
     "names.json"
   ],
   "engines": {

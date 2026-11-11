@@ -13,6 +13,10 @@ credentials.json
 .near-credentials/
 near-credentials/
 **/near-credentials/**
+# Exam pack answer keys are public by design (the seller can read them too). Integrity will come
+# from the on-chain pin of each pack's exact review request (T-048, not built yet), not from hiding
+# the keys; see packs/packs.js. So they are the one *-key.json exception.
+!packs/pack-*/answer-key.json
 # earned init: throwaway testnet buyer key (0600). Never commit.
 .earned/
 
@@ -25,6 +29,10 @@ out/
 
 # Spike run output (records are ~300 KB each; commit chosen ones by hand)
 spike/results/
+
+# Python caches (exam pack tests)
+__pycache__/
+.pytest_cache/
 
 # Deploy tooling
 .vercel
