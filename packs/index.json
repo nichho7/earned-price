@@ -25,11 +25,11 @@
       "id": "3",
       "dir": "pack-3",
       "name": "Merchant settlement",
-      "level": "honest fail",
+      "level": "hard",
       "review_files": [
         "settlement.py"
       ],
-      "hash": "967c2b710c54a06adf1d5194752e4a3fae1e45eefc24fbeaecc3d6292f9b9226"
+      "hash": "992e7b187475ddb1f19b464a98dc891111ce917e03957a3801e351b5d8efa202"
     }
   ]
 }

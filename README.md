@@ -142,13 +142,20 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
 ## Exam packs
 
 Three ~150-line Python files with 5 planted bugs each: pack 1 invoices (easy), pack 2
-warehouse stock (medium), pack 3 merchant settlement (meant as the honest fail: timezone,
-float money, a race, and two cross-function bugs). Each pack folder holds the code under
-review, its tests and `answer-key.json`.
+warehouse stock (medium), pack 3 merchant settlement (hard: timezone, float money, a race,
+and two cross-function bugs). Each pack folder holds the code under review, its tests and
+`answer-key.json`. In our calibration runs the reviewer passes all three (found 4 or 5 of 5).
 
 - **Do** `python3 -m pytest packs/pack-1` (or `python3 -m unittest discover -s packs/pack-1`).
   **See** exactly five `test_bug_B1`..`B5` failures, one per planted bug; every other test
-  passes. `python3 packs/check_packs.py` checks all three packs.
+  passes. `python3 packs/check_packs.py` checks all three packs, and that every known fix for a
+  bug (`packs/reference-fixes.json`) sits inside that bug's answer-key window and flips only its
+  own test.
+- **One key window per bug (known limit).** A key gives each bug one line range (at most 10
+  lines, ±3). Pack 3 B4 (a cached schedule dict that one function hands out and another mutates)
+  can be fixed in two places 71 lines apart, so B4 is keyed on the mutation side (lines 94-102,
+  where `promo_adjust` writes into the shared dict). A finding only on the factory side (lines
+  17-25) is graded a miss. `check_packs.py` lists those sites as disclosed exceptions.
 - **Frozen by hash.** `packs/index.json` pins a sha256 over every file in each pack;
   `earned init` lists those hashes and `npm test` fails if any pack file changes.
 - **Public answer keys.** The answer keys are public in this repo, for sellers too. Every job
@@ -156,7 +163,9 @@ review, its tests and `answer-key.json`.
   later; that salt hides nothing from the seller. The honest review request holds only the
   comment-stripped code (never tests or keys); what stops a seller from adding the key to the
   prompt is the contract pinning each pack's exact request hash (being added in T-048).
-- Calibration runs (10 live reviews per pack, per-bug hit rates): `packs/results/`.
+- Calibration runs (10 live reviews per pack, per-bug hit rates): `packs/results/`. Round 4
+  (pack 3) was re-graded offline after the B4 key moved; its `summary.json` keeps the live
+  verdict as history and adds the re-grade (same responses, same request bytes, no new calls).
 
 ## Deploy (testnet only)
 

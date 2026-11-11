@@ -153,7 +153,7 @@ async function main() {
     price_usd_per_mtok: { in: Number((p.in * 1e6).toFixed(4)), out: Number((p.out * 1e6).toFixed(4)) },
     estimated_spend_usd: Number(spent.toFixed(6)),
     reserve_usd_per_run: Number(reserve.toFixed(6)),
-    gate: "packs 1-2: passed >= 8/10; pack 3: failed >= 9/10 (pass = found >= 4 of 5)",
+    gate: "every pack: passed >= 8/10 (pass = found >= 4 of 5; A-015 fallback B, pack 3 is a pass pack)",
     packs,
   };
   writeFileSync(join(OUT, "summary.json"), JSON.stringify(summary, null, 2) + "\n");

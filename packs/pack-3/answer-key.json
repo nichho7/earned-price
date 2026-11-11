@@ -30,10 +30,10 @@
     },
     {
       "id": "B4",
-      "title": "Shared cached schedule in schedule_for",
+      "title": "Shared cached schedule mutated in promo_adjust",
       "file": "settlement.py",
-      "line_start": 17,
-      "line_end": 25,
+      "line_start": 94,
+      "line_end": 102,
       "category": "mutable-default"
     },
     {

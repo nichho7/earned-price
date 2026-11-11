@@ -64,7 +64,7 @@ test("titles follow '<bug kind> in <function>' and name a function in the file",
   }
 });
 
-test("pack 3 is the cross-function honest fail: timezone, float money, race + 2 cross-function bugs", () => {
+test("pack 3 is the hard pack: timezone, float money, race + 2 cross-function bugs", () => {
   const cats = packs[2].key.bugs.map((b) => b.category);
   for (const c of ["timezone", "float-money", "race-condition"]) assert.ok(cats.includes(c));
   assert.ok(!cats.includes("divide-by-zero") && !cats.includes("missing-check"), "no empty-input edge cases");
@@ -197,7 +197,7 @@ test("pytest-style suites expose exactly the 5 planted bugs per pack (python3 pa
 
 // --- calibration logs match the frozen packs ---
 
-test("results: every logged review re-grades offline to the same result with the frozen pack", () => {
+test("results: every logged review re-grades offline to the same result with the frozen pack (or its logged re-grade)", () => {
   const resultsDir = join(PACKS_DIR, "results");
   const rounds = readdirSync(resultsDir).filter((d) => d.startsWith("round-")).sort();
   assert.ok(rounds.length >= 2);
@@ -216,9 +216,18 @@ test("results: every logged review re-grades offline to the same result with the
         assert.notEqual(raw.request_body, request, `${round} pack ${entry.pack}: marked superseded but its request is the frozen pack's`);
         continue;
       }
+      // a later offline re-grade (same raw responses, same request bytes, new frozen key) supersedes
+      // the live verdict; the live rows stay as history and the re-grade is what must hold today
+      const regrade = entry.regrade;
+      if (regrade) {
+        assert.equal(regrade.live, false, `${round} pack ${entry.pack}: a re-grade is offline only`);
+        assert.equal(regrade.hash, pack.hash, `${round} pack ${entry.pack}: re-grade is not against the frozen pack`);
+      }
+      const verdict = regrade ?? entry;
       const done = entry.rows.filter((r) => r.found !== undefined);
-      assert.equal(entry.passed, done.filter((r) => r.passed).length);
-      for (const row of done) {
+      assert.equal(verdict.rows.length, done.length, `${round} pack ${entry.pack}: re-grade must cover every completed run`);
+      assert.equal(verdict.passed, verdict.rows.filter((r) => r.passed).length);
+      for (const row of verdict.rows) {
         const raw = JSON.parse(readFileSync(join(resultsDir, round, "raw", `pack-${entry.pack}-run${String(row.run).padStart(2, "0")}.json`), "utf8"));
         assert.equal(raw.request_body, request, `${round} pack ${entry.pack} run ${row.run}: request is not the frozen pack's`);
         const g = grade(pack.key, findingsFromResponse(raw.response_body));
@@ -247,8 +256,8 @@ const edit = (file, from, to) => {
   assert.ok(src.includes(from), `mutant anchor missing in ${file}`);
   writeFileSync(file, src.replace(from, to));
 };
-const editKey = (dir, bugId, change) => {
-  const file = join(dir, "pack-1", "answer-key.json");
+const editKey = (dir, bugId, change, pack = "pack-1") => {
+  const file = join(dir, pack, "answer-key.json");
   const key = JSON.parse(readFileSync(file, "utf8"));
   Object.assign(key.bugs.find((b) => b.id === bugId), change);
   writeFileSync(file, JSON.stringify(key, null, 2) + "\n");
@@ -277,4 +286,75 @@ test("check_packs: a bug test coupled to another bug fails the check (old pack-1
   const r = checkPacksOn((dir) => edit(join(dir, "pack-1", "test_invoice.py"), '(("A", 2, 2), ("B", 2, 2), ("C", 2, 2)))), 12)', '(("A", 100, 1), ("B", 200, 1)))), 300)'));
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /pack 1: FAIL: fix B2 alone: bug tests failing \['B1', 'B2', 'B3', 'B4', 'B5'\]/);
+});
+
+// --- every known fix site of a bug sits in its key window (pack 3 B4 has two clusters) ---
+
+const fixesData = () => JSON.parse(readFileSync(join(PACKS_DIR, "reference-fixes.json"), "utf8"));
+const editFixes = (dir, change) => {
+  const file = join(dir, "reference-fixes.json");
+  const data = JSON.parse(readFileSync(file, "utf8"));
+  change(data);
+  writeFileSync(file, JSON.stringify(data, null, 2) + "\n");
+};
+const altAt = (data, line) => data.alternatives.find((f) => f.pack === "3" && f.bug === "B4" && f.start === line);
+
+test("pack 3 B4: the key window holds the mutation-side fix sites (96, 102); only the factory side (17, 24, 25) is disclosed outside it", () => {
+  const b4 = packs[2].key.bugs.find((b) => b.id === "B4");
+  const data = fixesData();
+  const sites = [...data.fixes, ...data.alternatives].filter((f) => f.pack === "3" && f.bug === "B4");
+  assert.deepEqual(sites.map((f) => f.start).sort((a, b) => a - b), [17, 24, 25, 96, 102], "every known one-line B4 fix site is listed");
+  for (const line of [96, 102]) assert.ok(b4.line_start <= line && line <= b4.line_end, `B4 window ${b4.line_start}-${b4.line_end} misses fix site ${line}`);
+  const disclosed = [...data.fixes, ...data.alternatives].filter((f) => f.outside_key_window !== undefined);
+  assert.deepEqual(disclosed.map((f) => `${f.pack}/${f.bug}/${f.start}`).sort(), ["3/B4/17", "3/B4/24", "3/B4/25"]);
+  for (const f of disclosed) assert.equal(typeof data._outside_key_window[f.outside_key_window], "string");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /B4 is keyed on the mutation side\s+\(lines 94-102\b/, "README discloses the B4 key limit");
+  assert.match(readme, /factory side \(lines\s+17-25\) is graded a miss/, "README says a factory-side finding is a miss");
+});
+
+test("check_packs: pack 3 B4 keyed back on the factory side (17-25) fails: the line-96 fix is outside", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editKey(dir, "B4", { line_start: 17, line_end: 25 }, "pack-3"));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 3: FAIL: fix B4: changes lines 96-96, outside key window 17-25/);
+});
+
+test("check_packs: an undisclosed alternative fix site outside the key window fails", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editFixes(dir, (d) => { delete altAt(d, 25).outside_key_window; }));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 3: FAIL: alternative B4 at 25: changes lines 25-25, outside key window 94-102/);
+});
+
+test("check_packs: a disclosure on a fix site inside the key window fails (stale disclosure)", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editFixes(dir, (d) => { altAt(d, 102).outside_key_window = "factory side of B4"; }));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 3: FAIL: alternative B4 at 102: disclosed as outside the key window but sits inside 94-102/);
+});
+
+test("check_packs: a primary fix may not be disclosed as outside its key window", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editFixes(dir, (d) => { d.fixes.find((f) => f.pack === "3" && f.bug === "B4").outside_key_window = "factory side of B4"; }));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 3: FAIL: fix B4: a primary fix must sit inside its key window/);
+});
+
+test("check_packs: a disclosure must name a reason listed in _outside_key_window", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editFixes(dir, (d) => { altAt(d, 17).outside_key_window = "no such reason"; }));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 3: FAIL: alternative B4 at 17: unknown outside_key_window reason 'no such reason'/);
+});
+
+test("check_packs: an alternative that breaks a control test fails (each alternative flips only its own bug test)", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editFixes(dir, (d) => { altAt(d, 102).new = ["    schedule = promo_adjust(dict(schedule_for(merchant)), charge); gross = gross * 2"]; }));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 3: FAIL: .*alternative B4 at 102 alone: control tests failing \[/);
+});
+
+test("round 4 pack 3: the offline re-grade against the frozen key passes 10/10 at 4/5 (B5 the only miss), with no live call", () => {
+  const summary = JSON.parse(readFileSync(join(PACKS_DIR, "results", "round-4", "summary.json"), "utf8"));
+  const entry = summary.packs.find((e) => e.pack === "3");
+  assert.equal(entry.passed, 0, "the live verdict on the old key stays as history");
+  assert.equal(entry.regrade.live, false);
+  assert.equal(entry.regrade.hash, packs[2].hash);
+  assert.equal(entry.regrade.passed, 10);
+  for (const row of entry.regrade.rows) assert.deepEqual([row.found, row.matched], [4, ["B1", "B2", "B3", "B4"]]);
 });
