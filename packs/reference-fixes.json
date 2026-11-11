@@ -120,6 +120,17 @@
   ],
   "alternatives": [
     {
+      "pack": "3", "bug": "B4", "category": "mutable-default", "file": "settlement.py", "start": 95, "end": 95,
+      "old": ["    if charge.get(\"promo\") == \"no-fixed-fee\":"],
+      "new": ["    if charge.get(\"promo\") == \"no-fixed-fee\" and (schedule := dict(schedule)):"]
+    },
+    {
+      "pack": "3", "bug": "B4", "category": "mutable-default", "file": "settlement.py", "start": 23, "end": 23,
+      "old": ["    overrides = {k: merchant[k] for k in (\"percent\", \"cap\") if merchant.get(k) is not None}"],
+      "new": ["    overrides = {k: merchant[k] for k in (\"percent\", \"cap\") if merchant.get(k) is not None} or {\"percent\": \"2.9\"}"],
+      "outside_key_window": "factory side of B4"
+    },
+    {
       "pack": "3", "bug": "B4", "category": "mutable-default", "file": "settlement.py", "start": 102, "end": 102,
       "old": ["    schedule = promo_adjust(schedule_for(merchant), charge)"],
       "new": ["    schedule = promo_adjust(dict(schedule_for(merchant)), charge)"]
@@ -144,6 +155,6 @@
     }
   ],
   "_outside_key_window": {
-    "factory side of B4": "Pack 3 B4 has two clusters of one-line fix sites 71+ lines apart: the factory side (17, 24, 25: where fee_schedule/schedule_for hand out the one cached dict) and the mutation side (96, 102: where promo_adjust writes into it). A key holds one line range per bug (span <= 10, grader MAX_BUG_SPAN, mirrored in the contract), so B4 is keyed on the mutation side (94-102), where the reviewer points. A finding only on the factory side is graded a miss. Disclosed in README (Exam packs)."
+    "factory side of B4": "Pack 3 B4 has two clusters of one-line fix sites 71+ lines apart: the factory side (17, 23, 24, 25: where fee_schedule/schedule_for hand out the one cached dict; 23 is a kludge that hardcodes the default) and the mutation side (95, 96, 102: where promo_adjust writes into it). A key holds one line range per bug (span <= 10, grader MAX_BUG_SPAN, mirrored in the contract), so B4 is keyed on the mutation side (94-102), where the reviewer points. A finding only on the factory side is graded a miss. Disclosed in README (Exam packs)."
   }
 }

@@ -299,14 +299,14 @@ const editFixes = (dir, change) => {
 };
 const altAt = (data, line) => data.alternatives.find((f) => f.pack === "3" && f.bug === "B4" && f.start === line);
 
-test("pack 3 B4: the key window holds the mutation-side fix sites (96, 102); only the factory side (17, 24, 25) is disclosed outside it", () => {
+test("pack 3 B4: the key window holds the mutation-side fix sites (95, 96, 102); only the factory side (17, 23, 24, 25) is disclosed outside it", () => {
   const b4 = packs[2].key.bugs.find((b) => b.id === "B4");
   const data = fixesData();
   const sites = [...data.fixes, ...data.alternatives].filter((f) => f.pack === "3" && f.bug === "B4");
-  assert.deepEqual(sites.map((f) => f.start).sort((a, b) => a - b), [17, 24, 25, 96, 102], "every known one-line B4 fix site is listed");
-  for (const line of [96, 102]) assert.ok(b4.line_start <= line && line <= b4.line_end, `B4 window ${b4.line_start}-${b4.line_end} misses fix site ${line}`);
+  assert.deepEqual(sites.map((f) => f.start).sort((a, b) => a - b), [17, 23, 24, 25, 95, 96, 102], "every known one-line B4 fix site is listed");
+  for (const line of [95, 96, 102]) assert.ok(b4.line_start <= line && line <= b4.line_end, `B4 window ${b4.line_start}-${b4.line_end} misses fix site ${line}`);
   const disclosed = [...data.fixes, ...data.alternatives].filter((f) => f.outside_key_window !== undefined);
-  assert.deepEqual(disclosed.map((f) => `${f.pack}/${f.bug}/${f.start}`).sort(), ["3/B4/17", "3/B4/24", "3/B4/25"]);
+  assert.deepEqual(disclosed.map((f) => `${f.pack}/${f.bug}/${f.start}`).sort(), ["3/B4/17", "3/B4/23", "3/B4/24", "3/B4/25"]);
   for (const f of disclosed) assert.equal(typeof data._outside_key_window[f.outside_key_window], "string");
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   assert.match(readme, /B4 is keyed on the mutation side\s+\(lines 94-102\b/, "README discloses the B4 key limit");
@@ -357,4 +357,10 @@ test("round 4 pack 3: the offline re-grade against the frozen key passes 10/10 a
   assert.equal(entry.regrade.hash, packs[2].hash);
   assert.equal(entry.regrade.passed, 10);
   for (const row of entry.regrade.rows) assert.deepEqual([row.found, row.matched], [4, ["B1", "B2", "B3", "B4"]]);
+});
+
+test("check_packs: a disclosed alternative is still applied and run (a no-op alt 25 fails)", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editFixes(dir, (d) => { altAt(d, 25).new = [...altAt(d, 25).old]; }));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 3: FAIL: alternative B4 at 25 alone: bug tests failing \['B1', 'B2', 'B3', 'B4', 'B5'\]/);
 });
