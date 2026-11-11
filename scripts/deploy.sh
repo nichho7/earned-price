@@ -5,7 +5,7 @@
 #   scripts/deploy.sh               build, deploy (first deploy calls
 #                                   new(owner, signers) from contract/tee-signers.json),
 #                                   check the on-chain code hash, then smoke-call
-#                                   name/owner/signers/quote/create/get_job
+#                                   name/owner/signers/quote/get_record/create/get_job
 #
 # Options:
 #   --network <name>     only "testnet" is accepted (anything else is refused)
@@ -191,7 +191,7 @@ if [ "$DRY_RUN" = 1 ]; then
     say "dry run: would run: near contract deploy $ACCOUNT use-file \"$WASM\" ${INIT_CALL[*]} network-config testnet sign-with-$SIGNER send"
     say "dry run: would then check the on-chain code_hash is $NEW_HASH"
   fi
-  [ "$SMOKE" = 0 ] || say "dry run: would smoke-call name, owner, signers, quote($SMOKE_SELLER), create(deposit = quote, commit $COMMIT_HEX), get_job"
+  [ "$SMOKE" = 0 ] || say "dry run: would smoke-call name, owner, signers, quote($SMOKE_SELLER), get_record($SMOKE_SELLER), create(deposit = quote, commit $COMMIT_HEX), get_job"
   say "dry run OK: nothing signed, nothing sent"
   exit 0
 fi
@@ -221,7 +221,7 @@ if [ "$DEPLOY" = 1 ]; then
 fi
 [ "$SMOKE" = 1 ] || exit 0
 
-# ---- smoke test: name, owner, signers, quote, create, get_job ------------------
+# ---- smoke test: name, owner, signers, quote, get_record, create, get_job -----
 expect() { [ "$2" = "$3" ] || { printf '[deploy] SMOKE FAIL %s: got %s, want %s\n' "$1" "$2" "$3" >&2; exit 5; }; }
 expect "name" "$(retry view call "$ACCOUNT" name '{}')" '"Earned Price"'
 expect "owner" "$(retry view call "$ACCOUNT" owner '{}')" "\"$ACCOUNT\""
@@ -233,6 +233,8 @@ QUOTE_JSON="$(retry view call "$ACCOUNT" quote "$(json seller "$SMOKE_SELLER")")
 expect "quote(unknown seller)" "$QUOTE_JSON" '"30000000000000000000000"'
 QUOTE="$(node -e "process.stdout.write(JSON.parse(process.argv[1]))" "$QUOTE_JSON")"
 say "quote($SMOKE_SELLER) = $QUOTE yocto (0.030 NEAR)"
+expect "get_record(unknown seller)" "$(retry view call "$ACCOUNT" get_record "$(json seller "$SMOKE_SELLER")")" \
+  '{"passes":0,"fails":0,"unique_buyers":0,"jobs":0}'
 
 # Leaves one open smoke job holding 0.030 NEAR; nobody accepts it, so anyone can
 # call timeout(job_id) after accept_by (2 min) to refund it to the contract account.
@@ -258,4 +260,4 @@ node -e '
   for (const [k, v] of Object.entries(want)) {
     if (j?.[k] !== v) { console.error(`[deploy] SMOKE FAIL get_job.${k}: got ${j?.[k]}, want ${v}`); process.exit(5); }
   }' "$JOB" "$JOB_ID" "$ACCOUNT" "$SMOKE_SELLER" "$QUOTE" "$COMMIT_HEX"
-say "smoke OK: name, owner, signers, quote, create (job $JOB_ID locked $QUOTE yocto), get_job"
+say "smoke OK: name, owner, signers, quote, get_record, create (job $JOB_ID locked $QUOTE yocto), get_job"

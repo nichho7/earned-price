@@ -46,23 +46,29 @@ function fakeRpc(state) {
 }
 
 // Smallest valid wasm module exporting empty functions with these names.
+function uleb(v) { // unsigned LEB128, as wasm writes counts and section sizes
+  const out = [];
+  do { let b = v & 0x7f; v >>>= 7; if (v) b |= 0x80; out.push(b); } while (v);
+  return out;
+}
 function fixtureWasm(names) {
   const n = names.length;
+  const section = (id, body) => [id, ...uleb(body.length), ...body];
   const bytes = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-  bytes.push(0x01, 0x04, 0x01, 0x60, 0x00, 0x00); // type: () -> ()
-  bytes.push(0x03, n + 1, n, ...names.map(() => 0)); // functions
-  const exp = [n];
-  names.forEach((name, i) => exp.push(name.length, ...Buffer.from(name), 0x00, i));
-  bytes.push(0x07, exp.length, ...exp);
-  const code = [n];
+  bytes.push(...section(0x01, [0x01, 0x60, 0x00, 0x00])); // type: () -> ()
+  bytes.push(...section(0x03, [...uleb(n), ...names.map(() => 0)])); // functions
+  const exp = [...uleb(n)];
+  names.forEach((name, i) => exp.push(...uleb(name.length), ...Buffer.from(name), 0x00, ...uleb(i)));
+  bytes.push(...section(0x07, exp));
+  const code = [...uleb(n)];
   for (let i = 0; i < n; i++) code.push(0x02, 0x00, 0x0b);
-  bytes.push(0x0a, code.length, ...code);
+  bytes.push(...section(0x0a, code));
   return Buffer.from(bytes);
 }
-// A representative subset: fixtureWasm writes one-byte section sizes, so the export
-// section must stay under 128 bytes (with test_pay_seller added below).
-const CONTRACT_EXPORTS = ["accept", "create", "decline", "get_job", "name", "next_job_id", "on_payout", "quote", "reveal", "submit_review"];
+// A representative subset of the contract's exports (sizes are LEB128, so any length works).
+const CONTRACT_EXPORTS = ["accept", "create", "decline", "get_job", "get_record", "name", "next_job_id", "on_payout", "quote", "reveal", "submit_review"];
 const SIGNERS = JSON.parse(readFileSync(join(repo, "contract/tee-signers.json"), "utf8")).signers;
+const EMPTY_RECORD = { passes: 0, fails: 0, unique_buyers: 0, jobs: 0 };
 const INIT_ARGS = JSON.stringify({ owner: "earned-price.testnet", signers: SIGNERS });
 const WASM = wasmInfo(fixtureWasm(CONTRACT_EXPORTS));
 
@@ -143,7 +149,7 @@ const goodJob = () => ({
 });
 
 async function withRpc(state, fn) {
-  const full = { calls: [], accountReads: 0, views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_job: goodJob() }, ...state };
+  const full = { calls: [], accountReads: 0, views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, get_job: goodJob() }, ...state };
   const server = await fakeRpc(full);
   try {
     return await fn(server.address().port, full);
@@ -220,7 +226,7 @@ test("deploy.sh refuses a first deploy the balance cannot cover (exit 4)", async
   });
 });
 
-test("deploy.sh first deploy calls new(owner, signers), checks the on-chain code_hash, then smoke-calls name, owner, signers, quote, create, get_job", async () => {
+test("deploy.sh first deploy calls new(owner, signers), checks the on-chain code_hash, then smoke-calls name, owner, signers, quote, get_record, create, get_job", async () => {
   await withRpc(fresh(), async (port, rpc) => {
     const box = sandbox();
     const r = await run(box, [], { rpcPort: port });
@@ -230,9 +236,9 @@ test("deploy.sh first deploy calls new(owner, signers), checks the on-chain code
       `near contract deploy earned-price.testnet use-file target/near/earned_price.wasm with-init-call new json-args ${INIT_ARGS} prepaid-gas 30 Tgas attached-deposit 0 NEAR network-config testnet sign-with-keychain send`,
       `near contract call-function as-transaction earned-price.testnet create json-args {"seller":"${SELLER}","commit_hash":"${vector.commit_hex}"} prepaid-gas 30 Tgas attached-deposit ${QUOTE} yoctoNEAR sign-as earned-price.testnet network-config testnet sign-with-keychain send`,
     ]);
-    assert.deepEqual(rpc.calls, ["view_account", "view_account", "name", "owner", "signers", "quote", "get_job"]);
+    assert.deepEqual(rpc.calls, ["view_account", "view_account", "name", "owner", "signers", "quote", "get_record", "get_job"]);
     assert.match(r.stdout, new RegExp(`deployed: on-chain code_hash ${WASM.code_hash} = base58\\(sha256 ${WASM.sha256}\\)`));
-    assert.match(r.stdout, /smoke OK: name, owner, signers, quote, create \(job 7/);
+    assert.match(r.stdout, /smoke OK: name, owner, signers, quote, get_record, create \(job 7/);
     assert.ok(!existsSync(join(box.dir, "target/near/smoke-unconfirmed.txt")), "marker cleared once the job id is known");
   });
 });
@@ -251,6 +257,7 @@ test("deploy.sh --signer legacy-keychain signs with the legacy key store", async
 for (const [label, views, msg] of [
   ["wrong name", { name: "Other" }, /SMOKE FAIL name/],
   ["wrong quote", { quote: "1" }, /SMOKE FAIL quote/],
+  ["a non-empty record for the smoke seller", { get_record: { ...EMPTY_RECORD, passes: 1, jobs: 1 } }, /SMOKE FAIL get_record/],
   ["a job with the wrong price", { get_job: { ...goodJob(), price: "1" } }, /SMOKE FAIL get_job.price/],
   ["a job with the wrong commit", { get_job: { ...goodJob(), commit_hash: "00" } }, /SMOKE FAIL get_job.commit_hash/],
   ["a missing job", { get_job: null }, /SMOKE FAIL get_job.id/],
@@ -259,7 +266,7 @@ for (const [label, views, msg] of [
   ["a job with pre-T-022 status casing", { get_job: { ...goodJob(), status: "Open" } }, /SMOKE FAIL get_job.status/],
 ]) {
   test(`deploy.sh smoke fails (exit 5) on ${label}`, async () => {
-    const state = { ...fresh(), views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_job: goodJob(), ...views } };
+    const state = { ...fresh(), views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, get_job: goodJob(), ...views } };
     await withRpc(state, async (port) => {
       const box = sandbox();
       const r = await run(box, [], { rpcPort: port });
@@ -494,7 +501,7 @@ test("testnet-view refuses non-testnet accounts and RPCs", async () => {
 // ---- T-023: init call (A-012 owner + signer allowlist) -----------------------
 test("deploy.sh --redeploy keeps state (no init call); differing live signers are only noted", async () => {
   const old = "OLDhashOLDhashOLDhashOLDhashOLDh";
-  const views = { name: "Earned Price", owner: "earned-price.testnet", signers: [...SIGNERS, "0x" + "ab".repeat(20)], quote: QUOTE, get_job: goodJob() };
+  const views = { name: "Earned Price", owner: "earned-price.testnet", signers: [...SIGNERS, "0x" + "ab".repeat(20)], quote: QUOTE, get_record: EMPTY_RECORD, get_job: goodJob() };
   await withRpc({ accounts: [{ ...funded, code_hash: old }, deployed], views }, async (port) => {
     const box = sandbox();
     const r = await run(box, ["--redeploy"], { rpcPort: port });

@@ -313,6 +313,18 @@ async fn balances_follow_the_escrow_rules() {
         quote(&e, e.seller.id().as_str()).await,
         (35 * MILLI).to_string()
     );
+    // T-024: the record behind the quote, readable with a keyless view.
+    let rec: Value =
+        e.c.view("get_record")
+            .args_json(json!({ "seller": e.seller.id() }))
+            .await
+            .unwrap()
+            .json()
+            .unwrap();
+    assert_eq!(
+        rec,
+        json!({ "passes": 1, "fails": 1, "unique_buyers": 1, "jobs": 2 })
+    );
     assert!(job_is_gone(&e, &job1).await);
 
     // 5. Seller deletes its account after reviewing: the PASS payout transfer
