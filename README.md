@@ -76,9 +76,14 @@ reveal-timeout jobs don't count). `quote(seller)` is computed from it:
 a new seller). **Sybil limit: each buyer account can raise a seller's quote at
 most once.** Three passes from the same buyer count as one; further passes from
 that buyer still show in `passes` but don't move the price. This stops one buyer
-from farming a price up with repeat jobs, but not someone who creates many buyer
-accounts (each costs a testnet account and a real escrowed job). Fails are not
-deduplicated: every graded fail lowers the quote.
+from farming a price up with repeat jobs. **It does not stop a seller that runs
+its own buyer accounts.** The buyer commits the answer key, so a seller acting as
+its own buyer can pass every job, and the escrowed price is paid back to that
+same seller. The real cost per fake buyer is one testnet account, gas, and one
+signed TEE review. Seven fake buyers take a new seller's quote from 30 to the
+100 milliNEAR cap. This pass-farming risk is open in the threat model (security
+review MED-1, decision A-014, not yet decided). Fails are not deduplicated: every
+graded fail lowers the quote.
 
 ### Trust and owner powers
 
@@ -109,7 +114,8 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
 - Every submitted review leaves one permanent 32-byte entry (the replay guard),
   paid from the contract's balance (about 0.0008 NEAR each).
 - Each buyer's first pass for a seller leaves one permanent (seller, buyer) entry
-  (the unique-buyer set), also paid from the contract's balance.
+  (the unique-buyer set), also paid from the contract's balance (up to about
+  0.0018 NEAR each, no per-seller limit).
 - The on-chain parser is serde_json: a review containing numbers beyond the
   float range, lone UTF-16 surrogates, or nesting deeper than 128 grades as
   `malformed_finding` on-chain even where `JSON.parse` would read it. A committed
@@ -169,7 +175,7 @@ differ from the deployed one.
 ```sh
 scripts/deploy.sh --dry-run   # build + checks, signs nothing
 scripts/deploy.sh             # deploy to earned-price.testnet, check the on-chain code_hash,
-                              # then smoke-call name, quote, create, get_job
+                              # then smoke-call name, quote, get_record, create, get_job
 ```
 
 Safety rails:

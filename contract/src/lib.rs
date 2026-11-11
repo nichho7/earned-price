@@ -29,13 +29,17 @@
 //! signed review by `review_by`, A-010). A declined, never-accepted or
 //! timed-out-after-review job never touches the record. T-024: `get_record`
 //! returns {passes, fails, unique_buyers, jobs} and the quote counts passes by
-//! unique buyer only (a buyer raises a seller's price at most once, R3), so a
-//! seller's first pass from each buyer also writes one (seller, buyer) entry.
-//! The review lives on the
-//! Job (about 240 bytes) and is deleted with it. The one permanent growth is the
-//! replay guard: 32 bytes (plus key prefix and trie overhead) per submitted
-//! review's `request_sha256`, so a signed review can never be reused on another
-//! job.
+//! unique buyer only (a buyer raises a seller's price at most once, R3). The
+//! review lives on the Job (about 240 bytes) and is deleted with it.
+//!
+//! Two storage growths are permanent, both paid from the contract balance:
+//! 1. The replay guard: 32 bytes (plus key prefix and trie overhead) per
+//!    submitted review's `request_sha256`, so a signed review can never be
+//!    reused on another job (about 0.0008 NEAR each).
+//! 2. `pass_buyers`: one (seller, buyer) entry on a seller's first paid pass
+//!    from each buyer. Key = 1 B prefix + two borsh account ids (4 B length +
+//!    up to 64 B each), empty value, ~40 B trie overhead: up to ~177 B, so up
+//!    to ~0.0018 NEAR per pair. No per-seller limit and no storage stake (T-047).
 //!
 //! Commit byte format (shared with grader `commit()` and offline verify, vector in
 //! `test-vectors/commit.json`):
@@ -1425,6 +1429,42 @@ mod tests {
         std::mem::forget(c);
     }
 
+    #[test]
+    fn on_payout_settles_from_two_buyers_count_twice() {
+        // Kills on_payout recording the wrong account as the buyer.
+        let mut c = with_accepted_job();
+        as_caller(escrow(), 30);
+        let b2 = acct("t024-buyer2.testnet");
+        for (id, b) in [(0, buyer()), (1, b2.clone())] {
+            assert!(c.on_payout(
+                U64(id),
+                b,
+                seller(),
+                U128(mnear(30).as_yoctonear()),
+                PayoutKind::Settle,
+                Ok(()),
+            ));
+        }
+        assert_eq!(c.get_record(seller()), rec(2, 0, 2));
+        assert_eq!(c.quote(seller()).0, mnear(50).as_yoctonear());
+        assert!(c.pass_buyers.contains(&(seller(), buyer())));
+        assert!(c.pass_buyers.contains(&(seller(), b2)));
+        std::mem::forget(c);
+    }
+
+    #[test]
+    fn fail_then_pass_from_same_buyer_adds_one_unique_buyer() {
+        ctx(NearToken::from_yoctonear(0), 0);
+        let mut c = fresh();
+        let (s, b) = (acct("t024-s7.testnet"), acct("t024-b7.testnet"));
+        c.record_fail(&s);
+        assert_eq!(c.get_record(s.clone()), rec(0, 1, 0));
+        c.record_pass(&s, &b);
+        assert_eq!(c.get_record(s.clone()), rec(1, 1, 1));
+        assert_eq!(c.quote(s).0, mnear(35).as_yoctonear(), "30 + 10 - 5");
+        std::mem::forget(c);
+    }
+
     fn hex_decode(s: &str) -> Vec<u8> {
         (0..s.len())
             .step_by(2)
@@ -1952,6 +1992,7 @@ mod tests {
         ));
         assert_eq!(events("payout")[0]["data"]["kind"], "timeout");
         assert!(!c.records.contains_key(&seller()));
+        assert!(!c.pass_buyers.contains(&(seller(), buyer())));
     }
 
     #[test]
@@ -1970,6 +2011,10 @@ mod tests {
         assert!(
             !c.records.contains_key(&seller()),
             "no pass without payment"
+        );
+        assert!(
+            !c.pass_buyers.contains(&(seller(), buyer())),
+            "no buyer entry without payment"
         );
         assert_eq!(transfers(), vec![(buyer(), mnear(30).as_yoctonear())]);
         assert_eq!(events("payout_failed_refunded").len(), 1);
