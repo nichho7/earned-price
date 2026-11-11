@@ -5,7 +5,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { FailoverRpcProvider, JsonRpcProvider } from "near-api-js";
-import { RPC_URLS, accountExists } from "../cli/init.js";
+import { RPC_URLS, RPC_RETRIES, accountExists, defaultDeps } from "../cli/init.js";
 
 // Byte-for-byte shapes seen from test.rpc.fastnear.com and neart.lava.build on 2026-11-11.
 const UNKNOWN_ACCOUNT = {
@@ -84,7 +84,38 @@ test("provider list: a dead primary fails over to a backup that answers", async 
 test("provider list: every RPC dead is RPC_UNAVAILABLE", async () => {
   const a = await fakeRpc(DISCONTINUED, 404);
   const b = await fakeRpc(DISCONTINUED, 404);
-  await assert.rejects(accountExists([a.provider, b.provider], "a.testnet"), (e) => e.code === "RPC_UNAVAILABLE");
+  await assert.rejects(
+    accountExists([a.provider, b.provider], "a.testnet"),
+    (e) => e.code === "RPC_UNAVAILABLE" && Array.isArray(e.cause) && e.cause.length === 2,
+  );
+});
+
+const throwing = (message, name = "Error") => ({
+  viewAccount: async () => {
+    const e = new Error(message);
+    e.name = name;
+    throw e;
+  },
+});
+
+test("not-found matching is account-specific: other 'does not exist' errors fail over", async () => {
+  // Both near-api-js account phrasings mean not found.
+  assert.equal(await accountExists(throwing("account a.testnet does not exist while viewing"), "a.testnet"), false);
+  assert.equal(await accountExists(throwing("Account a.testnet doesn't exist"), "a.testnet"), false);
+  // Unrelated "does not exist" messages are outages, not answers.
+  for (const msg of ["access key ed25519:x does not exist while viewing", "Block 123 does not exist", "method does not exist"]) {
+    await assert.rejects(accountExists(throwing(msg), "a.testnet"), (e) => e.code === "RPC_UNAVAILABLE", msg);
+  }
+  // ...and fail over to a backup that does answer.
+  const found = { viewAccount: async () => ({}) };
+  assert.equal(await accountExists([throwing("Block 123 does not exist"), found], "a.testnet"), true);
+});
+
+test("defaultDeps: RPC providers retry 3 times, not the library default 12", async () => {
+  const deps = await defaultDeps({});
+  assert.equal(RPC_RETRIES, 3);
+  assert.equal(deps.provider.length, 2);
+  for (const p of deps.provider) assert.equal(p.options.retries, 3);
 });
 
 test("RPC_URLS: no discontinued endpoints; two https testnet RPCs", () => {

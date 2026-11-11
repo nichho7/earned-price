@@ -114,7 +114,7 @@ function isAccountMissing(err) {
   const msg = String(err?.message ?? err);
   return (
     err?.name === "AccountDoesNotExistError" ||
-    /does not exist/i.test(msg) ||
+    /\baccount \S+ (does not|doesn't) exist/i.test(msg) ||
     /UNKNOWN_ACCOUNT/.test(msg) ||
     (Array.isArray(err?.errors) && err.errors.some(isAccountMissing))
   );
@@ -126,15 +126,19 @@ function isAccountMissing(err) {
  * near-api-js FailoverRpcProvider, because that one fails over on "not found" too.
  */
 export async function accountExists(provider, accountId) {
+  const errors = [];
   for (const p of [provider].flat()) {
     try {
       await p.viewAccount({ accountId });
       return true;
     } catch (err) {
       if (isAccountMissing(err)) return false;
+      errors.push(err);
     }
   }
-  throw new InitError("RPC_UNAVAILABLE", "testnet RPC unreachable; check your connection and retry `earned init`");
+  const err = new InitError("RPC_UNAVAILABLE", "testnet RPC unreachable; check your connection and retry `earned init`");
+  err.cause = errors; // per-RPC errors, in order, for debugging
+  throw err;
 }
 
 /** Asks the testnet faucet helper to create the account. Only the public key is sent. */
@@ -246,6 +250,8 @@ export async function runInit(deps) {
   return { state, reused, created, txHash, pass };
 }
 
+export const RPC_RETRIES = 3;
+
 /** Real dependencies: near-api-js 7.4.0 key generation and RPCs (failover in accountExists). */
 export async function defaultDeps(env = process.env) {
   const { JsonRpcProvider, KeyPair } = await import("near-api-js");
@@ -256,7 +262,8 @@ export async function defaultDeps(env = process.env) {
     env,
     network: env.EARNED_NETWORK || NETWORK,
     fetch: globalThis.fetch,
-    provider: urls.map((url) => new JsonRpcProvider({ url })),
+    // retries: 3 (library default 12, ~2 min per dead RPC) so failover is quick.
+    provider: urls.map((url) => new JsonRpcProvider({ url }, { retries: RPC_RETRIES })),
     keyGen: () => {
       const kp = KeyPair.fromRandom("ed25519");
       return { publicKey: kp.getPublicKey().toString(), privateKey: kp.toString() };
