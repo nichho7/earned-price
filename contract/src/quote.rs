@@ -88,6 +88,24 @@ mod tests {
         assert_eq!(q(u32::MAX, u32::MAX), 100); // no overflow: i64 math
     }
 
+    /// Shared with test/quote.test.js (T-026), so the CLI/site formula cannot drift.
+    #[test]
+    fn shared_vectors_match_js() {
+        let v: near_sdk::serde_json::Value =
+            near_sdk::serde_json::from_str(include_str!("../../test-vectors/quote.json")).unwrap();
+        let vectors = v["vectors"].as_array().unwrap();
+        assert!(vectors.len() >= 10);
+        for t in vectors {
+            let n = |k: &str| t[k].as_u64().unwrap() as u32;
+            let r = SellerRecord {
+                passes: n("passes"),
+                fails: n("fails"),
+                unique_buyers: n("unique_buyers"),
+            };
+            assert_eq!(quote_millinear(&r), n("quote_mnear"), "{}", t["name"]);
+        }
+    }
+
     #[test]
     fn units() {
         assert_eq!(millinear_to_yocto(30), 30 * 10u128.pow(21));

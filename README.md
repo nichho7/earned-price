@@ -85,6 +85,14 @@ signed TEE review. Seven fake buyers take a new seller's quote from 30 to the
 review MED-1, decision A-014, not yet decided). Fails are not deduplicated: every
 graded fail lowers the quote.
 
+`earned quote <seller.testnet> [--offer 0.02]` reads `get_record` and `quote` at
+the same block, recomputes the formula in `cli/quote.js`, refuses to print a price
+the formula can't explain, and prints the formula with its inputs (P =
+`unique_buyers`, F = `fails`), e.g. `0.030 + 0.010×1 − 0.005×1 = 0.035 NEAR`.
+An offer below the 0.025 NEAR cost floor (or below the quote) is refused with the
+reason; the contract also rejects any `create` below the quote. Both the contract
+tests and `npm test` check the same vectors (`test-vectors/quote.json`).
+
 ### Trust and owner powers
 
 The contract has one owner (`earned-price.testnet`), set once at deploy. **The
@@ -131,7 +139,7 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
 ## Layout
 
 - `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash), `accept`, `decline`, `submit_review` (on-chain signature + allowlist + replay check), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `owner` / `signers` / `add_signer` / `remove_signer`.
-- `cli/`: the `earned` CLI (Node, ESM): `earned init` creates a throwaway testnet buyer account.
+- `cli/`: the `earned` CLI (Node, ESM): `earned init` creates a throwaway testnet buyer account; `earned quote` prints a seller's record-driven quote. `cli/quote.js` is the shared, browser-safe quote module (CLI and website).
 - `grader/`: the commit-reveal code grader (`findingsFromResponse` reads a TEE response the same way the contract does).
 - `scripts/deploy.sh`: testnet-only deploy of the pinned wasm, then a smoke test (see below).
 - `scripts/testnet-view.mjs`: keyless, read-only testnet RPC views. `scripts/wasm-info.mjs`: a wasm's sha256, NEAR code hash and exports.

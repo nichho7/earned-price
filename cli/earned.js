@@ -24,9 +24,18 @@ if (cmd === "names") {
     console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "init failed; retry `earned init`"}`);
     process.exitCode = 1;
   }
+} else if (cmd === "quote") {
+  const { parseQuoteArgs, runQuote } = await import("./quote-cmd.js");
+  try {
+    await runQuote(parseQuoteArgs(args.slice(1)));
+  } catch (err) {
+    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "quote failed; retry"}`);
+    process.exitCode = 1;
+  }
 } else {
   console.log(`${BRAND} (${CLI_BIN})  contract ${CONTRACT_ACCOUNT} on ${NETWORK}`);
   console.log(`usage: ${CLI_BIN} init     create or reuse a throwaway testnet buyer (0.2 NEAR cap)`);
+  console.log(`       ${CLI_BIN} quote <seller.testnet> [--offer 0.02]   seller's quote from its on-chain record`);
   console.log(`       ${CLI_BIN} names    print the naming set`);
   if (cmd && cmd !== "help" && cmd !== "--help") process.exitCode = 1;
 }
