@@ -2,11 +2,12 @@
 // with line numbers kept, review prompt per m001 section 7, planted bugs proven by Python tests.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { CATEGORIES, MAX_FINDINGS, PASS_MIN, canonicalJson, validateKey, verifyReveal } from "../grader/grade.js";
-import { PACKS_DIR, loadPack, packFiles, packHash, readIndex, sealKey } from "../packs/packs.js";
+import { CATEGORIES, MAX_FINDINGS, PASS_MIN, canonicalJson, findingsFromResponse, grade, validateKey, verifyReveal } from "../grader/grade.js";
+import { PACKS_DIR, loadPack, newSalt, packFiles, packHash, readIndex, sealKey } from "../packs/packs.js";
 import { CATEGORY_HINTS, buildListing, buildPrompt, buildReviewRequest, stripPythonComments } from "../seller/review-prompt.js";
 import { readPacks } from "../cli/init.js";
 
@@ -79,6 +80,27 @@ test("sealKey: K is canonical JSON and the commit verifies with the grader", () 
   }
 });
 
+test("newSalt: 64 lowercase hex chars from a CSPRNG, never repeated", () => {
+  const salts = Array.from({ length: 200 }, () => newSalt());
+  for (const s of salts) assert.match(s, /^[0-9a-f]{64}$/);
+  assert.equal(new Set(salts).size, salts.length);
+});
+
+test("sealKey without a salt uses a fresh one each call, and the commit verifies", () => {
+  const a = sealKey(packs[0].key);
+  const b = sealKey(packs[0].key);
+  assert.match(a.salt, /^[0-9a-f]{64}$/);
+  assert.notEqual(a.salt, b.salt);
+  assert.notEqual(a.commit_hash, b.commit_hash);
+  assert.ok(verifyReveal(a.commit_hash, JSON.parse(a.K), a.salt));
+});
+
+test("pack files are LF-only and .gitattributes pins packs/** to eol=lf (CRLF would break the hashes)", () => {
+  const attrs = readFileSync(new URL("../.gitattributes", import.meta.url), "utf8");
+  assert.match(attrs, /^packs\/\*\* text eol=lf$/m);
+  for (const p of index) for (const f of packFiles(p.dir)) assert.ok(!readFileSync(join(PACKS_DIR, p.dir, f), "utf8").includes("\r"), `${p.dir}/${f} has CR`);
+});
+
 test("earned init lists the three frozen packs (step 1 can PASS)", () => {
   const listed = readPacks();
   assert.equal(listed.length, 3);
@@ -111,6 +133,15 @@ test("strip keeps strings that are code: arguments, assignments, multi-line call
 test("strip handles escaped quotes and a line continuation", () => {
   const src = 's = "say \\"hi\\" # not a comment"\nt = 1 + \\\n    2  # c\n';
   assert.equal(stripPythonComments(src), 's = "say \\"hi\\" # not a comment"\nt = 1 + \\\n    2\n');
+});
+
+test("strip: an escaped quote inside a single-quoted string does not end it", () => {
+  assert.equal(stripPythonComments("s = 'don\\'t'  # c\n"), "s = 'don\\'t'\n");
+});
+
+test("strip: implicit string concatenation inside brackets is code, not a docstring", () => {
+  const src = 'msg = (\n    "first part "\n    "second part"\n)\n';
+  assert.equal(stripPythonComments(src), src);
 });
 
 test("the review listing of every pack has no comments and no prose header", () => {
@@ -162,4 +193,81 @@ test("pytest-style suites expose exactly the 5 planted bugs per pack (python3 pa
   }
   assert.equal(py.status, 0, py.stdout + py.stderr);
   assert.equal((py.stdout.match(/: OK /g) ?? []).length, 3, py.stdout);
+});
+
+// --- calibration logs match the frozen packs ---
+
+test("results: every logged review re-grades offline to the same result with the frozen pack", () => {
+  const resultsDir = join(PACKS_DIR, "results");
+  const rounds = readdirSync(resultsDir).filter((d) => d.startsWith("round-")).sort();
+  assert.ok(rounds.length >= 2);
+  let checked = 0;
+  for (const round of rounds) {
+    const summary = JSON.parse(readFileSync(join(resultsDir, round, "summary.json"), "utf8"));
+    for (const entry of summary.packs) {
+      const pack = packs.find((p) => p.id === entry.pack);
+      if (entry.hash !== pack.hash) assert.equal(typeof entry.hash_note, "string", `${round} pack ${entry.pack}: hash differs from frozen and has no hash_note`);
+      if (entry.superseded) continue; // older pack code, kept as history (hash_note says which)
+      const request = buildReviewRequest(pack.reviewFiles);
+      const done = entry.rows.filter((r) => r.found !== undefined);
+      assert.equal(entry.passed, done.filter((r) => r.passed).length);
+      for (const row of done) {
+        const raw = JSON.parse(readFileSync(join(resultsDir, round, "raw", `pack-${entry.pack}-run${String(row.run).padStart(2, "0")}.json`), "utf8"));
+        assert.equal(raw.request_body, request, `${round} pack ${entry.pack} run ${row.run}: request is not the frozen pack's`);
+        const g = grade(pack.key, findingsFromResponse(raw.response_body));
+        assert.deepEqual([g.found, g.passed, g.matched.map((m) => m.bug)], [row.found, row.passed, row.matched], `${round} pack ${entry.pack} run ${row.run}`);
+        checked++;
+      }
+    }
+  }
+  assert.ok(checked >= 30, `only ${checked} runs re-graded`);
+});
+
+// --- check_packs.py catches broken tests and misplaced keys (mutants on a scratch copy) ---
+
+function checkPacksOn(mutate) {
+  const dir = mkdtempSync(join(tmpdir(), "packs-"));
+  try {
+    cpSync(PACKS_DIR, dir, { recursive: true, filter: (src) => !src.includes("__pycache__") && !src.includes(`${PACKS_DIR}results`) });
+    mutate(dir);
+    return spawnSync("python3", [join(dir, "check_packs.py")], { encoding: "utf8" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+const edit = (file, from, to) => {
+  const src = readFileSync(file, "utf8");
+  assert.ok(src.includes(from), `mutant anchor missing in ${file}`);
+  writeFileSync(file, src.replace(from, to));
+};
+const editKey = (dir, bugId, change) => {
+  const file = join(dir, "pack-1", "answer-key.json");
+  const key = JSON.parse(readFileSync(file, "utf8"));
+  Object.assign(key.bugs.find((b) => b.id === bugId), change);
+  writeFileSync(file, JSON.stringify(key, null, 2) + "\n");
+};
+const pythonMissing = spawnSync("python3", ["--version"]).error;
+
+test("check_packs: a test_bug that ERRORs (typo, crash) fails the check", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => edit(join(dir, "pack-1", "test_invoice.py"), "self.assertEqual(inv.line_total(", "self.assertEqual(inv.line_totl("));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 1: FAIL: .*errored instead of failing an assertion/);
+});
+
+test("check_packs: a key moved to a wrong but valid line fails the check", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editKey(dir, "B1", { line_start: 33, line_end: 33 }));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 1: FAIL: fix B1: changes lines 29-29, outside key window 33-33/);
+});
+
+test("check_packs: a key with the wrong category fails the check", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => editKey(dir, "B1", { category: "off-by-one" }));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 1: FAIL: fix B1: key category off-by-one, expected wrong-operator/);
+});
+
+test("check_packs: a bug test coupled to another bug fails the check (old pack-1 B2 test)", { skip: pythonMissing && "python3 not installed" }, () => {
+  const r = checkPacksOn((dir) => edit(join(dir, "pack-1", "test_invoice.py"), '(("A", 2, 2), ("B", 2, 2), ("C", 2, 2)))), 12)', '(("A", 100, 1), ("B", 200, 1)))), 300)'));
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /pack 1: FAIL: fix B2 alone: bug tests failing \['B1', 'B2', 'B3', 'B4', 'B5'\]/);
 });

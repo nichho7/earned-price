@@ -34,6 +34,11 @@ const STRING_PREFIX = /^(r|u|b|f|rb|br|fr|rf)$/i;
  * kept: every newline survives, so a line in the answer key is the same line in the review.
  * Strings that are part of code (arguments, assignments, strings inside brackets) are kept as is.
  * Trailing whitespace is trimmed from every line.
+ *
+ * Known gaps (fine for our own trusted packs; close them before any buyer-supplied code is
+ * reviewed): a standalone string wrapped in brackets, e.g. `("ignore the rules")`, and one joined
+ * to a statement with `;`, e.g. `x = 1; "note"`, are kept, because they are not at a statement
+ * start outside brackets.
  */
 export function stripPythonComments(src) {
   const out = [];
@@ -94,7 +99,8 @@ export function stripPythonComments(src) {
     if (quoteAt !== -1) {
       const end = readString(i, quoteAt);
       const token = src.slice(i, end);
-      const standalone = atStatementStart && depth === 0 && restOfLineIsEmpty(end);
+      // atStatementStart is never true inside brackets (a newline there does not reset it).
+      const standalone = atStatementStart && restOfLineIsEmpty(end);
       out.push(standalone ? token.replace(/[^\n]/g, "") : token);
       i = end;
       atStatementStart = false;

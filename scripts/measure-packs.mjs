@@ -8,7 +8,9 @@
 // never printed or written. Writes packs/results/round-<n>/summary.json (per-pack and per-bug hit
 // rates) and raw/<pack>-run<NN>.json (exact request + response bodies, no key).
 // Cost = usage tokens x public catalog price (https://cloud-api.near.ai/v1/model/list), an estimate.
-// Stops before a run would push the estimated spend over --max-usd.
+// A failed request (non-200, timeout, network error) may still be billed, so it counts too: its
+// usage if the body has one, else the WORST_RUN_USD reserve. Stops before a run would push the
+// estimated spend over --max-usd.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { findingsFromResponse, grade } from "../grader/grade.js";
@@ -51,20 +53,40 @@ async function price(model) {
 
 let spent = 0;
 
+/** Estimated cost of one response body: its usage x price, or null when it has no usage. */
+function usageCost(responseBody, p) {
+  let usage;
+  try {
+    usage = JSON.parse(responseBody).usage;
+  } catch {}
+  if (!usage || typeof usage !== "object") return null;
+  return (usage.prompt_tokens ?? 0) * p.in + (usage.completion_tokens ?? 0) * p.out;
+}
+
 async function review(pack, run, p) {
   const requestBody = buildReviewRequest(pack.reviewFiles);
   const t0 = performance.now();
-  const r = await fetch(`${BASE}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json", "Accept-Encoding": "identity", Authorization: `Bearer ${KEY}` },
-    body: requestBody,
-    signal: AbortSignal.timeout(240_000),
-  });
-  const responseBody = await r.text();
+  let r;
+  let responseBody;
+  try {
+    r = await fetch(`${BASE}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "Accept-Encoding": "identity", Authorization: `Bearer ${KEY}` },
+      body: requestBody,
+      signal: AbortSignal.timeout(240_000),
+    });
+    responseBody = await r.text();
+  } catch (e) {
+    spent += WORST_RUN_USD; // timed out or dropped: the server may still have run (and billed) it
+    throw e;
+  }
   const wall_ms = Math.round(performance.now() - t0);
-  if (!r.ok) throw new Error(`chat -> HTTP ${r.status}`);
+  if (!r.ok) {
+    spent += usageCost(responseBody, p) ?? WORST_RUN_USD;
+    throw new Error(`chat -> HTTP ${r.status}`);
+  }
   const usage = JSON.parse(responseBody).usage ?? {};
-  const cost_usd = (usage.prompt_tokens ?? 0) * p.in + (usage.completion_tokens ?? 0) * p.out;
+  const cost_usd = usageCost(responseBody, p) ?? 0;
   spent += cost_usd;
   const findings = findingsFromResponse(responseBody);
   const g = grade(pack.key, findings);

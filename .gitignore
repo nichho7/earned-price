@@ -13,8 +13,9 @@ credentials.json
 .near-credentials/
 near-credentials/
 **/near-credentials/**
-# Exam pack answer keys are public by design (sealed from the reviewer, committed per job with a
-# fresh salt; see packs/packs.js), so they are the one *-key.json exception.
+# Exam pack answer keys are public by design (the seller can read them too). Integrity comes from
+# the on-chain pin of each pack's exact review request (T-048), not from hiding the keys; see
+# packs/packs.js. So they are the one *-key.json exception.
 !packs/pack-*/answer-key.json
 # earned init: throwaway testnet buyer key (0600). Never commit.
 .earned/

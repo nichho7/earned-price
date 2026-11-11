@@ -1,0 +1,121 @@
+{
+  "_doc": "One reference fix per planted bug (T-013). Each fix replaces lines start..end (1-based, in the frozen review file) whose text must equal 'old' with the lines in 'new'. python3 packs/check_packs.py applies each fix alone to a scratch copy and requires: start..end inside the key's line window, the key's category equal to 'category', and exactly that bug's test_bug_* flipping to pass (nothing else changes). All five fixes together make every test pass. Lives outside the pack folders, so it is not part of the frozen pack hashes.",
+  "fixes": [
+    {
+      "pack": "1", "bug": "B1", "category": "wrong-operator", "file": "invoice.py", "start": 29, "end": 29,
+      "old": ["    return item.unit_price_cents + item.quantity"],
+      "new": ["    return item.unit_price_cents * item.quantity"]
+    },
+    {
+      "pack": "1", "bug": "B2", "category": "off-by-one", "file": "invoice.py", "start": 34, "end": 34,
+      "old": ["    for i in range(1, len(invoice.lines)):"],
+      "new": ["    for i in range(len(invoice.lines)):"]
+    },
+    {
+      "pack": "1", "bug": "B3", "category": "wrong-comparison", "file": "invoice.py", "start": 60, "end": 60,
+      "old": ["    return due_date(invoice) > today"],
+      "new": ["    return due_date(invoice) < today"]
+    },
+    {
+      "pack": "1", "bug": "B4", "category": "mutable-default", "file": "invoice.py", "start": 69, "end": 69,
+      "old": ["def add_line(invoice, sku, unit_price_cents, quantity, seen_skus=[]):"],
+      "new": [
+        "def add_line(invoice, sku, unit_price_cents, quantity, seen_skus=None):",
+        "    if seen_skus is None:",
+        "        seen_skus = [item.sku for item in invoice.lines]"
+      ]
+    },
+    {
+      "pack": "1", "bug": "B5", "category": "wrong-initial-value", "file": "invoice.py", "start": 91, "end": 93,
+      "old": [
+        "    lowest = 0",
+        "    for item in invoice.lines:",
+        "        if line_total(item) < lowest:"
+      ],
+      "new": [
+        "    lowest = None",
+        "    for item in invoice.lines:",
+        "        if lowest is None or line_total(item) < lowest:"
+      ]
+    },
+    {
+      "pack": "2", "bug": "B1", "category": "resource-leak", "file": "stock.py", "start": 13, "end": 14,
+      "old": [
+        "    handle = open(path, encoding=\"utf-8\")",
+        "    rows = json.load(handle)"
+      ],
+      "new": [
+        "    with open(path, encoding=\"utf-8\") as handle:",
+        "        rows = json.load(handle)"
+      ]
+    },
+    {
+      "pack": "2", "bug": "B2", "category": "error-handling", "file": "stock.py", "start": 31, "end": 31,
+      "old": ["        return True"],
+      "new": ["        return False"]
+    },
+    {
+      "pack": "2", "bug": "B3", "category": "missing-check", "file": "stock.py", "start": 70, "end": 70,
+      "old": ["    levels[sku] = levels.get(sku, 0) - quantity"],
+      "new": [
+        "    if quantity > levels.get(sku, 0):",
+        "        raise StockError(f\"only {levels.get(sku, 0)} of {sku} in stock\")",
+        "    levels[sku] = levels.get(sku, 0) - quantity"
+      ]
+    },
+    {
+      "pack": "2", "bug": "B4", "category": "off-by-one", "file": "stock.py", "start": 95, "end": 95,
+      "old": ["    return ordered[start:start + size - 1]"],
+      "new": ["    return ordered[start:start + size]"]
+    },
+    {
+      "pack": "2", "bug": "B5", "category": "wrong-comparison", "file": "stock.py", "start": 103, "end": 103,
+      "old": ["    return lot[\"expires_on\"] > today"],
+      "new": ["    return lot[\"expires_on\"] < today"]
+    },
+    {
+      "pack": "3", "bug": "B1", "category": "float-money", "file": "settlement.py", "start": 37, "end": 37,
+      "old": ["    return round(float(amount) * 0.015, 2)"],
+      "new": ["    return (Decimal(amount) * Decimal(\"0.015\")).quantize(CENT, rounding=ROUND_HALF_UP)"]
+    },
+    {
+      "pack": "3", "bug": "B2", "category": "timezone", "file": "settlement.py", "start": 45, "end": 45,
+      "old": ["    return datetime.fromtimestamp(seconds).date()"],
+      "new": ["    return utc_from_epoch(seconds).date()"]
+    },
+    {
+      "pack": "3", "bug": "B3", "category": "race-condition", "file": "settlement.py", "start": 87, "end": 90,
+      "old": [
+        "        if amount > self._available:",
+        "            raise ValueError(\"insufficient balance\")",
+        "        self._record(reference, amount)",
+        "        self._available -= amount"
+      ],
+      "new": [
+        "        with self._lock:",
+        "            if amount > self._available:",
+        "                raise ValueError(\"insufficient balance\")",
+        "            self._record(reference, amount)",
+        "            self._available -= amount"
+      ]
+    },
+    {
+      "pack": "3", "bug": "B4", "category": "mutable-default", "file": "settlement.py", "start": 19, "end": 19,
+      "old": ["    return _DEFAULT_SCHEDULE"],
+      "new": ["    return dict(_DEFAULT_SCHEDULE)"]
+    },
+    {
+      "pack": "3", "bug": "B5", "category": "off-by-one", "file": "settlement.py", "start": 60, "end": 62,
+      "old": [
+        "        last = datetime(year + 1, 1, 1, tzinfo=timezone.utc)",
+        "    else:",
+        "        last = datetime(year, month + 1, 1, tzinfo=timezone.utc)"
+      ],
+      "new": [
+        "        last = datetime(year + 1, 1, 1, tzinfo=timezone.utc) - ONE_MICROSECOND",
+        "    else:",
+        "        last = datetime(year, month + 1, 1, tzinfo=timezone.utc) - ONE_MICROSECOND"
+      ]
+    }
+  ]
+}

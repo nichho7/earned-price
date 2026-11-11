@@ -16,6 +16,7 @@
       "pack": "3",
       "name": "Merchant settlement",
       "hash": "dab51058f22defd87e024df862e7209fa121ce6b392b43fca2c5bc1b22f721d4",
+      "hash_note": "Measured on dab51058...; the frozen hash f2938af8... differs only in answer-key titles (titles are not in the review request and not used by grading). Request bytes and grades re-checked offline against the frozen pack by test/packs.test.js.",
       "completed": 10,
       "passed": 10,
       "failed": 0,

@@ -25,7 +25,8 @@ class PlantedBugs(unittest.TestCase):
         self.assertEqual(inv.line_total(inv.LineItem("A", 500, 3)), 1500)
 
     def test_bug_B2_subtotal_counts_every_line(self):
-        self.assertEqual(inv.subtotal(make((("A", 100, 1), ("B", 200, 1)))), 300)
+        # price 2 x quantity 2: line_total is 4 with or without B1, so this flips only on B2.
+        self.assertEqual(inv.subtotal(make((("A", 2, 2), ("B", 2, 2), ("C", 2, 2)))), 12)
 
     def test_bug_B3_overdue_after_due_date(self):
         invoice = make()
@@ -36,12 +37,17 @@ class PlantedBugs(unittest.TestCase):
         first = inv.Invoice("INV-1", "acme", date(2026, 1, 1))
         second = inv.Invoice("INV-2", "acme", date(2026, 1, 1))
         inv.add_line(first, "WIDGET-B4", 100, 1)
-        inv.add_line(second, "WIDGET-B4", 100, 1)
+        try:
+            inv.add_line(second, "WIDGET-B4", 100, 1)
+        except ValueError as e:
+            self.fail(f"second invoice rejected a sku it does not have: {e}")
         self.assertEqual(len(second.lines), 1)
 
     def test_bug_B5_cheapest_line_found(self):
         invoice = make((("A", 500, 1), ("B", 200, 1), ("C", 900, 1)))
-        self.assertEqual(inv.cheapest_line(invoice).sku, "B")
+        cheapest = inv.cheapest_line(invoice)
+        self.assertIsNotNone(cheapest, "no cheapest line found")
+        self.assertEqual(cheapest.sku, "B")
 
 
 class Unplanted(unittest.TestCase):
@@ -93,7 +99,7 @@ class Unplanted(unittest.TestCase):
 
     def test_ok_customer_balances_group_by_customer(self):
         a = inv.mark_paid(make())
-        b = make((("A", 0, 1),))
+        b = make(())  # no lines: owes 0 whichever of B1/B2 is fixed
         self.assertEqual(inv.customer_balances([a, b]), {"acme": 0})
 
     def test_ok_aging_report_has_four_buckets(self):

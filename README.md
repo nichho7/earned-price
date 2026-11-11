@@ -151,9 +151,11 @@ review, its tests and `answer-key.json`.
   passes. `python3 packs/check_packs.py` checks all three packs.
 - **Frozen by hash.** `packs/index.json` pins a sha256 over every file in each pack;
   `earned init` lists those hashes and `npm test` fails if any pack file changes.
-- **Sealed from the reviewer, not from you.** The answer keys are public in this repo. The
-  reviewer only ever sees the comment-stripped code (never tests or keys), and every job commits
-  the key with a fresh 32-byte salt before the review runs, so the buyer can't change it later.
+- **Public answer keys.** The answer keys are public in this repo, for sellers too. Every job
+  commits the key with a fresh 32-byte salt before the review runs, so the buyer can't change it
+  later; that salt hides nothing from the seller. The honest review request holds only the
+  comment-stripped code (never tests or keys); what stops a seller from adding the key to the
+  prompt is the contract pinning each pack's exact request hash (being added in T-048).
 - Calibration runs (10 live reviews per pack, per-bug hit rates): `packs/results/`.
 
 ## Deploy (testnet only)

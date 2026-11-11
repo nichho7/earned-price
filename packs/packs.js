@@ -5,9 +5,12 @@
 // packs/index.json pins it; `npm test` recomputes it, so any change to a pack fails the tests until
 // index.json is regenerated on purpose (node scripts/freeze-packs.mjs).
 //
-// The answer key is not secret from people (this repo is public); it is sealed from the reviewer:
-// the review request only ever contains the comment-stripped review files, and each job commits
-// the key with a fresh 32-byte salt (m001 section 6) before the review runs.
+// The answer keys are public: anyone, including a seller, can read them in this repo and the npm
+// package. The salted commit (m001 section 6) only stops the buyer from changing the key after the
+// review; it hides nothing from the seller, who builds the TEE request. What stops a seller from
+// pasting the key into the prompt is the on-chain pin of each pack's exact review request
+// (request_sha256 of buildReviewRequest, checked by the contract; added in T-048).
+import { randomBytes } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalJson, commit, sha256Hex, validateKey } from "../grader/grade.js";
@@ -47,11 +50,16 @@ export function loadPack(id, index = readIndex()) {
   return { id: entry.id, name: entry.name, level: entry.level, hash: entry.hash, key, reviewFiles };
 }
 
+/** A fresh job salt: 32 bytes from the OS CSPRNG as 64 lowercase hex chars. */
+export function newSalt() {
+  return randomBytes(32).toString("hex");
+}
+
 /**
  * Seals a pack's key for one job: K (the exact canonical JSON the contract's reveal expects), the
- * salt, and commit_hash = sha256(u32_be(len K) || K || salt). salt: 64 lowercase hex chars from a
- * CSPRNG, made by the caller (never reuse one across jobs).
+ * salt, and commit_hash = sha256(u32_be(len K) || K || salt). Leave salt out to get a fresh one
+ * from newSalt(); pass one only to reproduce a known commit (never reuse a salt across jobs).
  */
-export function sealKey(key, salt) {
+export function sealKey(key, salt = newSalt()) {
   return { K: canonicalJson(key), salt, commit_hash: commit(key, salt) };
 }
