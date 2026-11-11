@@ -1,0 +1,35 @@
+{
+  "_doc": "Exam bug packs 1-3 (S-008 / T-013). hash = frozen sha256 over every file in the pack folder (see packs/packs.js); npm test fails if any file changes. Regenerate on purpose with: node scripts/freeze-packs.mjs",
+  "packs": [
+    {
+      "id": "1",
+      "dir": "pack-1",
+      "name": "Invoices",
+      "level": "easy",
+      "review_files": [
+        "invoice.py"
+      ],
+      "hash": "b22a4bd47a5a80de84bb79fce4157c6d1609c16bc48ae84ebc66304c77298590"
+    },
+    {
+      "id": "2",
+      "dir": "pack-2",
+      "name": "Warehouse stock",
+      "level": "medium",
+      "review_files": [
+        "stock.py"
+      ],
+      "hash": "c827d2285b945f69d3813e13686370165baaa2c2470544aba08e8ebd520f5c68"
+    },
+    {
+      "id": "3",
+      "dir": "pack-3",
+      "name": "Merchant settlement",
+      "level": "honest fail",
+      "review_files": [
+        "settlement.py"
+      ],
+      "hash": "f2938af8350346ccda045fa9ec21f897e4d5c12882f3a8a2c63bf690abbe2078"
+    }
+  ]
+}

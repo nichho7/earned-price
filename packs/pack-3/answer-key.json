@@ -1,0 +1,48 @@
+{
+  "pack_id": "pack-3",
+  "version": 1,
+  "pass_min": 4,
+  "line_tolerance": 3,
+  "bugs": [
+    {
+      "id": "B1",
+      "title": "Float money in card_surcharge",
+      "file": "settlement.py",
+      "line_start": 37,
+      "line_end": 37,
+      "category": "float-money"
+    },
+    {
+      "id": "B2",
+      "title": "Local timezone in settlement_day",
+      "file": "settlement.py",
+      "line_start": 45,
+      "line_end": 45,
+      "category": "timezone"
+    },
+    {
+      "id": "B3",
+      "title": "Unlocked check-then-act in payout",
+      "file": "settlement.py",
+      "line_start": 85,
+      "line_end": 90,
+      "category": "race-condition"
+    },
+    {
+      "id": "B4",
+      "title": "Shared mutable schedule in schedule_for",
+      "file": "settlement.py",
+      "line_start": 19,
+      "line_end": 25,
+      "category": "mutable-default"
+    },
+    {
+      "id": "B5",
+      "title": "Exclusive end in statement_window",
+      "file": "settlement.py",
+      "line_start": 57,
+      "line_end": 63,
+      "category": "off-by-one"
+    }
+  ]
+}

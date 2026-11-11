@@ -1,0 +1,48 @@
+{
+  "pack_id": "pack-2",
+  "version": 1,
+  "pass_min": 4,
+  "line_tolerance": 3,
+  "bugs": [
+    {
+      "id": "B1",
+      "title": "File never closed in load_catalog",
+      "file": "stock.py",
+      "line_start": 13,
+      "line_end": 14,
+      "category": "resource-leak"
+    },
+    {
+      "id": "B2",
+      "title": "Swallowed error in save_snapshot",
+      "file": "stock.py",
+      "line_start": 30,
+      "line_end": 31,
+      "category": "error-handling"
+    },
+    {
+      "id": "B3",
+      "title": "Missing stock check in write_off",
+      "file": "stock.py",
+      "line_start": 67,
+      "line_end": 70,
+      "category": "missing-check"
+    },
+    {
+      "id": "B4",
+      "title": "Off-by-one in page",
+      "file": "stock.py",
+      "line_start": 95,
+      "line_end": 95,
+      "category": "off-by-one"
+    },
+    {
+      "id": "B5",
+      "title": "Inverted comparison in is_expired",
+      "file": "stock.py",
+      "line_start": 103,
+      "line_end": 103,
+      "category": "wrong-comparison"
+    }
+  ]
+}

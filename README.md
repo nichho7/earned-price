@@ -133,9 +133,28 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
 - `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash), `accept`, `decline`, `submit_review` (on-chain signature + allowlist + replay check), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `owner` / `signers` / `add_signer` / `remove_signer`.
 - `cli/`: the `earned` CLI (Node, ESM): `earned init` creates a throwaway testnet buyer account.
 - `grader/`: the commit-reveal code grader (`findingsFromResponse` reads a TEE response the same way the contract does).
+- `packs/`: exam bug packs 1-3 (Python, written from scratch, MIT), 5 planted bugs each, see "Exam packs" below.
+- `seller/review-prompt.js`: the exact TEE review request (comments stripped, line numbers kept, rules from the UI contract section 7).
 - `scripts/deploy.sh`: testnet-only deploy of the pinned wasm, then a smoke test (see below).
 - `scripts/testnet-view.mjs`: keyless, read-only testnet RPC views. `scripts/wasm-info.mjs`: a wasm's sha256, NEAR code hash and exports.
 - `test/`: `npm test` (names, grader, CLI, deploy script; no network, no keys).
+
+## Exam packs
+
+Three ~150-line Python files with 5 planted bugs each: pack 1 invoices (easy), pack 2
+warehouse stock (medium), pack 3 merchant settlement (meant as the honest fail: timezone,
+float money, a race, and two cross-function bugs). Each pack folder holds the code under
+review, its tests and `answer-key.json`.
+
+- **Do** `python3 -m pytest packs/pack-1` (or `python3 -m unittest discover -s packs/pack-1`).
+  **See** exactly five `test_bug_B1`..`B5` failures, one per planted bug; every other test
+  passes. `python3 packs/check_packs.py` checks all three packs.
+- **Frozen by hash.** `packs/index.json` pins a sha256 over every file in each pack;
+  `earned init` lists those hashes and `npm test` fails if any pack file changes.
+- **Sealed from the reviewer, not from you.** The answer keys are public in this repo. The
+  reviewer only ever sees the comment-stripped code (never tests or keys), and every job commits
+  the key with a fresh 32-byte salt before the review runs, so the buyer can't change it later.
+- Calibration runs (10 live reviews per pack, per-bug hit rates): `packs/results/`.
 
 ## Deploy (testnet only)
 
