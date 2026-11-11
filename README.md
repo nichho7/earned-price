@@ -67,6 +67,19 @@ signed review by the review deadline = buyer refunded and a fail on the seller's
 record; signed review but no reveal by the reveal deadline = seller paid, record
 unchanged.
 
+**Record and quote.** `get_record(seller)` is a keyless view returning
+`{passes, fails, unique_buyers, jobs}`: `passes` = every paid pass, `fails` =
+every graded fail, `unique_buyers` = distinct buyers with at least one paid pass,
+`jobs` = `passes + fails` (graded jobs only; declined, never-accepted and
+reveal-timeout jobs don't count). `quote(seller)` is computed from it:
+`clamp(30 + 10 × unique_buyers − 5 × fails, 25, 100)` milliNEAR (0.030 NEAR for
+a new seller). **Sybil limit: each buyer account can raise a seller's quote at
+most once.** Three passes from the same buyer count as one; further passes from
+that buyer still show in `passes` but don't move the price. This stops one buyer
+from farming a price up with repeat jobs, but not someone who creates many buyer
+accounts (each costs a testnet account and a real escrowed job). Fails are not
+deduplicated: every graded fail lowers the quote.
+
 ### Trust and owner powers
 
 The contract has one owner (`earned-price.testnet`), set once at deploy. **The
@@ -95,6 +108,8 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
   power over escrow).
 - Every submitted review leaves one permanent 32-byte entry (the replay guard),
   paid from the contract's balance (about 0.0008 NEAR each).
+- Each buyer's first pass for a seller leaves one permanent (seller, buyer) entry
+  (the unique-buyer set), also paid from the contract's balance.
 - The on-chain parser is serde_json: a review containing numbers beyond the
   float range, lone UTF-16 surrogates, or nesting deeper than 128 grades as
   `malformed_finding` on-chain even where `JSON.parse` would read it. A committed
@@ -109,7 +124,7 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
 
 ## Layout
 
-- `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash), `accept`, `decline`, `submit_review` (on-chain signature + allowlist + replay check), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_job`, `next_job_id`, `owner` / `signers` / `add_signer` / `remove_signer`.
+- `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash), `accept`, `decline`, `submit_review` (on-chain signature + allowlist + replay check), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `owner` / `signers` / `add_signer` / `remove_signer`.
 - `cli/`: the `earned` CLI (Node, ESM): `earned init` creates a throwaway testnet buyer account.
 - `grader/`: the commit-reveal code grader (`findingsFromResponse` reads a TEE response the same way the contract does).
 - `scripts/deploy.sh`: testnet-only deploy of the pinned wasm, then a smoke test (see below).

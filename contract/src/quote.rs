@@ -1,5 +1,6 @@
 //! Pure quote formula (m001-ui-contract §3, PRD R6). No storage, no env.
-//! quote = clamp(30 + 10*passes - 5*fails, 25, 100) milliNEAR.
+//! quote = clamp(30 + 10*P - 5*F, 25, 100) milliNEAR, where P = unique buyers
+//! with a pass (R3: a buyer raises the price at most once) and F = all fails.
 
 use crate::SellerRecord;
 
@@ -13,7 +14,7 @@ const YOCTO_PER_MNEAR: u128 = 1_000_000_000_000_000_000_000;
 const YOCTO_PER_NEAR: u128 = 1_000 * YOCTO_PER_MNEAR;
 
 pub fn quote_millinear(r: &SellerRecord) -> u32 {
-    let raw = BASE_MNEAR + PASS_MNEAR * r.passes as i64 - FAIL_MNEAR * r.fails as i64;
+    let raw = BASE_MNEAR + PASS_MNEAR * r.unique_buyers as i64 - FAIL_MNEAR * r.fails as i64;
     raw.clamp(FLOOR_MNEAR, CAP_MNEAR) as u32
 }
 
@@ -39,8 +40,30 @@ pub fn format_near(yocto: u128) -> String {
 mod tests {
     use super::*;
 
-    fn q(passes: u32, fails: u32) -> u32 {
-        quote_millinear(&SellerRecord { passes, fails })
+    /// Quote for P unique-buyer passes (raw passes = P) and F fails.
+    fn q(p: u32, fails: u32) -> u32 {
+        quote_millinear(&SellerRecord {
+            passes: p,
+            fails,
+            unique_buyers: p,
+        })
+    }
+
+    #[test]
+    fn repeat_passes_do_not_raise_the_quote() {
+        // 3 passes from 1 buyer = 1 weighted pass (T-024, R3).
+        let r = SellerRecord {
+            passes: 3,
+            fails: 0,
+            unique_buyers: 1,
+        };
+        assert_eq!(quote_millinear(&r), 40);
+        let r = SellerRecord {
+            passes: 1000,
+            fails: 1,
+            unique_buyers: 1,
+        };
+        assert_eq!(quote_millinear(&r), 35);
     }
 
     #[test]

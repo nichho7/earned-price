@@ -27,7 +27,11 @@
 //! the EVENT_JSON log). A SellerRecord is written only on a graded outcome: a
 //! pass after a confirmed payout, or a fail (failed grade, or accepted with no
 //! signed review by `review_by`, A-010). A declined, never-accepted or
-//! timed-out-after-review job never touches the record. The review lives on the
+//! timed-out-after-review job never touches the record. T-024: `get_record`
+//! returns {passes, fails, unique_buyers, jobs} and the quote counts passes by
+//! unique buyer only (a buyer raises a seller's price at most once, R3), so a
+//! seller's first pass from each buyer also writes one (seller, buyer) entry.
+//! The review lives on the
 //! Job (about 240 bytes) and is deleted with it. The one permanent growth is the
 //! replay guard: 32 bytes (plus key prefix and trie overhead) per submitted
 //! review's `request_sha256`, so a signed review can never be reused on another
@@ -102,14 +106,35 @@ enum StorageKey {
     Jobs,
     Records,
     UsedRequests,
+    /// (seller, buyer) pairs with at least one counted pass (T-024). Appended
+    /// last so the earlier variants keep their borsh tags.
+    PassBuyers,
 }
 
 /// A seller's graded history. Zeroed (and not stored) until its first graded job.
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SellerRecord {
+    /// Every paid pass (settle), repeat buyers included.
+    pub passes: u32,
+    /// Every graded fail (failed grade, or accepted with no review, A-010).
+    /// Not deduplicated by buyer (m001-ui-contract §3; T-024 decision).
+    pub fails: u32,
+    /// Distinct buyers with at least one paid pass. This, not `passes`, is P
+    /// in the quote: a buyer can raise a seller's price at most once (R3).
+    pub unique_buyers: u32,
+}
+
+/// `get_record` view (T-024, PRD R3). `jobs` = graded jobs = passes + fails;
+/// declined, never-accepted and reveal-timeout jobs are not graded and do not
+/// count. The quote is clamp(30 + 10*unique_buyers - 5*fails, 25, 100) mNEAR.
+#[near(serializers = [json])]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordView {
     pub passes: u32,
     pub fails: u32,
+    pub unique_buyers: u32,
+    pub jobs: u32,
 }
 
 /// JSON is lowercase (`open` | `accepted`) per m001-ui-contract §8; borsh is
@@ -232,6 +257,8 @@ pub struct EarnedPrice {
     records: LookupMap<AccountId, SellerRecord>,
     /// `request_sha256` of every review ever submitted (replay guard).
     used_requests: LookupSet<[u8; 32]>,
+    /// (seller, buyer) pairs that already have a counted pass (T-024).
+    pass_buyers: LookupSet<(AccountId, AccountId)>,
 }
 
 #[near]
@@ -247,6 +274,7 @@ impl EarnedPrice {
             jobs: LookupMap::new(StorageKey::Jobs),
             records: LookupMap::new(StorageKey::Records),
             used_requests: LookupSet::new(StorageKey::UsedRequests),
+            pass_buyers: LookupSet::new(StorageKey::PassBuyers),
         };
         for s in signers {
             c.insert_signer(parse_address(&s));
@@ -304,10 +332,22 @@ impl EarnedPrice {
     }
 
     /// Seller's current quote in yoctoNEAR:
-    /// clamp(30 + 10*passes - 5*fails, 25, 100) milliNEAR. Unknown seller = 0.030 NEAR.
-    /// Never writes state.
+    /// clamp(30 + 10*unique_buyers - 5*fails, 25, 100) milliNEAR, from
+    /// `get_record`. Unknown seller = 0.030 NEAR. Never writes state.
     pub fn quote(&self, seller: AccountId) -> U128 {
         U128(self.quote_yocto(&seller))
+    }
+
+    /// A seller's on-chain record, readable with no key (PRD R3). Unknown
+    /// seller = all zeros. Never writes state.
+    pub fn get_record(&self, seller: AccountId) -> RecordView {
+        let r = self.record_of(&seller);
+        RecordView {
+            passes: r.passes,
+            fails: r.fails,
+            unique_buyers: r.unique_buyers,
+            jobs: r.passes.saturating_add(r.fails),
+        }
     }
 
     /// Lock the seller's current quote from the attached deposit against
@@ -666,7 +706,7 @@ impl EarnedPrice {
         });
         if transfer.is_ok() {
             if kind == PayoutKind::Settle {
-                self.record_pass(&seller);
+                self.record_pass(&seller, &buyer);
             }
             emit("payout", data);
             true
@@ -722,10 +762,15 @@ impl EarnedPrice {
             .unwrap_or_else(|| env::panic_str("Earned Price: no open job with that id"))
     }
 
-    /// Pass on settle. First write of a seller's record happens here or in `record_fail`.
-    fn record_pass(&mut self, seller: &AccountId) {
+    /// Pass on a paid settle. First write of a seller's record happens here or
+    /// in `record_fail`. `unique_buyers` (P in the quote) rises only on this
+    /// buyer's first pass for this seller (R3 Sybil limit).
+    fn record_pass(&mut self, seller: &AccountId, buyer: &AccountId) {
         let mut r = self.record_of(seller);
         r.passes = r.passes.saturating_add(1);
+        if self.pass_buyers.insert((seller.clone(), buyer.clone())) {
+            r.unique_buyers = r.unique_buyers.saturating_add(1);
+        }
         self.records.insert(seller.clone(), r);
     }
 
@@ -1156,7 +1201,7 @@ mod tests {
     fn create_respects_seller_record() {
         ctx(mnear(30), 0);
         let mut c = fresh();
-        c.record_pass(&seller());
+        c.record_pass(&seller(), &buyer());
         assert_eq!(c.quote(seller()).0, mnear(40).as_yoctonear());
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             c.create(seller(), COMMIT.to_string());
@@ -1231,7 +1276,7 @@ mod tests {
     fn record_helpers_drive_the_quote() {
         ctx(NearToken::from_yoctonear(0), 0);
         let mut c = fresh();
-        c.record_pass(&seller());
+        c.record_pass(&seller(), &buyer());
         assert_eq!(c.quote(seller()).0, mnear(40).as_yoctonear());
         c.record_fail(&seller());
         assert_eq!(c.quote(seller()).0, mnear(35).as_yoctonear());
@@ -1239,9 +1284,145 @@ mod tests {
             c.record_of(&seller()),
             SellerRecord {
                 passes: 1,
-                fails: 1
+                fails: 1,
+                unique_buyers: 1,
             }
         );
+    }
+
+    // ---- T-024: unique-buyer weighting + get_record (S-003, R3) ----
+
+    fn acct(s: &str) -> AccountId {
+        s.parse().unwrap()
+    }
+
+    fn rec(passes: u32, fails: u32, unique_buyers: u32) -> RecordView {
+        RecordView {
+            passes,
+            fails,
+            unique_buyers,
+            jobs: passes + fails,
+        }
+    }
+
+    #[test]
+    fn get_record_unknown_seller_is_zero_and_writes_nothing() {
+        ctx(NearToken::from_yoctonear(0), 0);
+        let mut c = fresh();
+        let s = acct("t024-unknown.testnet");
+        let before = env::storage_usage();
+        assert_eq!(c.get_record(s.clone()), rec(0, 0, 0));
+        c.records.flush();
+        assert_eq!(env::storage_usage(), before);
+        assert!(!c.records.contains_key(&s));
+        std::mem::forget(c);
+    }
+
+    #[test]
+    fn three_passes_from_one_buyer_count_once() {
+        ctx(NearToken::from_yoctonear(0), 0);
+        let mut c = fresh();
+        let (s, b) = (acct("t024-s1.testnet"), acct("t024-b1.testnet"));
+        for _ in 0..3 {
+            c.record_pass(&s, &b);
+        }
+        assert_eq!(c.get_record(s.clone()), rec(3, 0, 1));
+        assert_eq!(c.quote(s).0, mnear(40).as_yoctonear(), "1 weighted pass");
+        std::mem::forget(c);
+    }
+
+    #[test]
+    fn distinct_buyers_each_raise_the_quote() {
+        ctx(NearToken::from_yoctonear(0), 0);
+        let mut c = fresh();
+        let s = acct("t024-s2.testnet");
+        let (b1, b2) = (acct("t024-b2a.testnet"), acct("t024-b2b.testnet"));
+        c.record_pass(&s, &b1);
+        c.record_pass(&s, &b2);
+        c.record_pass(&s, &b1);
+        assert_eq!(c.get_record(s.clone()), rec(3, 0, 2));
+        assert_eq!(c.quote(s).0, mnear(50).as_yoctonear());
+        std::mem::forget(c);
+    }
+
+    #[test]
+    fn unique_buyers_are_per_seller() {
+        // A buyer's pass for seller A must not use up its pass for seller B.
+        ctx(NearToken::from_yoctonear(0), 0);
+        let mut c = fresh();
+        let (sa, sb) = (acct("t024-s3a.testnet"), acct("t024-s3b.testnet"));
+        let b = acct("t024-b3.testnet");
+        c.record_pass(&sa, &b);
+        c.record_pass(&sb, &b);
+        assert_eq!(c.get_record(sa), rec(1, 0, 1));
+        assert_eq!(c.get_record(sb.clone()), rec(1, 0, 1));
+        assert_eq!(c.quote(sb).0, mnear(40).as_yoctonear());
+        std::mem::forget(c);
+    }
+
+    #[test]
+    fn fails_are_not_deduplicated() {
+        // Decision (T-024): F counts every graded fail, per m001 §3.
+        ctx(NearToken::from_yoctonear(0), 0);
+        let mut c = fresh();
+        let (s, b) = (acct("t024-s4.testnet"), acct("t024-b4.testnet"));
+        c.record_pass(&s, &b);
+        c.record_fail(&s);
+        c.record_fail(&s);
+        assert_eq!(c.get_record(s.clone()), rec(1, 2, 1));
+        assert_eq!(c.quote(s).0, mnear(30).as_yoctonear(), "30 + 10 - 10");
+        std::mem::forget(c);
+    }
+
+    #[test]
+    fn repeat_pass_adds_no_new_buyer_entry() {
+        ctx(NearToken::from_yoctonear(0), 0);
+        let mut c = fresh();
+        let (s, b) = (acct("t024-s5.testnet"), acct("t024-b5.testnet"));
+        c.record_pass(&s, &b);
+        c.records.flush();
+        let after_first = env::storage_usage();
+        c.record_pass(&s, &b);
+        c.records.flush();
+        assert_eq!(env::storage_usage(), after_first, "no new pair stored");
+        assert!(c.pass_buyers.contains(&(s.clone(), b)));
+        std::mem::forget(c);
+    }
+
+    #[test]
+    fn get_record_json_shape() {
+        // The UI reads these exact keys as JSON numbers (m001 §3).
+        ctx(NearToken::from_yoctonear(0), 0);
+        let mut c = fresh();
+        let s = acct("t024-s6.testnet");
+        c.record_pass(&s, &acct("t024-b6.testnet"));
+        c.record_pass(&s, &acct("t024-b6.testnet"));
+        c.record_fail(&s);
+        let v = near_sdk::serde_json::to_value(c.get_record(s)).unwrap();
+        assert_eq!(
+            v,
+            json!({ "passes": 2, "fails": 1, "unique_buyers": 1, "jobs": 3 })
+        );
+        std::mem::forget(c);
+    }
+
+    #[test]
+    fn on_payout_settles_from_same_buyer_count_once() {
+        let mut c = with_accepted_job();
+        as_caller(escrow(), 30);
+        for id in 0..3 {
+            assert!(c.on_payout(
+                U64(id),
+                buyer(),
+                seller(),
+                U128(mnear(30).as_yoctonear()),
+                PayoutKind::Settle,
+                Ok(()),
+            ));
+        }
+        assert_eq!(c.get_record(seller()), rec(3, 0, 1));
+        assert_eq!(c.quote(seller()).0, mnear(40).as_yoctonear());
+        std::mem::forget(c);
     }
 
     fn hex_decode(s: &str) -> Vec<u8> {
@@ -1749,7 +1930,8 @@ mod tests {
             c.record_of(&seller()),
             SellerRecord {
                 passes: 1,
-                fails: 0
+                fails: 0,
+                unique_buyers: 1,
             }
         );
         assert!(transfers().is_empty());
@@ -2129,7 +2311,8 @@ mod tests {
             c.record_of(&seller()),
             SellerRecord {
                 passes: 1,
-                fails: 0
+                fails: 0,
+                unique_buyers: 1,
             }
         );
         assert_eq!(c.quote(seller()).0, mnear(40).as_yoctonear());
@@ -2152,7 +2335,8 @@ mod tests {
             c.record_of(&seller()),
             SellerRecord {
                 passes: 0,
-                fails: 1
+                fails: 1,
+                unique_buyers: 0,
             }
         );
         let e = &events("reveal")[0]["data"];
@@ -2428,7 +2612,8 @@ mod tests {
             c.record_of(&seller()),
             SellerRecord {
                 passes: 0,
-                fails: 1
+                fails: 1,
+                unique_buyers: 0,
             }
         );
         assert_eq!(c.quote(seller()).0, mnear(25).as_yoctonear(), "floor");
