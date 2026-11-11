@@ -113,7 +113,7 @@ export function evaluateOffer(offerMilli, quoteM) {
   if (!Number.isSafeInteger(offerMilli) || offerMilli < 0) throw new QuoteError("BAD_OFFER", "offer must be a whole, non-negative milliNEAR amount");
   // Pass fetchQuote's quoteMilli. Anything outside the contract's clamp is a caller bug: never accept at it.
   if (!Number.isSafeInteger(quoteM) || quoteM < FLOOR_MNEAR || quoteM > CAP_MNEAR) {
-    throw new QuoteError("BAD_QUOTE", `quote must be whole milliNEAR in ${FLOOR_MNEAR}..${CAP_MNEAR} (got ${JSON.stringify(quoteM)})`);
+    throw new QuoteError("BAD_QUOTE", `quote must be whole milliNEAR in ${FLOOR_MNEAR}..${CAP_MNEAR} (got ${String(quoteM)})`);
   }
   const offer = formatMilli(offerMilli);
   if (offerMilli < FLOOR_MNEAR) {

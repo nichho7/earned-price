@@ -261,7 +261,7 @@ test("fix 2: an offer 1 mNEAR under the quote is refused", () => {
 });
 
 test("fix 3: evaluateOffer refuses an invalid quote instead of accepting at NaN", () => {
-  for (const bad of [undefined, null, NaN, "30", 30.5, 24, 101, -30, 2 ** 53]) {
+  for (const bad of [undefined, null, NaN, 30n, "30", 30.5, 24, 101, -30, 2 ** 53]) {
     assert.throws(() => evaluateOffer(30, bad), { code: "BAD_QUOTE" }, String(bad));
   }
   assert.equal(evaluateOffer(25, 25).accept, true, "floor is a valid quote");
@@ -304,7 +304,7 @@ test("fix 8: parseQuoteArgs: seller + --offer, missing or flag-like values refus
   for (const argv of [[SELLER, "--offer"], [SELLER, "--offer", "--json"], [SELLER, "--offer", ""]]) {
     assert.throws(() => parseQuoteArgs(argv), { code: "BAD_OFFER" }, argv.join(" "));
   }
-  for (const argv of [[], ["--offer", "0.02"], [SELLER, "other.testnet"], [SELLER, "--offer", "0.02", "--offer", "0.03"], [SELLER, "--bogus"]]) {
+  for (const argv of [[], ["--offer", "0.02"], [SELLER, "other.testnet"], [SELLER, "--offer", "0.02", "--offer", "0.03"], [SELLER, "--bogus"], ["--bogus"], ["--bogus", SELLER]]) {
     assert.throws(() => parseQuoteArgs(argv), { code: "USAGE" }, argv.join(" "));
   }
 });
