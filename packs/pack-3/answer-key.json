@@ -30,9 +30,9 @@
     },
     {
       "id": "B4",
-      "title": "Shared mutable schedule in schedule_for",
+      "title": "Shared cached schedule in schedule_for",
       "file": "settlement.py",
-      "line_start": 19,
+      "line_start": 17,
       "line_end": 25,
       "category": "mutable-default"
     },

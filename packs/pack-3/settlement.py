@@ -4,19 +4,19 @@
 import threading
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from functools import lru_cache
 
 CENT = Decimal("0.01")
 ONE_MICROSECOND = timedelta(microseconds=1)
-
-_DEFAULT_SCHEDULE = {"percent": Decimal("2.9"), "fixed": Decimal("0.30"), "cap": None}
 
 
 def to_money(value):
     return Decimal(str(value)).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
+@lru_cache(maxsize=None)
 def fee_schedule():
-    return _DEFAULT_SCHEDULE
+    return {"percent": Decimal("2.9"), "fixed": Decimal("0.30"), "cap": None}
 
 
 def schedule_for(merchant):

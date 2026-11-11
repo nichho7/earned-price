@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import settlement as st  # noqa: E402
 
-ORIGINAL_SCHEDULE = dict(st._DEFAULT_SCHEDULE)
+ORIGINAL_SCHEDULE = dict(st.fee_schedule())
 
 
 def epoch(*args):
@@ -24,8 +24,7 @@ def epoch(*args):
 
 class Base(unittest.TestCase):
     def setUp(self):
-        st._DEFAULT_SCHEDULE.clear()
-        st._DEFAULT_SCHEDULE.update(ORIGINAL_SCHEDULE)
+        getattr(st.fee_schedule, "cache_clear", lambda: None)()  # a fix may drop the cache
 
 
 class PlantedBugs(Base):

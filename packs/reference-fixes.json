@@ -100,9 +100,9 @@
       ]
     },
     {
-      "pack": "3", "bug": "B4", "category": "mutable-default", "file": "settlement.py", "start": 19, "end": 19,
-      "old": ["    return _DEFAULT_SCHEDULE"],
-      "new": ["    return dict(_DEFAULT_SCHEDULE)"]
+      "pack": "3", "bug": "B4", "category": "mutable-default", "file": "settlement.py", "start": 25, "end": 25,
+      "old": ["        return fee_schedule()"],
+      "new": ["        return dict(fee_schedule())"]
     },
     {
       "pack": "3", "bug": "B5", "category": "off-by-one", "file": "settlement.py", "start": 60, "end": 62,
