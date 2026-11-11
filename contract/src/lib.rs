@@ -3,8 +3,10 @@
 //! S-001 (T-020): `create` locks the seller's current quote from the buyer's
 //! deposit (any excess is refunded in the same call) against a commit of a
 //! sealed answer key, and `quote` prices a seller from its on-chain record.
-//! S-027 / S-002 part 1 (T-022, A-010): the seller `accept`s or `decline`s an open
-//! job, and submits the signed NEAR AI TEE review with `submit_review` (EIP-191
+//! S-027 / S-002 part 1 (T-022, A-010, A-013): `create` fixes three deadlines
+//! (`accept_by`, `review_by`, `reveal_deadline`, see the window constants); the
+//! seller `accept`s or `decline`s an open job by `accept_by`, and submits the
+//! signed NEAR AI TEE review with `submit_review` by `review_by` (EIP-191
 //! signer checked on-chain with ecrecover; the TDX attestation that binds that
 //! signer to a TEE is checked offline by `earned verify` check 3, not here).
 //! `pay_seller` (transfer + private callback that refunds the buyer if the
@@ -36,15 +38,37 @@ use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, Gas, NearToken, Promise, PromiseError,
 };
 
-/// How long the buyer has to reveal the answer key after `create`.
-/// The TEE review takes ~30 s (max 95 s in the T-003 spike), so 15 minutes
-/// leaves room for retries without stalling the demo.
-pub const REVEAL_WINDOW_NS: u64 = 15 * 60 * 1_000_000_000;
+const MINUTE_NS: u64 = 60 * 1_000_000_000;
+
+/// Fixed-split deadlines (A-013, m001-ui-contract §8), all measured from `create`
+/// and stored on the job; none of them ever moves. Boundary rule: an action is
+/// allowed while `now <= deadline`, a timeout (T-023) only when `now > deadline`.
+///
+/// The seller must `accept` or `decline` by `created + ACCEPT_WINDOW_NS`.
+pub const ACCEPT_WINDOW_NS: u64 = 2 * MINUTE_NS;
+/// An accepted seller must `submit_review` by `created + REVIEW_WINDOW_NS`. Even
+/// accepting in the last block leaves 5 minutes for a TEE review that takes
+/// ~30 s (max 95 s in the T-003 spike), so retries fit.
+pub const REVIEW_WINDOW_NS: u64 = 7 * MINUTE_NS;
+/// The buyer must reveal by `created + REVEAL_WINDOW_NS`: always at least 5
+/// minutes after the last possible review, and the whole job fits the 15-minute
+/// demo budget.
+pub const REVEAL_WINDOW_NS: u64 = 12 * MINUTE_NS;
+
+// Compile-time guards on the split: whole job within the 15-minute budget, a
+// seller accepting in the last block still has 3x the 95 s max review, and the
+// buyer always has at least 5 minutes to reveal after the last possible review.
+const _: () = {
+    assert!(ACCEPT_WINDOW_NS < REVIEW_WINDOW_NS && REVIEW_WINDOW_NS < REVEAL_WINDOW_NS);
+    assert!(REVEAL_WINDOW_NS <= 15 * MINUTE_NS);
+    assert!(REVIEW_WINDOW_NS - ACCEPT_WINDOW_NS >= 3 * 95 * 1_000_000_000);
+    assert!(REVEAL_WINDOW_NS - REVIEW_WINDOW_NS >= 5 * MINUTE_NS);
+};
 
 /// Salt length in bytes for the commit (see module docs).
 pub const SALT_LEN: usize = 32;
 
-/// Longest model id accepted in `submit_review` (bounds the stored review).
+/// Longest model id, in bytes, accepted in `submit_review` (bounds the stored review).
 pub const MAX_MODEL_LEN: usize = 128;
 
 /// Gas reserved for the `on_payout` callback (a record write plus, on failure,
@@ -114,13 +138,18 @@ pub struct Job {
     /// The seller's quote at `create`; exactly what is held in escrow.
     pub price: NearToken,
     pub commit_hash: [u8; 32],
+    pub created_at_ns: u64,
+    pub accept_by_ns: u64,
+    pub review_by_ns: u64,
     pub reveal_deadline_ns: u64,
     pub status: JobStatus,
     pub accepted_at_ns: Option<u64>,
     pub review: Option<TeeReview>,
 }
 
-/// JSON view of a job: yoctoNEAR and nanoseconds as strings, hash as hex.
+/// JSON view of a live job (m001-ui-contract §8): yoctoNEAR and nanoseconds
+/// (block timestamp) as strings, hashes as hex. Status is `open` or `accepted`
+/// only; closed jobs are deleted, so `get_job` returns null after close.
 #[near(serializers = [json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobView {
@@ -129,10 +158,18 @@ pub struct JobView {
     pub seller: AccountId,
     pub price: U128,
     pub commit_hash: String,
-    /// When the reveal window closes (site and CLI countdown).
+    pub created_at_ns: U64,
+    /// Seller must accept or decline by then (countdown while `open`).
+    pub accept_by_ns: U64,
+    /// Accepted seller must submit its review by then (countdown while
+    /// `accepted` with no review).
+    pub review_by_ns: U64,
+    /// Buyer must reveal by then (countdown once the review is on-chain).
     pub reveal_deadline_ns: U64,
     pub status: JobStatus,
+    /// Null until accepted.
     pub accepted_at_ns: Option<U64>,
+    /// Null until submitted.
     pub review: Option<TeeReviewView>,
 }
 
@@ -198,12 +235,16 @@ impl EarnedPrice {
 
         let id = self.next_job_id;
         self.next_job_id += 1;
+        let now = env::block_timestamp();
         let job = Job {
             buyer,
             seller,
             price: NearToken::from_yoctonear(quote),
             commit_hash: commit,
-            reveal_deadline_ns: env::block_timestamp() + REVEAL_WINDOW_NS,
+            created_at_ns: now,
+            accept_by_ns: now + ACCEPT_WINDOW_NS,
+            review_by_ns: now + REVIEW_WINDOW_NS,
+            reveal_deadline_ns: now + REVEAL_WINDOW_NS,
             status: JobStatus::Open,
             accepted_at_ns: None,
             review: None,
@@ -219,6 +260,9 @@ impl EarnedPrice {
                 "price": quote.to_string(),
                 "excess_refunded": excess.to_string(),
                 "commit_hash": to_hex(&job.commit_hash),
+                "created_at_ns": job.created_at_ns.to_string(),
+                "accept_by_ns": job.accept_by_ns.to_string(),
+                "review_by_ns": job.review_by_ns.to_string(),
                 "reveal_deadline_ns": job.reveal_deadline_ns.to_string(),
             }
         });
@@ -232,6 +276,13 @@ impl EarnedPrice {
         U64(id)
     }
 
+    /// The id the next `create` will return (deploy smoke test and CLI).
+    pub fn next_job_id(&self) -> U64 {
+        U64(self.next_job_id)
+    }
+
+    /// A live job (`open` or `accepted`), or null if it never existed or has
+    /// closed (declined, settled, refunded, timed out).
     pub fn get_job(&self, id: U64) -> Option<JobView> {
         self.jobs.get(&id.0).map(|j| JobView {
             id,
@@ -239,6 +290,9 @@ impl EarnedPrice {
             seller: j.seller.clone(),
             price: U128(j.price.as_yoctonear()),
             commit_hash: to_hex(&j.commit_hash),
+            created_at_ns: U64(j.created_at_ns),
+            accept_by_ns: U64(j.accept_by_ns),
+            review_by_ns: U64(j.review_by_ns),
             reveal_deadline_ns: U64(j.reveal_deadline_ns),
             status: j.status,
             accepted_at_ns: j.accepted_at_ns.map(U64),
@@ -246,10 +300,11 @@ impl EarnedPrice {
         })
     }
 
-    /// Seller only, open job, before the reveal deadline, once (A-010). From now
+    /// Seller only, open job, at or before `accept_by`, once (A-010). From now
     /// on the job can count against the seller's record.
     pub fn accept(&mut self, job_id: U64) {
-        let mut job = self.open_job_for_seller(job_id.0, "accept");
+        let mut job = self.live_job(job_id.0).clone();
+        check_open_for_seller(&job, "accept");
         let now = env::block_timestamp();
         job.status = JobStatus::Accepted;
         job.accepted_at_ns = Some(now);
@@ -260,11 +315,13 @@ impl EarnedPrice {
         self.jobs.insert(job_id.0, job);
     }
 
-    /// Seller only, open job, before the reveal deadline (A-010). Refunds the
+    /// Seller only, open job, at or before `accept_by` (A-010). Refunds the
     /// buyer in the same call and deletes the job. The seller's record does not
     /// change.
     pub fn decline(&mut self, job_id: U64) {
-        self.open_job_for_seller(job_id.0, "decline");
+        // Check before removing (store::LookupMap caches the entry, so the
+        // remove does not read storage again).
+        check_open_for_seller(self.live_job(job_id.0), "decline");
         let job = self.close_job(job_id.0);
         emit(
             "decline",
@@ -278,7 +335,7 @@ impl EarnedPrice {
         Promise::new(job.buyer).transfer(job.price).detach();
     }
 
-    /// Seller only, accepted job, before the reveal deadline, once (S-027).
+    /// Seller only, accepted job, at or before `review_by`, once (S-027).
     /// Recovers the EIP-191 signer of `<model>:<request_sha256>:<response_sha256>`
     /// with ecrecover, requires it to equal `signing_address`, and stores the
     /// review on the job. Hex inputs may be upper or lower case; `signature` and
@@ -292,11 +349,7 @@ impl EarnedPrice {
         signature: String,
         signing_address: String,
     ) {
-        let mut job = self
-            .jobs
-            .get(&job_id.0)
-            .cloned()
-            .unwrap_or_else(|| env::panic_str("Earned Price: no open job with that id"));
+        let mut job = self.live_job(job_id.0).clone();
         require!(
             env::predecessor_account_id() == job.seller,
             "Earned Price: only the job's seller can submit its review"
@@ -310,12 +363,12 @@ impl EarnedPrice {
             "Earned Price: a review was already submitted for this job"
         );
         require!(
-            env::block_timestamp() <= job.reveal_deadline_ns,
-            "Earned Price: the reveal deadline has passed, the review can no longer be submitted"
+            env::block_timestamp() <= job.review_by_ns,
+            "Earned Price: the review deadline has passed, the review can no longer be submitted"
         );
         require!(
             !model.is_empty() && model.len() <= MAX_MODEL_LEN,
-            "Earned Price: model must be 1 to 128 characters"
+            "Earned Price: model must be 1 to 128 bytes"
         );
         let review = TeeReview {
             model,
@@ -405,6 +458,13 @@ impl EarnedPrice {
         quote::millinear_to_yocto(quote::quote_millinear(&self.record_of(seller)))
     }
 
+    /// A live job, or a readable panic if it never existed or has closed.
+    fn live_job(&self, id: u64) -> &Job {
+        self.jobs
+            .get(&id)
+            .unwrap_or_else(|| env::panic_str("Earned Price: no open job with that id"))
+    }
+
     /// Removes a job so settle and refund leave no state behind. Callers must
     /// check status/deadline/caller first and move funds only after this.
     fn close_job(&mut self, id: u64) -> Job {
@@ -418,32 +478,6 @@ impl EarnedPrice {
         let mut r = self.record_of(seller);
         r.passes = r.passes.saturating_add(1);
         self.records.insert(seller.clone(), r);
-    }
-
-    /// Loads an open job and checks the caller is its seller and the deadline
-    /// has not passed. `action` names the call in errors.
-    fn open_job_for_seller(&self, id: u64, action: &str) -> Job {
-        let job = self
-            .jobs
-            .get(&id)
-            .cloned()
-            .unwrap_or_else(|| env::panic_str("Earned Price: no open job with that id"));
-        if env::predecessor_account_id() != job.seller {
-            env::panic_str(&format!(
-                "Earned Price: only the job's seller can {action} it"
-            ));
-        }
-        if job.status != JobStatus::Open {
-            env::panic_str(&format!(
-                "Earned Price: the job was already accepted, it can't {action} again"
-            ));
-        }
-        if env::block_timestamp() > job.reveal_deadline_ns {
-            env::panic_str(&format!(
-                "Earned Price: the reveal deadline has passed, the seller can no longer {action} it"
-            ));
-        }
-        job
     }
 
     /// Pays `job.seller` the escrowed price. The job must already be closed
@@ -470,6 +504,26 @@ impl EarnedPrice {
         let mut r = self.record_of(seller);
         r.fails = r.fails.saturating_add(1);
         self.records.insert(seller.clone(), r);
+    }
+}
+
+/// Checks the caller is the job's seller, the job is still open and `accept_by`
+/// has not passed (accept and decline). `action` names the call in errors.
+fn check_open_for_seller(job: &Job, action: &str) {
+    if env::predecessor_account_id() != job.seller {
+        env::panic_str(&format!(
+            "Earned Price: only the job's seller can {action} it"
+        ));
+    }
+    if job.status != JobStatus::Open {
+        env::panic_str(&format!(
+            "Earned Price: the job is already accepted, the seller can't {action} it now"
+        ));
+    }
+    if env::block_timestamp() > job.accept_by_ns {
+        env::panic_str(&format!(
+            "Earned Price: the accept deadline has passed, the seller can no longer {action} it"
+        ));
     }
 }
 
@@ -687,8 +741,13 @@ mod tests {
         assert_eq!(j.seller, seller());
         assert_eq!(j.price.0, mnear(30).as_yoctonear());
         assert_eq!(j.commit_hash, COMMIT);
+        assert_eq!(j.created_at_ns.0, 1_000);
+        assert_eq!(j.accept_by_ns.0, 1_000 + ACCEPT_WINDOW_NS);
+        assert_eq!(j.review_by_ns.0, 1_000 + REVIEW_WINDOW_NS);
         assert_eq!(j.reveal_deadline_ns.0, 1_000 + REVEAL_WINDOW_NS);
         assert_eq!(j.status, JobStatus::Open);
+        assert_eq!(j.accepted_at_ns, None);
+        assert_eq!(c.next_job_id().0, 1);
         assert!(
             !c.records.contains_key(&seller()),
             "no seller record on create"
@@ -704,10 +763,38 @@ mod tests {
         assert_eq!(e["data"]["price"], mnear(30).as_yoctonear().to_string());
         assert_eq!(e["data"]["excess_refunded"], "0");
         assert_eq!(e["data"]["commit_hash"], COMMIT);
+        assert_eq!(e["data"]["created_at_ns"], "1000");
+        assert_eq!(
+            e["data"]["accept_by_ns"],
+            (1_000 + ACCEPT_WINDOW_NS).to_string()
+        );
+        assert_eq!(
+            e["data"]["review_by_ns"],
+            (1_000 + REVIEW_WINDOW_NS).to_string()
+        );
         assert_eq!(
             e["data"]["reveal_deadline_ns"],
             (1_000 + REVEAL_WINDOW_NS).to_string()
         );
+    }
+
+    #[test]
+    fn deadline_constants_follow_a013() {
+        // Fixed split: accept < review < reveal, all within the 15-minute budget.
+        assert_eq!(ACCEPT_WINDOW_NS, 2 * MINUTE_NS);
+        assert_eq!(REVIEW_WINDOW_NS, 7 * MINUTE_NS);
+        assert_eq!(REVEAL_WINDOW_NS, 12 * MINUTE_NS);
+        // The ordering and margins are compile-time asserts next to the constants.
+    }
+
+    #[test]
+    fn next_job_id_counts_creates() {
+        ctx(mnear(30), 0);
+        let mut c = EarnedPrice::default();
+        assert_eq!(c.next_job_id().0, 0);
+        c.create(seller(), COMMIT.to_string());
+        c.create(seller(), COMMIT.to_string());
+        assert_eq!(c.next_job_id().0, 2);
     }
 
     #[test]
@@ -986,6 +1073,8 @@ mod tests {
         let j = c.get_job(U64(0)).unwrap();
         assert_eq!(j.status, JobStatus::Accepted);
         assert_eq!(j.accepted_at_ns, Some(U64(500)));
+        assert_eq!(j.accept_by_ns.0, ACCEPT_WINDOW_NS, "deadlines never move");
+        assert_eq!(j.review_by_ns.0, REVIEW_WINDOW_NS);
         assert_eq!(j.reveal_deadline_ns.0, REVEAL_WINDOW_NS);
         assert!(j.review.is_none());
         let e = &events("accept")[0];
@@ -1006,21 +1095,44 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "the job was already accepted, it can't accept again")]
+    #[should_panic(expected = "the job is already accepted, the seller can't accept it now")]
     fn accept_twice_fails() {
         let mut c = with_accepted_job();
         c.accept(U64(0));
     }
 
     #[test]
-    fn accept_at_deadline_ok_after_deadline_fails() {
+    fn accept_at_accept_by_ok_one_ns_later_fails() {
         let mut c = with_open_job();
-        as_caller(seller(), REVEAL_WINDOW_NS + 1);
-        let err = try_call(|| c.accept(U64(0))).unwrap_err();
-        assert!(err.contains("the reveal deadline has passed"), "{err}");
-        as_caller(seller(), REVEAL_WINDOW_NS);
+        // After accept_by, even though review_by and the reveal deadline are
+        // still ahead (the last-block gap A-013 closes).
+        for ts in [ACCEPT_WINDOW_NS + 1, REVIEW_WINDOW_NS, REVEAL_WINDOW_NS] {
+            as_caller(seller(), ts);
+            let err = try_call(|| c.accept(U64(0))).unwrap_err();
+            assert!(err.contains("the accept deadline has passed"), "{err}");
+        }
+        assert_eq!(c.get_job(U64(0)).unwrap().status, JobStatus::Open);
+        as_caller(seller(), ACCEPT_WINDOW_NS);
         c.accept(U64(0));
         assert_eq!(c.get_job(U64(0)).unwrap().status, JobStatus::Accepted);
+    }
+
+    #[test]
+    fn last_block_accept_then_last_block_review_leaves_buyer_reveal_window() {
+        let v = vector();
+        let mut c = with_open_job();
+        as_caller(seller(), ACCEPT_WINDOW_NS);
+        c.accept(U64(0));
+        as_caller(seller(), REVIEW_WINDOW_NS);
+        submit(&mut c, &v);
+        let j = c.get_job(U64(0)).unwrap();
+        assert!(j.review.is_some());
+        assert_eq!(j.accepted_at_ns, Some(U64(ACCEPT_WINDOW_NS)));
+        assert_eq!(
+            j.reveal_deadline_ns.0 - REVIEW_WINDOW_NS,
+            5 * MINUTE_NS,
+            "buyer keeps 5 minutes to reveal"
+        );
     }
 
     #[test]
@@ -1061,15 +1173,28 @@ mod tests {
             err.contains("only the job's seller can decline it"),
             "{err}"
         );
-        as_caller(seller(), REVEAL_WINDOW_NS + 1);
+        as_caller(seller(), ACCEPT_WINDOW_NS + 1);
         let err = try_call(|| c.decline(U64(0))).unwrap_err();
-        assert!(err.contains("the reveal deadline has passed"), "{err}");
+        assert!(err.contains("the accept deadline has passed"), "{err}");
+        assert!(c.get_job(U64(0)).is_some(), "failed decline keeps the job");
 
         let mut c = with_accepted_job();
         let err = try_call(|| c.decline(U64(0))).unwrap_err();
-        assert!(err.contains("already accepted, it can't decline"), "{err}");
+        assert!(
+            err.contains("already accepted, the seller can't decline it now"),
+            "{err}"
+        );
         assert!(c.get_job(U64(0)).is_some());
         assert!(transfers().is_empty(), "no funds moved");
+    }
+
+    #[test]
+    fn decline_at_accept_by_refunds() {
+        let mut c = with_open_job();
+        as_caller(seller(), ACCEPT_WINDOW_NS);
+        c.decline(U64(0));
+        assert!(c.get_job(U64(0)).is_none());
+        assert_eq!(transfers(), vec![(buyer(), mnear(30).as_yoctonear())]);
     }
 
     #[test]
@@ -1213,16 +1338,12 @@ mod tests {
         let mut c = with_accepted_job();
         assert_submit_rejected(&mut c, buyer(), 20, &v, "only the job's seller can submit");
         assert_submit_rejected(&mut c, other(), 20, &v, "only the job's seller can submit");
-        // After the deadline.
-        assert_submit_rejected(
-            &mut c,
-            seller(),
-            REVEAL_WINDOW_NS + 1,
-            &v,
-            "the reveal deadline has passed",
-        );
-        // At the deadline is still fine; a second submission is not.
-        as_caller(seller(), REVEAL_WINDOW_NS);
+        // After review_by (also well before the reveal deadline).
+        for ts in [REVIEW_WINDOW_NS + 1, REVEAL_WINDOW_NS] {
+            assert_submit_rejected(&mut c, seller(), ts, &v, "the review deadline has passed");
+        }
+        // At review_by is still fine; a second submission is not.
+        as_caller(seller(), REVIEW_WINDOW_NS);
         submit(&mut c, &v);
         assert_submit_rejected(&mut c, seller(), 30, &v, "a review was already submitted");
         // Declined (deleted) job.

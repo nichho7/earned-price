@@ -15,9 +15,10 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const COMMIT: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
-/// Generous ceiling for the gas a single call costs its signer (sandbox
-/// gas price, 300 Tgas max is ~0.03 NEAR at most; real calls are far below).
-const GAS_CEILING: u128 = 10 * MILLI;
+/// Ceiling for the gas a single call costs its signer once unused gas is
+/// refunded. Kept well under the 30 mNEAR quote so a partial refund skim of
+/// more than this fails the test (T-022 security review LOW 3).
+const GAS_CEILING: u128 = 2 * MILLI;
 const MILLI: u128 = 1_000_000_000_000_000_000_000;
 
 fn build_wasm() -> Vec<u8> {
@@ -232,4 +233,12 @@ async fn balances_follow_the_escrow_rules() {
         .await
         .unwrap();
     assert!(!r.is_success(), "on_payout must reject outside callers");
+    // Fails for the right reason (#[private]), not because no promise result
+    // was attached.
+    let failure = format!("{:?}", r.into_result().unwrap_err());
+    assert!(failure.contains("is private"), "{failure}");
+
+    // 7. next_job_id view: three creates above (job 0, 1, 2).
+    let next: String = e.c.view("next_job_id").await.unwrap().json().unwrap();
+    assert_eq!(next, "3");
 }

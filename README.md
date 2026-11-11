@@ -24,9 +24,29 @@ if they drift.
 | Network | `testnet` |
 | Contract wasm (pinned) | `target/near/earned_price.wasm` |
 
+## Escrow contract: what is checked on-chain, and what is not
+
+A job runs on three fixed deadlines, all set when the buyer calls `create`
+(A-013): the seller must `accept` or `decline` within **2 minutes**, an accepted
+seller must put its signed TEE review on-chain (`submit_review`) within
+**7 minutes**, and the buyer must reveal the answer key within **12 minutes**.
+An action is allowed up to and including its deadline; a timeout only after it.
+`get_job` returns a job only while it is `open` or `accepted`; once it closes it
+returns null, and the outcome is in the closing transaction's `EVENT_JSON` log.
+
+`submit_review` checks on-chain (ecrecover) that the review was signed by the
+`signing_address` the seller names, over the exact text
+`<model>:<request_sha256>:<response_sha256>`. **The TEE attestation that binds
+that `signing_address` to a real NEAR AI TEE is checked offline, by
+`earned verify` (check 3), not on-chain.** Until the signer allowlist (A-012)
+lands, any key passes the on-chain check, so an on-chain review alone does not
+prove a TEE produced it; run `earned verify` on the receipt. When the allowlist
+lands, the contract owner can change that list.
+
 ## Layout
 
-- `contract/`: NEAR escrow contract (Rust, near-sdk). Stub only.
+- `contract/`: NEAR escrow contract (Rust, near-sdk): create, quote, accept,
+  decline, submit_review, payout callback. Reveal, settle and timeouts: T-023.
 - `cli/`: the `earned` CLI (Node, ESM, no dependencies yet). Stub only.
 - `scripts/deploy.sh`: testnet deploy using the pinned wasm path.
 - `test/`: `npm test` checks the naming set end to end.
