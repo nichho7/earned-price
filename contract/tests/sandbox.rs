@@ -23,8 +23,9 @@ use std::process::Command;
 /// more than this fails the test (T-022 security review LOW 3).
 const GAS_CEILING: u128 = 2 * MILLI;
 const MILLI: u128 = 1_000_000_000_000_000_000_000;
-/// Gas a reveal of the largest allowed response may burn (it must fit well
-/// inside the 100 Tgas a CLI attaches; measured ~18 Tgas, with the payout callback on top).
+/// Gas this test's 128 KiB reveal may burn (~18 Tgas measured, payout callback on top).
+/// Not a worst case: a seller-crafted 128 KiB response burnt 66-69 Tgas in the
+/// T-023 security review, so clients must attach 300 Tgas to `reveal` (README).
 const REVEAL_GAS_CEILING: u64 = 50_000_000_000_000;
 
 const COMMIT_JSON: &str = include_str!("../../test-vectors/commit.json");

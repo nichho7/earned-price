@@ -70,6 +70,40 @@
    "error": null
   },
   {
+   "name": "choices as an object keyed \"0\" (JS ?.[0] and Rust both index it): PASS",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":{\"0\":{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 12, \\\"category\\\": \\\"wrong-comparison\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"category\\\": \\\"wrong-operator\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 22, \\\"category\\\": \\\"divide-by-zero\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 27, \\\"category\\\": \\\"missing-check\\\"}]\"},\"finish_reason\":\"stop\"}}}",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    },
+    {
+     "file": "cart.js",
+     "line": 27,
+     "category": "missing-check"
+    }
+   ],
+   "passed": true,
+   "found": 5,
+   "error": null
+  },
+  {
    "name": "bare array with whitespace around it, three found: FAIL",
    "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\\n  [{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 12, \\\"category\\\": \\\"wrong-comparison\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"category\\\": \\\"wrong-operator\\\"}]\\n\"},\"finish_reason\":\"stop\"}]}",
    "findings": [

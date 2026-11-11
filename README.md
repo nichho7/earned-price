@@ -71,12 +71,21 @@ unchanged.
 
 The contract has one owner (`earned-price.testnet`), set once at deploy. **The
 owner can add or remove allowlisted TEE signer addresses (`add_signer`,
-`remove_signer`, 1 yoctoNEAR each), and nothing else:** it cannot move escrowed
+`remove_signer`, 1 yoctoNEAR each). No contract method lets it move escrowed
 NEAR, edit jobs or records, or change deadlines. Removing a signer stops new
 reviews by it; a review already on-chain keeps counting. The list is public:
 `signers` view (seeded from `contract/tee-signers.json`, the NEAR AI signer from
 our 2026-11-10 runs). A dishonest owner could allowlist its own key and sign fake
 reviews, which `earned verify` check 3 would still flag offline.
+
+**The account key is a bigger power than the owner role.** The contract account
+still holds a full-access key (the one `scripts/deploy.sh` signs with). Whoever
+holds that key can deploy new code to the account, and new code can do anything,
+including sending the escrowed NEAR elsewhere. We have not locked the account
+(deleting its full-access keys) because we still redeploy during the hackathon.
+Until we do, trusting the escrow means trusting the key holder (us): this is a
+hackathon trust assumption, testnet only. You can check what code is live by
+comparing the account's code hash with the sha256 of a wasm you build yourself.
 
 ### Known limits
 
@@ -90,7 +99,12 @@ reviews, which `earned verify` check 3 would still flag offline.
   float range, lone UTF-16 surrogates, or nesting deeper than 128 grades as
   `malformed_finding` on-chain even where `JSON.parse` would read it. A committed
   key must use integer numbers only. Responses are capped at 128 KiB (a real
-  review is about 13 KB; a 128 KiB reveal measured about 18 Tgas in the sandbox).
+  review is about 13 KB).
+- **Attach 300 Tgas to `reveal`.** A typical reveal burns about 18 Tgas, but a
+  seller-crafted worst-case response near the 128 KiB cap measured 66-69 Tgas in
+  the security review's sandbox run. A reveal that runs out of gas is simply
+  rejected, and if no valid reveal lands by the deadline the timeout pays the
+  seller, so clients (CLI, site) must always attach 300 Tgas, the maximum.
 - Signer trust is an allowlist, not on-chain attestation (see above).
 
 ## Layout
