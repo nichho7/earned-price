@@ -280,3 +280,22 @@ test("CLI prints result:null and exits 1 when the commitment does not match", ()
   assert.equal(parsed.result, null);
   assert.equal(parsed.result_sha256, null);
 });
+
+// T-023: the escrow contract grades on-chain with the same extraction rule (contract/src/grade.rs
+// reads the same fixture), so the site, CLI and contract agree on every review.
+test("findingsFromResponse + grade match the shared review-extract cases", async () => {
+  const { findingsFromResponse } = await import("../grader/grade.js");
+  const x = load("review-extract.json");
+  const key = load("sample-pack/answer-key.json");
+  assert.ok(x.cases.length >= 8);
+  for (const c of x.cases) {
+    const f = findingsFromResponse(c.response_body);
+    assert.deepEqual(f, c.findings, c.name);
+    const g = grade(key, f);
+    assert.equal(g.passed, c.passed, c.name);
+    assert.equal(g.found, c.found, c.name);
+    assert.equal(g.error ?? null, c.error, c.name);
+  }
+  assert.equal(findingsFromResponse(undefined), null, "never throws");
+  assert.equal(findingsFromResponse('{"choices":{"0":{"message":{"content":"[]"}}}}').length, 0);
+});

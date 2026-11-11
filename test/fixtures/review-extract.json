@@ -1,0 +1,286 @@
+{
+ "_comment": "Shared review-extraction cases (T-023): findingsFromResponse(response_body) in grader/grade.js and findings_from_response in contract/src/grade.rs must both return `findings`, and grading it against sample-pack/answer-key.json must give passed/found/error. Written by hand from the rule: choices[0].message.content must be a string of JSON that is the findings array, or an object whose `findings` member is used as is; anything else is null (malformed_finding FAIL).",
+ "cases": [
+  {
+   "name": "bare findings array, five found: PASS",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 12, \\\"category\\\": \\\"wrong-comparison\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"category\\\": \\\"wrong-operator\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 22, \\\"category\\\": \\\"divide-by-zero\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 27, \\\"category\\\": \\\"missing-check\\\"}]\"},\"finish_reason\":\"stop\"}]}",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    },
+    {
+     "file": "cart.js",
+     "line": 27,
+     "category": "missing-check"
+    }
+   ],
+   "passed": true,
+   "found": 5,
+   "error": null
+  },
+  {
+   "name": "JSON-mode object with a findings member: PASS",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"findings\\\": [{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 12, \\\"category\\\": \\\"wrong-comparison\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"category\\\": \\\"wrong-operator\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 22, \\\"category\\\": \\\"divide-by-zero\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 27, \\\"category\\\": \\\"missing-check\\\"}]}\"},\"finish_reason\":\"stop\"}]}",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    },
+    {
+     "file": "cart.js",
+     "line": 27,
+     "category": "missing-check"
+    }
+   ],
+   "passed": true,
+   "found": 5,
+   "error": null
+  },
+  {
+   "name": "choices as an object keyed \"0\" (JS ?.[0] and Rust both index it): PASS",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":{\"0\":{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 12, \\\"category\\\": \\\"wrong-comparison\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"category\\\": \\\"wrong-operator\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 22, \\\"category\\\": \\\"divide-by-zero\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 27, \\\"category\\\": \\\"missing-check\\\"}]\"},\"finish_reason\":\"stop\"}}}",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    },
+    {
+     "file": "cart.js",
+     "line": 22,
+     "category": "divide-by-zero"
+    },
+    {
+     "file": "cart.js",
+     "line": 27,
+     "category": "missing-check"
+    }
+   ],
+   "passed": true,
+   "found": 5,
+   "error": null
+  },
+  {
+   "name": "bare array with whitespace around it, three found: FAIL",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\\n  [{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 12, \\\"category\\\": \\\"wrong-comparison\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"category\\\": \\\"wrong-operator\\\"}]\\n\"},\"finish_reason\":\"stop\"}]}",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 12,
+     "category": "wrong-comparison"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "category": "wrong-operator"
+    }
+   ],
+   "passed": false,
+   "found": 3,
+   "error": null
+  },
+  {
+   "name": "empty findings array: FAIL, not malformed",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[]\"},\"finish_reason\":\"stop\"}]}",
+   "findings": [],
+   "passed": false,
+   "found": 0,
+   "error": null
+  },
+  {
+   "name": "11 findings: too_many_findings",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 1, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 2, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 3, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 5, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 6, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 7, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 8, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 9, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 10, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 11, \\\"category\\\": \\\"off-by-one\\\"}]\"},\"finish_reason\":\"stop\"}]}",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 1,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 2,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 3,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 4,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 5,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 6,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 7,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 8,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 9,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 10,
+     "category": "off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 11,
+     "category": "off-by-one"
+    }
+   ],
+   "passed": false,
+   "found": 0,
+   "error": "too_many_findings"
+  },
+  {
+   "name": "findings without category (real T-003 run08 shape): malformed_finding",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"findings\\\": [{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"note\\\": \\\"Off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"note\\\": \\\"Assignment\\\"}]}\"},\"finish_reason\":\"stop\"}]}",
+   "findings": [
+    {
+     "file": "cart.js",
+     "line": 4,
+     "note": "Off-by-one"
+    },
+    {
+     "file": "cart.js",
+     "line": 17,
+     "note": "Assignment"
+    }
+   ],
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  },
+  {
+   "name": "prose instead of JSON: malformed_finding",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Here are the bugs: line 4.\"},\"finish_reason\":\"stop\"}]}",
+   "findings": null,
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  },
+  {
+   "name": "JSON inside a markdown code fence: malformed_finding",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"```json\\n[{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 12, \\\"category\\\": \\\"wrong-comparison\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"category\\\": \\\"wrong-operator\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 22, \\\"category\\\": \\\"divide-by-zero\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 27, \\\"category\\\": \\\"missing-check\\\"}]\\n```\"},\"finish_reason\":\"stop\"}]}",
+   "findings": null,
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  },
+  {
+   "name": "object without findings: malformed_finding",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"bugs\\\": [{\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 4, \\\"category\\\": \\\"off-by-one\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 12, \\\"category\\\": \\\"wrong-comparison\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 17, \\\"category\\\": \\\"wrong-operator\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 22, \\\"category\\\": \\\"divide-by-zero\\\"}, {\\\"file\\\": \\\"cart.js\\\", \\\"line\\\": 27, \\\"category\\\": \\\"missing-check\\\"}]}\"},\"finish_reason\":\"stop\"}]}",
+   "findings": null,
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  },
+  {
+   "name": "findings member not an array: malformed_finding",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"findings\\\": \\\"none\\\"}\"},\"finish_reason\":\"stop\"}]}",
+   "findings": "none",
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  },
+  {
+   "name": "content is a JSON string: malformed_finding",
+   "response_body": "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\\\"[{\\\\\\\"file\\\\\\\": \\\\\\\"cart.js\\\\\\\", \\\\\\\"line\\\\\\\": 4, \\\\\\\"category\\\\\\\": \\\\\\\"off-by-one\\\\\\\"}, {\\\\\\\"file\\\\\\\": \\\\\\\"cart.js\\\\\\\", \\\\\\\"line\\\\\\\": 12, \\\\\\\"category\\\\\\\": \\\\\\\"wrong-comparison\\\\\\\"}, {\\\\\\\"file\\\\\\\": \\\\\\\"cart.js\\\\\\\", \\\\\\\"line\\\\\\\": 17, \\\\\\\"category\\\\\\\": \\\\\\\"wrong-operator\\\\\\\"}, {\\\\\\\"file\\\\\\\": \\\\\\\"cart.js\\\\\\\", \\\\\\\"line\\\\\\\": 22, \\\\\\\"category\\\\\\\": \\\\\\\"divide-by-zero\\\\\\\"}, {\\\\\\\"file\\\\\\\": \\\\\\\"cart.js\\\\\\\", \\\\\\\"line\\\\\\\": 27, \\\\\\\"category\\\\\\\": \\\\\\\"missing-check\\\\\\\"}]\\\"\"},\"finish_reason\":\"stop\"}]}",
+   "findings": null,
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  },
+  {
+   "name": "content null: malformed_finding",
+   "response_body": "{\"choices\": [{\"message\": {\"content\": null}}]}",
+   "findings": null,
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  },
+  {
+   "name": "no choices: malformed_finding",
+   "response_body": "{\"error\": {\"message\": \"rate limited\"}}",
+   "findings": null,
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  },
+  {
+   "name": "response body is not JSON: malformed_finding",
+   "response_body": "<html>502 Bad Gateway</html>",
+   "findings": null,
+   "passed": false,
+   "found": 0,
+   "error": "malformed_finding"
+  }
+ ]
+}

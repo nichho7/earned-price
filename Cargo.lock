@@ -749,6 +749,7 @@ dependencies = [
  "near-sdk",
  "near-sys",
  "near-workspaces",
+ "secp256k1",
  "serde_json",
  "tokio",
 ]

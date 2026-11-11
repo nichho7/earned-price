@@ -1,0 +1,4 @@
+{
+  "_doc": "NEAR AI Cloud TEE signer addresses seeded into the escrow allowlist at init (A-012). deploy.sh passes these to new(owner, signers). The owner (earned-price.testnet) can add or remove signers later with add_signer / remove_signer (1 yoctoNEAR). Source: the provider_tee signing address in the T-003 spike (2026-11-10, spike/evidence/runs) and the Nov 10 live call (same address, CTO notes M-006).",
+  "signers": ["0xfe0071895500a9755c18044948ab4f4e1a7f337e"]
+}
