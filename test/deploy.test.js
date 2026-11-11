@@ -477,7 +477,7 @@ test("testnet-view refuses non-testnet accounts and RPCs", async () => {
   for (const bad of ["earned-price.testnet.near", "Earned.testnet", "a..b.testnet", 'x".testnet', `${"a".repeat(60)}.testnet`]) {
     assert.throws(() => assertTestnet(bad), /not a \.testnet account/);
   }
-  assert.deepEqual(rpcUrls({}), ["https://test.rpc.fastnear.com", "https://neart.lava.build"]);
+  assert.deepEqual(rpcUrls({}), ["https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"]);
   assert.deepEqual(rpcUrls({ EARNED_RPC_URL: "http://127.0.0.1:1234" }), ["http://127.0.0.1:1234"]);
   assert.throws(() => rpcUrls({ EARNED_RPC_URL: "https://rpc.mainnet.near.org" }), /not a known testnet RPC/);
   assert.throws(() => rpcUrls({ EARNED_RPC_URL: "http://127.0.0.1.evil.com:1/" }), /not a known testnet RPC/);

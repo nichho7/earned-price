@@ -9,7 +9,8 @@
 
 import { pathToFileURL } from "node:url";
 
-const TESTNET_RPCS = ["https://test.rpc.fastnear.com", "https://neart.lava.build"];
+// Same list as cli/init.js RPC_URLS (neart.lava.build is discontinued).
+const TESTNET_RPCS = ["https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"];
 const LOCAL_RPC = /^http:\/\/127\.0\.0\.1:\d+\/?$/;
 
 function die(msg) {

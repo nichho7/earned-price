@@ -16,8 +16,10 @@ import { NETWORK, PACKAGE } from "./names.js";
 import { SPEND_CAP_NEAR, formatNear, spentYocto } from "./spend-cap.js";
 
 export const FAUCET_URL = "https://helper.nearprotocol.com/account";
-// Two RPCs so one outage doesn't break judging (PRD risk table). Both from near-cli-rs config.
-export const RPC_URLS = ["https://test.rpc.fastnear.com", "https://neart.lava.build"];
+// Two RPCs so one outage doesn't break judging (PRD risk table). fastnear is near-cli-rs's
+// default; rpc.testnet.near.org is NEAR's own. Both checked live 2026-11-11 (status + view_account).
+// neart.lava.build was removed: discontinued, it broke the T-014 live run.
+export const RPC_URLS = ["https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"];
 export const STATE_DIR_NAME = ".earned";
 export const KEY_FILE_NAME = "buyer.json";
 const FAUCET_FALSE = Buffer.from("false").toString("base64");
@@ -106,18 +108,37 @@ export function saveState(dir, state) {
   chmodSync(file, 0o600);
 }
 
-/** true / false from the RPC; throws RPC_UNAVAILABLE on anything else. */
+// "Account does not exist" is a valid answer, not an outage. near-api-js 7.4.0 throws
+// AccountDoesNotExistError; its FailoverRpcProvider wraps per-RPC errors in FailoverRpcError.errors.
+function isAccountMissing(err) {
+  const msg = String(err?.message ?? err);
+  return (
+    err?.name === "AccountDoesNotExistError" ||
+    /\baccount \S+ (does not|doesn't) exist/i.test(msg) ||
+    /UNKNOWN_ACCOUNT/.test(msg) ||
+    (Array.isArray(err?.errors) && err.errors.some(isAccountMissing))
+  );
+}
+
+/**
+ * true / false from the first RPC that answers; throws RPC_UNAVAILABLE if none does.
+ * `provider` is one provider or a list tried in order. We fail over here, not with
+ * near-api-js FailoverRpcProvider, because that one fails over on "not found" too.
+ */
 export async function accountExists(provider, accountId) {
-  try {
-    await provider.viewAccount({ accountId });
-    return true;
-  } catch (err) {
-    const msg = String(err?.message ?? err);
-    if (err?.name === "AccountDoesNotExistError" || /does not exist/i.test(msg) || /UNKNOWN_ACCOUNT/.test(msg)) {
-      return false;
+  const errors = [];
+  for (const p of [provider].flat()) {
+    try {
+      await p.viewAccount({ accountId });
+      return true;
+    } catch (err) {
+      if (isAccountMissing(err)) return false;
+      errors.push(err);
     }
-    throw new InitError("RPC_UNAVAILABLE", "testnet RPC unreachable; check your connection and retry `earned init`");
   }
+  const err = new InitError("RPC_UNAVAILABLE", "testnet RPC unreachable; check your connection and retry `earned init`");
+  err.cause = errors; // per-RPC errors, in order, for debugging
+  throw err;
 }
 
 /** Asks the testnet faucet helper to create the account. Only the public key is sent. */
@@ -229,9 +250,11 @@ export async function runInit(deps) {
   return { state, reused, created, txHash, pass };
 }
 
-/** Real dependencies: near-api-js 7.4.0 key generation and failover RPC. */
+export const RPC_RETRIES = 3;
+
+/** Real dependencies: near-api-js 7.4.0 key generation and RPCs (failover in accountExists). */
 export async function defaultDeps(env = process.env) {
-  const { FailoverRpcProvider, JsonRpcProvider, KeyPair } = await import("near-api-js");
+  const { JsonRpcProvider, KeyPair } = await import("near-api-js");
   const urls = env.EARNED_RPC_URL ? [env.EARNED_RPC_URL] : RPC_URLS;
   urls.forEach(assertTestnetRpc);
   return {
@@ -239,7 +262,8 @@ export async function defaultDeps(env = process.env) {
     env,
     network: env.EARNED_NETWORK || NETWORK,
     fetch: globalThis.fetch,
-    provider: new FailoverRpcProvider(urls.map((url) => new JsonRpcProvider({ url }))),
+    // retries: 3 (library default 12, ~2 min per dead RPC) so failover is quick.
+    provider: urls.map((url) => new JsonRpcProvider({ url }, { retries: RPC_RETRIES })),
     keyGen: () => {
       const kp = KeyPair.fromRandom("ed25519");
       return { publicKey: kp.getPublicKey().toString(), privateKey: kp.toString() };
