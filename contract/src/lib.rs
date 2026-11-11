@@ -90,8 +90,11 @@ pub struct SellerRecord {
     pub fails: u32,
 }
 
+/// JSON is lowercase (`open` | `accepted`) per m001-ui-contract §8; borsh is
+/// unaffected by the rename.
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum JobStatus {
     /// Deposit held, waiting for the seller to accept or decline.
     Open,
@@ -1081,6 +1084,30 @@ mod tests {
         assert_eq!(e["data"]["job_id"], "0");
         assert_eq!(e["data"]["accepted_at_ns"], "500");
         assert!(transfers().is_empty());
+    }
+
+    #[test]
+    fn get_job_json_status_is_lowercase() {
+        // The site and CLI match the m001 §8 strings, so check the JSON shape.
+        let mut c = with_open_job();
+        let json = |c: &EarnedPrice| near_sdk::serde_json::to_value(c.get_job(U64(0))).unwrap();
+        let v = json(&c);
+        assert_eq!(v["status"], "open");
+        assert_eq!(v["accepted_at_ns"], Value::Null);
+        assert_eq!(v["review"], Value::Null);
+        as_caller(seller(), 500);
+        c.accept(U64(0));
+        let v = json(&c);
+        assert_eq!(v["status"], "accepted");
+        assert_eq!(v["accepted_at_ns"], "500");
+        for k in [
+            "created_at_ns",
+            "accept_by_ns",
+            "review_by_ns",
+            "reveal_deadline_ns",
+        ] {
+            assert!(v[k].is_string(), "{k} must be a U64 string");
+        }
     }
 
     #[test]
