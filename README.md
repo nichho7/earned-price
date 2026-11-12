@@ -431,7 +431,8 @@ whose record is not empty (the demo's 0.030 -> 0.040 -> 0.040 needs a fresh sell
 
 The first `--go` run (2026-11-12, jobs 1 and 2) is shipped in `recorded/`: both receipts, the
 console output and every tx hash with its explorer link. `earned hire` replays it, labelled
-RECORDED, when the seller can't review live.
+RECORDED, when the seller can't review live; your own job then waits out its deadline and is
+refunded by a `timeout` tx.
 
 ## License
 

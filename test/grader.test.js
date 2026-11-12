@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -15,9 +16,9 @@ import {
   MAX_BUG_SPAN,
 } from "../grader/grade.js";
 
-const fixture = (p) => new URL(`./fixtures/${p}`, import.meta.url).pathname;
+const fixture = (p) => fileURLToPath(new URL(`./fixtures/${p}`, import.meta.url));
 const load = (p) => JSON.parse(readFileSync(fixture(p), "utf8"));
-const CLI = new URL("../grader/cli.js", import.meta.url).pathname;
+const CLI = fileURLToPath(new URL("../grader/cli.js", import.meta.url));
 const GRADER_SRC = readFileSync(new URL("../grader/grade.js", import.meta.url), "utf8");
 const CLI_SRC = readFileSync(CLI, "utf8");
 const VECTOR = JSON.parse(readFileSync(new URL("../test-vectors/commit.json", import.meta.url), "utf8"));

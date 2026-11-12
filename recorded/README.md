@@ -4,8 +4,9 @@ The first live testnet run of the CLI path, 2026-11-12 13:24-13:25 UTC, made by
 `scripts/live-run.sh --go` on main `741d0a4` (contract `earned-price.testnet`, seller
 `seller.earned-price.testnet`, buyer `earned-price-buyer-09552fb0.testnet`).
 
-When the seller can't review live, `earned hire` (and the site) replays this run, labelled
-**RECORDED**. A replay never submits anything on-chain and never writes a receipt for your job.
+When the seller can't review live, `earned hire` replays this run, labelled **RECORDED**.
+A replay never submits anything on-chain and never writes a receipt for your job. (The website
+does not read this folder yet.)
 
 | File | What it is |
 |---|---|
@@ -41,4 +42,10 @@ After the run, `get_record` for the seller read passes 2, fails 0, unique_buyers
 (quote 0.040). Later jobs move that record, so a fresh read today can differ.
 
 The seller is no longer fresh, so this run can't be repeated with the same 0.030 -> 0.040 ->
-0.040 sequence on this seller. `test/recorded.test.js` checks these files on every `npm test`.
+0.040 sequence on this seller. `test/recorded.test.js` and `test/hire.test.js` check these files
+on every `npm test`.
+
+Each receipt's `tee.attestation` is NEAR AI's public attestation report, exactly as the API
+returned it (offline verify needs it). The `${VAR}` names inside it, such as
+`AWS_SECRET_ACCESS_KEY=${...}`, are NEAR AI's own placeholders, not values; a secret scanner
+may flag them.

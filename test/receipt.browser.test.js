@@ -1,6 +1,7 @@
 // Proves verify/receipt.js (+ nearai-verify.js, grade.js, @noble) runs unchanged in a real browser:
 // headless Chrome rebuilds, verifies and tamper-verifies the real T-003 receipt, matching Node.
 // Same Chrome rules as test/grader.browser.test.js: skips without Chrome unless REQUIRE_BROWSER=1/CI.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -11,7 +12,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tamperReceipt, verifyReceipt } from "../verify/receipt.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ALLOWED = ["/grader/", "/verify/", "/node_modules/@noble/hashes/", "/node_modules/@noble/curves/", "/test/browser/", "/test/fixtures/"];
 const TYPES = { ".js": "text/javascript", ".json": "application/json", ".html": "text/html" };
 const CHROME = [

@@ -2,6 +2,7 @@
 // Serves the repo on 127.0.0.1, opens test/browser/grader.html in headless Chrome and reads the DOM.
 // Skips when no Chrome is installed (set CHROME_PATH to point at one). With REQUIRE_BROWSER=1 or
 // CI=true a missing Chrome FAILS the test instead, so a clean-machine run can't hide a skip.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -12,7 +13,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { canonicalJson, commit, grade, sha256Hex } from "../grader/grade.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ALLOWED = ["/grader/", "/node_modules/@noble/hashes/", "/test/browser/", "/test/fixtures/", "/test-vectors/"];
 const TYPES = { ".js": "text/javascript", ".json": "application/json", ".html": "text/html" };
 const CHROME = [

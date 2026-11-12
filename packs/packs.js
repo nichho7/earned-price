@@ -13,9 +13,12 @@
 import { randomBytes } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { canonicalJson, commit, sha256Hex, validateKey } from "../grader/grade.js";
 
-export const PACKS_DIR = new URL(".", import.meta.url).pathname;
+// fileURLToPath, not URL.pathname: pathname stays percent-encoded ("My%20Projects"), so an install
+// under a path with a space, an accent or a Windows drive could not find the packs (T-064 R-1).
+export const PACKS_DIR = fileURLToPath(new URL(".", import.meta.url));
 export const INDEX_FILE = join(PACKS_DIR, "index.json");
 
 export function readIndex(file = INDEX_FILE) {

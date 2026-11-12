@@ -1,5 +1,6 @@
 // T-026 seller quote module. No live RPC: every response below is a recorded-shape
 // nearcore JSON-RPC body (call_function result / HANDLER_ERROR), served by a fake fetch.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -310,7 +311,7 @@ test("fix 8: parseQuoteArgs: seller + --offer, missing or flag-like values refus
 });
 
 test("fix 8: `earned quote --offer 0.02` with no seller prints USAGE (no network)", () => {
-  const r = spawnSync(process.execPath, [new URL("../cli/earned.js", import.meta.url).pathname, "quote", "--offer", "0.02"], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL("../cli/earned.js", import.meta.url)), "quote", "--offer", "0.02"], { encoding: "utf8", env: { PATH: process.env.PATH } });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^error USAGE: usage: earned quote <seller\.testnet> \[--offer 0\.02\]/);
 });

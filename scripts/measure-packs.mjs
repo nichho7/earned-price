@@ -12,6 +12,7 @@
 // unreadable body or no usage): its usage if the body has one, else the per-run reserve, an upper
 // bound from the request size + MAX_TOKENS (scripts/review-spend.mjs; assumes reasoning off). Stops
 // before a run would push the estimated spend over --max-usd.
+import { fileURLToPath } from "node:url";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { findingsFromResponse, grade } from "../grader/grade.js";
@@ -32,7 +33,7 @@ if (!ROUND) {
   console.error("usage: measure-packs.mjs --round <n> [--packs 1,2,3] [--runs 10] [--max-usd 0.25]");
   process.exit(2);
 }
-const OUT = new URL(`../packs/results/round-${ROUND}/`, import.meta.url).pathname;
+const OUT = fileURLToPath(new URL(`../packs/results/round-${ROUND}/`, import.meta.url));
 
 try {
   process.loadEnvFile();
