@@ -18,7 +18,7 @@ export type AccountStep =
 export type AccountErrorCode =
   | "STORAGE_CORRUPT" | "RPC_UNAVAILABLE" | "FAUCET_TIMEOUT" | "FAUCET_UNREACHABLE" | "FAUCET_RATE_LIMITED"
   | "FAUCET_HTTP" | "FAUCET_BAD_RESPONSE" | "FAUCET_TX_FAILED" | "FAUCET_REFUSED" | "QUOTE_UNAVAILABLE" | "BAD_QUOTE"
-  | "WALLET_LOAD_FAILED";
+  | "WALLET_LOAD_FAILED" | "ACCOUNT_TAKEN" | "ACCOUNT_KEY_MISSING";
 
 export const FAUCET_URL: string;
 export const RPC_URLS: string[];
@@ -32,7 +32,10 @@ export const CREATE_GAS: bigint;
 export const REVEAL_GAS: bigint;
 export const GAS_PRICE_YOCTO: bigint;
 export const JOB_GAS_RESERVE_YOCTO: bigint;
+export const KEY_CHECK_TRIES: number;
 export const SPEND_CAP_YOCTO: bigint;
+/** The same cap as a decimal NEAR string ("0.2"), for copy. */
+export const SPEND_CAP_NEAR: string;
 
 export class AccountError extends Error {
   code: AccountErrorCode;
@@ -49,6 +52,7 @@ export function saveBuyer(storage: KV, state: Buyer): void;
 export function clearBuyer(storage: KV): void;
 export function pickStorage(win: Window): { storage: KV; persistent: boolean };
 export function accountExists(fetchFn: FetchFn, urls: string[], accountId: string, timeoutMs?: number): Promise<boolean>;
+export function keyOnAccount(fetchFn: FetchFn, urls: string[], accountId: string, publicKey: string, timeoutMs?: number): Promise<boolean>;
 export function createViaFaucet(fetchFn: FetchFn, accountId: string, publicKey: string, timeoutMs?: number): Promise<string | null>;
 export function startAccount(deps: {
   storage: KV;
@@ -58,6 +62,7 @@ export function startAccount(deps: {
   now?: () => Date;
   rpcUrls?: string[];
   onStep?: (s: AccountStep) => void;
+  sleep?: (ms: number) => Promise<void>;
 }): Promise<{ state: Buyer; keyReused: boolean; created: boolean; txHash: string | null }>;
 export function capStatus(state: Buyer): { capYocto: bigint; spentYocto: bigint; leftYocto: bigint };
 export function checkJobBudget(state: Buyer, quoteYocto: bigint): { fits: boolean; needYocto: bigint; capYocto: bigint; spentYocto: bigint; leftYocto: bigint };

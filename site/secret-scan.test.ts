@@ -138,8 +138,8 @@ test("CLI (M-1 proof): a planted bare key body and a planted seed-form key each 
   const root = mkdtempSync(join(tmpdir(), "scan-root-"));
   const cli = fileURLToPath(new URL("../scripts/site-secret-scan.mjs", import.meta.url));
   const k = fakeNearKey();
-  const run = (extra: NodeJS.ProcessEnv = {}) =>
-    spawnSync(process.execPath, [cli, "--bundle"], { cwd: root, encoding: "utf8", env: { PATH: process.env.PATH ?? "", NODE_ENV: "test", ...extra } });
+  const run = (extra: Record<string, string> = {}) =>
+    spawnSync(process.execPath, [cli, "--bundle"], { cwd: root, encoding: "utf8", env: { PATH: process.env.PATH ?? "", ...extra, NODE_ENV: "test" } });
   try {
     mkdirSync(join(root, ".next", "static", "chunks"), { recursive: true });
     mkdirSync(join(root, ".next", "server", "app"), { recursive: true });

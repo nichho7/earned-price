@@ -5,13 +5,14 @@
 import type { Metadata } from "next";
 import { Header } from "../../site/view/Header.tsx";
 import { Waves } from "../../site/view/icons.tsx";
+import { SPEND_CAP_NEAR } from "../../site/live/account.js";
 import { LiveStart } from "./LiveStart.tsx";
 
 export const dynamic = "force-static";
 
 export const metadata: Metadata = {
   title: "Be the buyer · Earned Price (testnet, live)",
-  description: "Run the escrow yourself on NEAR testnet with a throwaway account made in your browser, capped at 0.2 NEAR. No wallet, no real money.",
+  description: `Run the escrow yourself on NEAR testnet with a throwaway account made in your browser, capped at ${SPEND_CAP_NEAR} NEAR. No wallet, no real money.`,
 };
 
 export default function LivePage() {

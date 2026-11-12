@@ -5,11 +5,11 @@
 // - Every failure ends in a notice that says what happened, that nothing was created or charged, and offers
 //   Try again + the RECORDED run (S-009 AC3). The server HTML already has the start card, so never a blank screen.
 // - After the account is ready, the pre-job check reads the live quote: quote + gas reserve must fit what is
-//   left of the 0.2 NEAR cap (cli/spend-cap.js), else the "cap reached" state points to RECORDED (CFO T-076).
+//   left of the spend cap (cli/spend-cap.js; every cap number on the page comes from it, code review R-1), else the "cap reached" state points to RECORDED (CFO T-076).
 // Skills used: frontend-ui-engineering, security-and-hardening, karpathy-guidelines
 import { useEffect, useRef, useState } from "react";
 import {
-  AccountError, JOB_GAS_RESERVE_YOCTO, SPEND_CAP_YOCTO, capStatus, checkJobBudget, clearBuyer, loadBuyer, near3,
+  AccountError, JOB_GAS_RESERVE_YOCTO, SPEND_CAP_NEAR, SPEND_CAP_YOCTO, capStatus, checkJobBudget, clearBuyer, loadBuyer, near3,
   pickStorage, readLiveQuote, startAccount, withBuyerLock,
 } from "../../site/live/account.js";
 import type { AccountErrorCode, AccountStep, Buyer, KV } from "../../site/live/account.d.ts";
@@ -34,7 +34,9 @@ export function noticeOf(code: Notice["code"]): Notice {
     case "FAUCET_TIMEOUT": return { code, title: "Testnet faucet didn't answer", body: `${NOTHING} ${RECORDED_LINE}` };
     case "FAUCET_UNREACHABLE": return { code, title: "Testnet faucet is unreachable", body: `${NOTHING} ${RECORDED_LINE}` };
     case "FAUCET_RATE_LIMITED": return { code, title: "Testnet faucet is busy", body: `It limits how many accounts it makes. ${NOTHING} Wait a minute and try again, or watch the recorded run (real testnet data, labelled RECORDED).` };
-    case "FAUCET_REFUSED": return { code, title: "That account name was taken", body: `${NOTHING} Try again makes a new name, or watch the recorded run (real testnet data, labelled RECORDED).` };
+    case "FAUCET_REFUSED": case "ACCOUNT_TAKEN":
+      return { code, title: "That account name was taken", body: `${NOTHING} Try again makes a new name, or watch the recorded run (real testnet data, labelled RECORDED).` };
+    case "ACCOUNT_KEY_MISSING": return { code, fresh: true, title: "Saved account can't be used", body: "The testnet account saved in this browser no longer has this browser's key, so it isn't used. Nothing was charged. Start a fresh account, or watch the recorded run (real testnet data, labelled RECORDED)." };
     case "FAUCET_HTTP": case "FAUCET_BAD_RESPONSE": case "FAUCET_TX_FAILED":
       return { code, title: "Testnet faucet couldn't make the account", body: `${NOTHING} ${RECORDED_LINE}` };
     case "RPC_UNAVAILABLE": return { code, title: "Testnet RPC didn't answer", body: `${NOTHING} ${RECORDED_LINE}` };
@@ -70,15 +72,29 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
   const [budget, setBudget] = useState<Budget>({ st: "todo" });
   const [notice, setNotice] = useState<Notice | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
+  const capRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
     const picked = pickStorage(window);
     store.current = picked;
     setPersistent(picked.persistent);
-    try { setSaved(loadBuyer(picked.storage)); } catch { /* shown when the visitor presses start */ }
+    try {
+      const b = loadBuyer(picked.storage);
+      setSaved(b);
+      // A returning visitor sees the saved account in its receipt row (fixed height), not in a line under the
+      // buttons that appears after hydration and vanishes on start (Designer QA B2: the receipt never moves).
+      if (b) setAcct({ st: "todo", label: `Account ${shortId(b.account_id)}`, note: "saved in this browser", id: b.account_id });
+    } catch { /* shown when the visitor presses start */ }
   }, []);
 
   useEffect(() => { if (notice) noticeRef.current?.focus(); }, [notice]);
+  // Designer QA B3: the start button unmounts on ready / cap, so focus moves on instead of falling to <body>:
+  // the cap notice (its reason, scrolled into view at 390) or, on ready, the headline (build spec §6).
+  useEffect(() => {
+    if (phase === "cap") capRef.current?.focus();
+    else if (phase === "ready") headRef.current?.focus();
+  }, [phase]);
 
   const onStep = (st: AccountStep) => {
     if (st.step === "key") return setKeyLine("ok");
@@ -143,11 +159,11 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
           <span className={s.kick}>Step 1 · Start</span>
           <span className={s.chip} data-chip="live">TESTNET · LIVE</span>
         </div>
-        <h1 id="live-head" className={`${s.head} ${busy ? s.waiting : ""}`}>{HEAD[phase]}</h1>
+        <h1 id="live-head" className={`${s.head} ${busy ? s.waiting : ""}`} tabIndex={-1} ref={headRef}>{HEAD[phase]}</h1>
         {/* one polite live region for phase changes; the heading keeps its heading role (code review M-3 on /) */}
         <p className="sr" role="status" aria-live="polite">{phase === "idle" ? "" : `Step 1: ${HEAD[phase]}`}</p>
         <p className={s.lede}>
-          No wallet needed. We make a throwaway testnet account in this browser, capped at 0.2 NEAR. No real money moves.
+          No wallet needed. We make a throwaway testnet account in this browser, capped at {SPEND_CAP_NEAR} NEAR. No real money moves.
         </p>
         <p className={s.fine}>
           The account key is made and kept in this browser. Only its public key goes to the NEAR testnet faucet, which creates and funds
@@ -167,7 +183,6 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
           )}
           <a className={s.secondary} href={RECORDED_HREF} data-act="recorded">Watch the recorded run</a>
         </div>
-        {saved && phase === "idle" && <p className={s.fine} data-saved="">Saved in this browser: {shortId(saved.account_id)}</p>}
       </div>
 
       <div className={s.rcw}>
@@ -204,7 +219,7 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
               </div>
             )}
             {phase === "cap" && budget.st === "over" && (
-              <div className={s.notice} role="alert" data-notice="CAP_REACHED" tabIndex={-1}>
+              <div className={s.notice} role="alert" data-notice="CAP_REACHED" tabIndex={-1} ref={capRef}>
                 <p className={s.ntitle}><Alert /> Spend cap reached</p>
                 <p className={s.nbody}>
                   The next job needs {near3(budget.need, true)} NEAR (quote {near3(budget.quote, true)} + gas reserve {near3(JOB_GAS_RESERVE_YOCTO, true)}).
@@ -228,7 +243,8 @@ function noteOf(code: Notice["code"]): string {
     case "FAUCET_TIMEOUT": return "faucet timeout";
     case "FAUCET_UNREACHABLE": return "faucet unreachable";
     case "FAUCET_RATE_LIMITED": return "faucet busy";
-    case "FAUCET_REFUSED": return "name taken";
+    case "FAUCET_REFUSED": case "ACCOUNT_TAKEN": return "name taken";
+    case "ACCOUNT_KEY_MISSING": return "key not on account";
     case "RPC_UNAVAILABLE": return "RPC down";
     case "FAUCET_HTTP": case "FAUCET_BAD_RESPONSE": case "FAUCET_TX_FAILED": return "faucet error";
     default: return "failed";
