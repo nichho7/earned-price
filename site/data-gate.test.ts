@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import type { LabFixture } from "./stage/schema.ts";
 import { RUNS } from "./data/runs.ts";
 // @ts-expect-error plain .mjs build script, no type declarations
-import { checkTxs, linkedTxs, runErrors } from "../scripts/site-data-gate.mjs";
+import { checkTxs, linkedTxs, runErrors } from "../scripts/site-data-gate-lib.mjs";
 
 type Ev = { type: string; seq: number; t_ms: number; tx_hash?: string; data: { action?: string; signer?: string } };
 const clone = (): LabFixture[] => JSON.parse(JSON.stringify(RUNS));

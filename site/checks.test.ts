@@ -2,9 +2,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // @ts-expect-error plain .mjs build scripts, no type declarations
-import { checkFile, checkPackage, scanned } from "../scripts/site-rules.mjs";
+import { checkFile, checkPackage, scanned } from "../scripts/site-rules-lib.mjs";
 // @ts-expect-error plain .mjs build scripts, no type declarations
-import { codepointsOf, rangeHits, measure } from "../scripts/site-size-gate.mjs";
+import { codepointsOf, rangeHits, measure } from "../scripts/site-size-gate-lib.mjs";
 
 test("colour rule: hex / rgb outside tokens.css fails; tokens.css and comments pass", () => {
   assert.equal(checkFile("site/view/x.module.css", ".a{color:#fff}").length, 1);
