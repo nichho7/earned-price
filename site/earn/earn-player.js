@@ -103,7 +103,7 @@ export function mountEarnStage(host, opts = {}) {
   // layout, and the sizers are removed in the same task, so they are never painted. Because the live stage is
   // untouched, a re-lock mid-play no longer cancels running beats either (O-3). No state-attribute rule in
   // earn-stage.css changes a locked slot's height, so measuring outside the step's root flags is exact.
-  const LOCKED = ['kick', 'chips', 'mv', 'lede', 'note', 'ldg', 'cap', 'rec', 'reg', 'rtop', 'proc', 'tee', 'dots', 'rows', 'onetx', 'sum', 'q', 'tx'];
+  const LOCKED = ['kick', 'chips', 'mv', 'lede', 'note', 'ldg', 'cap', 'rec', 'reg', 'rtop', 'proc', 'tee', 'dots', 'rows', 'onetx', 'sum', 'q', 'tx', 'chart'];
   const SIZED = ['.ep-top', ...LOCKED.map(n => `[data-slot="${n}"]`)]; // .ep-top: a longer kicker can wrap the kicker + chip row at 390 px
   let lockedWidth = -1;
   function lockHeights() {

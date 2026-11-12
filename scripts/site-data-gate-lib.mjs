@@ -13,11 +13,11 @@
 // Skills used: ci-cd-and-automation, security-and-hardening, karpathy-guidelines
 import { RUNS, RUNS_SOURCE } from "../site/data/runs.ts";
 import { HERO } from "../site/data/hero.ts";
-import { findPlaceholders, foldRun, outcomeOf } from "../site/earn/earn-core.js";
+import { DERIVED_FROM, findPlaceholders, foldRun, outcomeOf } from "../site/earn/earn-core.js";
 import { txStatus, txSucceeded, TX_HASH } from "./site-rpc.mjs";
 
-/** The tx each derived event comes from (schema.ts: the accept / submit_review / reveal EVENT_JSON). */
-export const DERIVED_FROM = { accepted: "accept", attested: "submit_review", check_graded: "reveal", settled: "reveal" };
+/** The tx each derived event comes from. One table, shared with the S-010 bus (site/earn/earn-core.js). */
+export { DERIVED_FROM };
 
 /**
  * Pure (code review R-1): every tx hash any event carries, keyed by hash, with the action and signer it claims.

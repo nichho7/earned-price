@@ -12,6 +12,7 @@ import {
   esc, num, isPh, fmtM, fmtDelta, fmtSec, mmss, quoteOf, txUrl, acctUrl, shortHash, packLabel, isSandboxRun, isTestnetRun,
   waitOf, outcomeOf, stageStateOf, headlineOf, kickerOf, railStepOf, runSummary, chipsOf, ACTIONS, EXPLORER,
 } from './earn-core.js';
+import { chartOf, chartHTML } from './earn-chart.js';
 
 const ACT = { create: 'Lock in escrow', accept: 'Seller accepts', submit_review: 'Signed review on-chain', reveal: 'Reveal key · grade · settle' };
 const ICON = {
@@ -41,7 +42,11 @@ const noLinkWhy = (tx, f) => isPh(tx) ? 'no explorer link: placeholder' : isSand
 
 /* ---------- slots --------------------------------------------------------- */
 function chipsHTML(v, o) {
-  return chipsOf(v.story, o.live).map(c => `<span class="chip ${esc(c.kind)}"${c.kind === 'ph' ? ' title="Placeholder values. This run can never ship." data-chip="placeholder"' : ` data-chip="${esc(c.kind)}"`}>${esc(c.text)}</span>`).join('');
+  return chipsOf(v.story, o.live).map(c => {
+    // S-010 AC 2: the RECORDED chip carries the latest attestation tx, clickable (the data gate resolves it on testnet)
+    const att = c.att ? ` <span class="att" data-chip-att="${esc(c.att.tx)}">att ${idHTML(c.att.tx, c.att.f, { explorer: o.explorer, what: 'signed TEE review tx' })}</span>` : '';
+    return `<span class="chip ${esc(c.kind)}"${c.kind === 'ph' ? ' title="Placeholder values. This run can never ship." data-chip="placeholder"' : ` data-chip="${esc(c.kind)}"`}>${esc(c.text)}${att}</span>`;
+  }).join('');
 }
 function moveLine(s) {
   const qb = s.qb, qa = s.qa, st = s.settled, o = outcomeOf(s);
@@ -250,7 +255,7 @@ export function slotsOf(v, opts = {}) {
       chips: chipsHTML(v, o), kick: esc(kickerOf(v.story, v.cur)), hd: h.t, mv: moveLine(s), lede: lede(s), note: noteHTML(v, o),
       ldg: ledgerHTML(s), cap: capHTML(s), rec: recordHTML(s), reg: registerHTML(v, o),
       rtop: receiptTop(v, o), proc: procHTML(v, o), tee: teeHTML(v), dots: dotsHTML(s), rows: rowsHTML(s), onetx: onetxHTML(s), sum: sumHTML(s),
-      q: quoteHTML(v, o), tx: txHTML(v, o),
+      q: quoteHTML(v, o), tx: txHTML(v, o), chart: chartHTML(chartOf(v), o),
     },
     flags: { wait: h.wait, closer: o.live ? !!oc : v.last, residue: anyEarned, state: stageStateOf(s, v.step), outcome: oc || '',
       seq: v.step && v.step.group ? v.step.group.map(e => e.seq).join(',') : '', run: v.cur, rail: railStepOf(v.story, v.cur) },
@@ -278,6 +283,7 @@ export function renderStage(v, opts = {}) {
       ${slot('cap', 'div', 'cap2')}
       ${slot('rec', 'div', 'recd', ' aria-label="Seller record"')}
       <div class="reg"><small>RUN REGISTER</small>${slot('reg', 'ol', 'rgl')}</div>
+      <figure class="qcw" aria-labelledby="qc-cap"><figcaption id="qc-cap">QUOTE CHART · ONE STEP PER SETTLE TX</figcaption>${slot('chart', 'div', 'qc')}</figure>
     </div>
     <div class="er" aria-label="Review receipt"><div class="rcw"><div class="rw"><i class="psh" aria-hidden="true"></i><div class="paper rc">
       ${slot('rtop', 'div', 'r-top')}
