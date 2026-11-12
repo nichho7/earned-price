@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // `earned` CLI. Commands land story by story (S-020 init first).
 import { BRAND, CLI_BIN, CONTRACT_ACCOUNT, NETWORK } from "./names.js";
+import { errorLine } from "./errors.js";
 
 const args = process.argv.slice(2);
 const [cmd] = args;
@@ -21,7 +22,7 @@ if (cmd === "names") {
     await runInit({ ...deps, network });
   } catch (err) {
     // Errors never carry the private key (only the public key leaves the file).
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "init failed; retry `earned init`"}`);
+    console.error(errorLine(err, "init failed; retry `earned init`"));
     process.exitCode = 1;
   }
 } else if (cmd === "quote") {
@@ -29,7 +30,7 @@ if (cmd === "names") {
   try {
     await runQuote(parseQuoteArgs(args.slice(1)));
   } catch (err) {
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "quote failed; retry"}`);
+    console.error(errorLine(err, "quote failed; retry"));
     process.exitCode = 1;
   }
 } else if (cmd === "pick") {
@@ -40,7 +41,19 @@ if (cmd === "names") {
     await runPick({ ...deps, ...opts, seller: opts.seller ?? deps.seller, yes: opts.yes });
   } catch (err) {
     // Errors never carry the private key (pick redacts it from every message).
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "pick failed; check `earned pick` usage and retry"}`);
+    console.error(errorLine(err, "pick failed; check `earned pick` usage and retry"));
+    process.exitCode = 1;
+  }
+} else if (cmd === "hire") {
+  const { parseHireArgs, runHire, defaultHireDeps } = await import("./hire.js");
+  try {
+    const opts = parseHireArgs(args.slice(1)); // usage errors before any network or file access
+    const deps = await defaultHireDeps(process.env, opts);
+    const r = await runHire(deps);
+    process.exitCode = r.pass ? 0 : 1;
+  } catch (err) {
+    // Errors never carry a private key (hire redacts the buyer key; the seller module its own keys).
+    console.error(errorLine(err, "hire failed; run `earned hire` again (it resumes from .earned/job.json)"));
     process.exitCode = 1;
   }
 } else if (cmd === "verify") {
@@ -49,7 +62,7 @@ if (cmd === "names") {
     const v = await runVerify(parseVerifyArgs(args.slice(1)));
     process.exitCode = v.ok ? 0 : 1;
   } catch (err) {
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "verify failed; check the receipt file"}`);
+    console.error(errorLine(err, "verify failed; check the receipt file"));
     process.exitCode = 2;
   }
 } else {
@@ -57,6 +70,7 @@ if (cmd === "names") {
   console.log(`usage: ${CLI_BIN} init     create or reuse a throwaway testnet buyer (0.2 NEAR cap)`);
   console.log(`       ${CLI_BIN} quote <seller.testnet> [--offer 0.02]   seller's quote from its on-chain record`);
   console.log(`       ${CLI_BIN} pick <1|2|3> [--offer 0.02] [--seller s.testnet --yes]   seal the pack's key, haggle, lock the price in escrow`);
+  console.log(`       ${CLI_BIN} hire [--local-seller]   the seller reviews in the TEE, you reveal, the escrow settles; writes the receipt`);
   console.log(`       ${CLI_BIN} verify <receipt.json> [--tamper] [--json]   four offline checks of a receipt (no key, no network)`);
   console.log(`       ${CLI_BIN} names    print the naming set`);
   if (cmd && cmd !== "help" && cmd !== "--help") process.exitCode = 1;

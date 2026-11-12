@@ -230,7 +230,7 @@ export function acquirePickLock(dir, { say = () => {}, now = Date.now() } = {}) 
   };
 }
 
-const txHashOf = (o) => o?.transaction?.hash ?? o?.transaction_outcome?.id ?? null;
+export const txHashOf = (o) => o?.transaction?.hash ?? o?.transaction_outcome?.id ?? null;
 
 /**
  * FinalExecutionOutcome of create -> { jobId, txHash }. A Failure status is a definite refusal
@@ -259,10 +259,10 @@ export function parseCreateOutcome(outcome) {
 // Allow-list (code review M-2 / security M-1): only these end a job. Every other status, including
 // ones T-031 hire will add (accepted, reviewed, revealing...) and typos, blocks a new pick.
 export const REUSABLE_STATUSES = new Set(["failed", "closed"]);
-const UNRESOLVED_STATUSES = new Set(["sending", "unconfirmed"]);
+export const UNRESOLVED_STATUSES = new Set(["sending", "unconfirmed"]);
 
 /** Returns state with a reservation released (never below 0). */
-function releaseSpend(state, priceYocto) {
+export function releaseSpend(state, priceYocto) {
   const spent = BigInt(state.spent_yocto ?? "0");
   const price = /^\d+$/.test(String(priceYocto ?? "")) ? BigInt(priceYocto) : 0n;
   return { ...state, spent_yocto: (spent > price ? spent - price : 0n).toString() };
@@ -273,7 +273,7 @@ function releaseSpend(state, priceYocto) {
  * (code review S-2). Landed -> the job is open; refused -> failed and the reservation is released;
  * anything else stays unresolved. Returns { prior, state }.
  */
-async function reconcileCreate({ dir, prior, state, lookupCreate, say }) {
+export async function reconcileCreate({ dir, prior, state, lookupCreate, say }) {
   let outcome = null;
   try {
     outcome = await lookupCreate({ txHash: prior.create_tx, accountId: state.account_id });
