@@ -702,7 +702,7 @@ async function revealLandsUnseen({ chain, clock, deps }) {
 test("M-1: lookup fails while a lagging RPC still shows the job, then it reads null -> still CLOSE_TX_UNCONFIRMED, never closed_elsewhere", async () => {
   const ctx = setup();
   const { dir, chain, deps } = ctx;
-  await revealLandsUnseen(ctx);
+  const landed = await revealLandsUnseen(ctx);
   const stale = revealLandsUnseen.stale;
   let staleReads = 1;
   const realFetch = chain.fetch;
@@ -712,9 +712,63 @@ test("M-1: lookup fails while a lagging RPC still shows the job, then it reads n
     return realFetch(url, init);
   };
   await assert.rejects(runHire({ ...deps, fetch: lagging, lookupTx: async () => null }), { code: "CLOSE_TX_UNCONFIRMED" });
-  assert.notEqual(loadJob(dir).status, "closed");
+  assert.equal(loadJob(dir).status, "revealing", "re-check sec N-1: status never moves backward");
   assert.equal(loadJob(dir).reveal_tx, "revealTx3", "the landed hash is kept");
   assert.equal(chain.sends.filter((x) => x.methodName === "reveal").length, 1);
+  // re-check R-1 / PROBE-A / sec R1: a later run with a working lookup finishes it.
+  let lookups = 0;
+  const r = await runHire({ ...deps, lookupTx: async () => (lookups++, landed) });
+  assert.ok(lookups > 0);
+  assert.equal(r.pass, true);
+  assert.ok(existsSync(receiptPaths(dir, "7").receipt));
+  assert.equal(loadJob(dir).status, "closed");
+});
+
+test("re-check R-1: a job saved back to 'reviewed' with a pending reveal hash is still looked up (not stuck on CLOSE_TX_UNCONFIRMED)", async () => {
+  const ctx = setup();
+  const { dir, deps } = ctx;
+  const landed = await revealLandsUnseen(ctx);
+  saveJob(dir, { ...loadJob(dir), status: "reviewed" }); // as a 912207e run left it
+  const r = await runHire({ ...deps, lookupTx: async () => landed });
+  assert.equal(r.pass, true);
+  assert.equal(loadJob(dir).status, "closed");
+});
+
+test("re-check X3: a second reveal refused with 'no open job' keeps the earlier landed hash -> CLOSE_TX_UNCONFIRMED, then the receipt", async () => {
+  const ctx = setup();
+  const { dir, chain, deps } = ctx;
+  const landed = await revealLandsUnseen(ctx);
+  const stale = revealLandsUnseen.stale;
+  let staleReads = 2; // resumeClosing's read and the main loop's read still show the job
+  const realFetch = chain.fetch;
+  const lagging = async (url, init) => {
+    const p = JSON.parse(init.body).params;
+    if (p.method_name === "get_job" && staleReads-- > 0) return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: "B", block_height: 1, logs: [], result: bytes(stale) } }) };
+    return realFetch(url, init);
+  };
+  await assert.rejects(runHire({ ...deps, fetch: lagging, lookupTx: async () => null }), { code: "CLOSE_TX_UNCONFIRMED" });
+  const reveals = chain.sends.filter((x) => x.methodName === "reveal");
+  assert.equal(reveals.length, 2, "the lagging view let a second reveal go out");
+  const mid = loadJob(dir);
+  assert.equal(mid.status, "revealing");
+  assert.deepEqual(mid.reveal_txs, ["revealTx3"], "the refused hash is dropped, the landed one kept");
+  const r = await runHire({ ...deps, lookupTx: async ({ txHash }) => (txHash === "revealTx3" ? landed : null) });
+  assert.equal(r.pass, true);
+  assert.ok(existsSync(receiptPaths(dir, "7").receipt));
+});
+
+test("re-check L-3: a refused submit_review falls back to the RECORDED replay, then the review_by timeout refunds", async () => {
+  const { chain, clock, deps, lines } = setup();
+  chain.beforeSend = async (req, hash) => {
+    if (req.methodName !== "submit_review") return null;
+    return { status: { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: Earned Price: signing_address is not an allowlisted NEAR AI TEE signer. Nothing stored." } } } } }, transaction: { hash }, receipts_outcome: [] };
+  };
+  const r = await runHire({ ...deps, makeSeller: liveSeller(chain, clock) });
+  const out = text(lines);
+  assert.match(out, /Seller's submit_review refused: Earned Price: signing_address is not an allowlisted/);
+  assert.match(out, /RECORDED: no recorded live run of pack-2/);
+  assert.equal(r.outcome.kind, "timeout_refund_fail");
+  assert.equal(r.receiptPath, null);
 });
 
 test("M-1 / sec L-2 PoC: reveal landed but the lookup fails -> CLOSE_TX_UNCONFIRMED, job.json untouched, no second reveal; later lookup gives the receipt", async () => {

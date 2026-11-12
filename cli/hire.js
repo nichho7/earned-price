@@ -377,7 +377,8 @@ class Hire {
   async resumeClosing(kind) {
     const status = kind === "reveal" ? "revealing" : "timing_out";
     const hashes = pendingTxs(this.job, kind);
-    if (this.job.status !== status || hashes.length === 0) return null;
+    // Any unclosed job holding a pending hash is looked up, whatever its status (re-check R-1).
+    if (hashes.length === 0 || REUSABLE_STATUSES.has(this.job.status)) return null;
     const refused = new Set();
     for (let i = 0; i < LOOKUP_TRIES && this.d.lookupTx; i++) {
       if (i > 0) await this.sleep(POLL_MS);
@@ -408,6 +409,8 @@ class Hire {
   }
 
   closeTxUnconfirmed(kind, hashes) {
+    // State never moves backward (re-check sec N-1): the job waits on this close tx again.
+    this.save({ ...this.job, status: kind === "reveal" ? "revealing" : "timing_out" });
     return new HireError(
       "CLOSE_TX_UNCONFIRMED",
       `job ${this.jobId} is closed on-chain and your ${kind} tx ${hashes.join(", ")} is not visible on the RPC yet. Nothing was changed: run \`earned hire\` again in a minute to read its outcome (and write the receipt). Check ${EXPLORER}/txns/${hashes[0]}. Only if the explorer shows that tx never landed: move ${jobFilePath(this.dir)} into ${join(this.dir, "jobs")}/.`,
