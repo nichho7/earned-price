@@ -144,10 +144,13 @@ protects nothing; four on-chain checks do:
 What this does not stop: a seller paying for jobs from its own buyer accounts
 (the Sybil limit above); a buyer committing a valid but wrong key for the pack
 to force a fail and get a free review (security review MED-2, decision A-014);
-and, because a signed review names no job or seller, reuse inside the skew: a
-review made within about 2 minutes of another job on the same pack being
-accepted can land on that job too, by any seller (once only: the replay guard
-burns each signed response on first use). Each pin is the request a calibration
+and, because a signed review names no job or seller, reuse on open jobs: a
+signed review can land on any job for the same pack, by any seller, that is
+waiting for its review when the review is made (accepted up to about 7 minutes
+before it, or up to 2 minutes after), once only (the replay guard burns each
+signed response on first use). A seller can also call the TEE more than once
+after accepting and submit the best response (low uplift: calibration passed
+10/10 at temperature 0). Each pin is the request a calibration
 round actually measured (`packs/results/`): pack-1 rounds 1 and 3, pack-2 round
 1, pack-3 round 4. Pack-3 rounds 1 and 2 used older requests that predate the
 final pack-3 (`npm test` checks this list).

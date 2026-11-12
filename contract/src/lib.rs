@@ -2702,9 +2702,10 @@ mod tests {
         // Job B on the same pack, ten minutes later: the lifted review is refused.
         let b = job_at(&mut c, 600, 610);
         assert_not_this_job(&mut c, b, 620, &v);
-        // Documented residual (README): a job accepted within the skew of the
-        // review's created time can still take it; the replay guard then stops
-        // any second use.
+        // Documented residual (README, security L-3): any same-pack job still
+        // waiting for its review when the review is made (or accepted up to
+        // the skew after it) can take it, by any seller; the replay guard then
+        // stops any second use.
         let d = job_at(&mut c, 60, 70);
         submit_at(&mut c, d, 80, &v).unwrap();
         let e = job_at(&mut c, 61, 71);
