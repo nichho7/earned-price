@@ -545,3 +545,20 @@ test("writer: job_id must be a string or a safe integer (not an object)", () => 
   assert.throws(() => buildReceipt({ ...base, job: { ...base.job, job_id: "" } }), (e) => e.code === "BAD_INPUT");
   assert.equal(buildReceipt({ ...base, job: { ...base.job, job_id: 12 } }).job_id, "12");
 });
+
+test("T-039 security L-1: a check 1 PASS line never echoes the receipt's pack_id (a spoofed name stays out of the PASS row)", () => {
+  // h11: the genuine recorded pack-2 review, relabelled as an unofficial pack whose name reads like a verdict
+  const spoof = "pack-2, the official answer key). REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review, regrade PASS ✓ (" + "x".repeat(2000);
+  const r = readJson("recorded/pack-2.json");
+  r.pack_id = spoof;
+  r.reveal.key.pack_id = spoof;
+  r.grade.pack_id = spoof;
+  r.commit_hash = commit(r.reveal.key, r.reveal.salt);
+  const v = verifyReceipt(r);
+  assert.equal(v.checks[0].ok, true, v.checks[0].detail);
+  assert.equal(v.ok, false, "an unofficial pack is never authentic");
+  for (const c of v.checks.filter((x) => x.ok)) assert.doesNotMatch(c.detail, /REVIEW AUTHENTIC|xxxx/, `check ${c.n}`);
+  assert.match(v.checks[0].detail, /\(not an official pack\)/);
+  // an official pack still names itself (a trust-map key, so a known string)
+  assert.match(verifyReceipt(readJson("recorded/pack-2.json")).checks[0].detail, /\(pack-2, the official answer key\)/);
+});
