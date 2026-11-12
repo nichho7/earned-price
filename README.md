@@ -26,19 +26,23 @@ if they drift.
 
 ## Escrow contract: what is checked on-chain, and what is not
 
-A job runs on three fixed deadlines, all set when the buyer calls `create`
-(A-013): the seller must `accept` or `decline` within **2 minutes**, an accepted
+A job is for one official exam pack (`pack-1`, `pack-2` or `pack-3`), named
+when the buyer calls `create(seller, commit_hash, pack_id)` and public on the job
+from then on. It runs on three fixed deadlines, all set at `create` (A-013): the seller must `accept` or `decline` within **2 minutes**, an accepted
 seller must put its signed TEE review on-chain (`submit_review`) within
 **7 minutes**, and the buyer must reveal the answer key within **12 minutes**.
 An action is allowed up to and including its deadline; a timeout only after it.
 `get_job` returns a job only while it is `open` or `accepted`; once it closes it
 returns null, and the outcome is in the closing transaction's `EVENT_JSON` log.
 
-`submit_review` checks on-chain (ecrecover) that the review was signed by the
-`signing_address` the seller names, over the exact text
+`submit_review` checks on-chain that `request_sha256` is **the pinned review
+request for the job's pack** and `model` is the pinned reviewer (see "Public answer
+keys: what protects the grade" below), then (ecrecover) that the review was signed
+by the `signing_address` the seller names, over the exact text
 `<model>:<request_sha256>:<response_sha256>`, that this address is on the
 contract's **TEE signer allowlist** (A-012), that the same signed review
-(`request_sha256`) was never used for another job, and that the raw response body
+(`response_sha256`; every TEE call returns its own response body, with its own
+completion id) was never used for another job, and that the raw response body
 sent with it hashes to `response_sha256`. The contract does not store that body,
 but it stays public in the `submit_review` transaction's arguments, so a seller
 can't hide the findings the buyer needs to reveal. **The TEE attestation that
@@ -57,8 +61,9 @@ test fixtures as `grader/grade.js`). The findings are
 counts. Fewer, more than 10 findings (`too_many_findings`) or unreadable output
 (`malformed_finding`): the buyer is refunded and the fail counts. A key that
 doesn't match the commit, or a committed key that isn't a valid answer key, is
-rejected and nothing moves (a bad key is the buyer's fault, so the job then runs
-to the timeout that pays the seller). Reveal only after the review is on-chain:
+rejected and nothing moves, and so is a valid key for another pack than the
+job's (a bad key is the buyer's fault, so the job then runs to the timeout that
+pays the seller). Reveal only after the review is on-chain:
 a reveal transaction, even a rejected one, makes the key public.
 
 **Timeouts.** Anyone may call `timeout(job_id)` once the current stage's deadline
@@ -77,13 +82,16 @@ a new seller). **Sybil limit: each buyer account can raise a seller's quote at
 most once.** Three passes from the same buyer count as one; further passes from
 that buyer still show in `passes` but don't move the price. This stops one buyer
 from farming a price up with repeat jobs. **It does not stop a seller that runs
-its own buyer accounts.** The buyer commits the answer key, so a seller acting as
-its own buyer can pass every job, and the escrowed price is paid back to that
-same seller. The real cost per fake buyer is one testnet account, gas, and one
-signed TEE review. Seven fake buyers take a new seller's quote from 30 to the
-100 milliNEAR cap. This pass-farming risk is open in the threat model (security
-review MED-1, decision A-014, not yet decided). Fails are not deduplicated: every
-graded fail lowers the quote.
+its own buyer accounts.** The escrowed price is paid back to that same seller,
+and the buyer commits the answer key, so a fake buyer can commit any valid key
+for the pack (for example one keyed to what the reviewer is known to report).
+The real cost per fake buyer is one testnet account, gas, and one signed TEE
+review of the official request. Seven fake buyers take a new seller's quote from
+30 to the 100 milliNEAR cap. Since T-048 the review itself can't be gamed (the
+contract only accepts the pinned official request, so no key or extra text can
+reach the reviewer: that part of security review MED-1 is closed); farming
+through fake buyer accounts stays open in the threat model (decision A-014).
+Fails are not deduplicated: every graded fail lowers the quote.
 
 `earned quote <seller.testnet> [--offer 0.02]` reads `get_record` and `quote` at
 the same block, recomputes the formula in `cli/quote.js`, refuses to print a price
@@ -92,6 +100,38 @@ the formula can't explain, and prints the formula with its inputs (P =
 An offer below the 0.025 NEAR cost floor (or below the quote) is refused with the
 reason; the contract also rejects any `create` below the quote. Both the contract
 tests and `npm test` check the same vectors (`test-vectors/quote.json`).
+
+### Public answer keys: what protects the grade
+
+The answer keys are public (`packs/pack-*/answer-key.json`, in this repo and the
+npm package), on purpose (decision A-016): the buyer's machine needs the key to
+commit and reveal it, and each pack's tests name its bugs anyway. So secrecy
+protects nothing; three on-chain checks do:
+
+1. **The review request is pinned.** For each pack the contract holds the sha256
+   of the one request it accepts: `seller/review-prompt.js`
+   `buildReviewRequest(pack)` byte for byte (comment-stripped code, the fixed
+   prompt, the model, temperature 0). The NEAR AI TEE signs that hash as
+   `request_sha256`, so a review of any other request (the key pasted into the
+   prompt, a reworded prompt, another model, another pack's code) is refused by
+   `submit_review` before anything is stored. Check it yourself: the keyless view
+   `review_pins` returns `{prompt_version, model, packs: [{pack_id,
+   request_sha256}]}`, `test-vectors/review-pins.json` holds the same values, and
+   `npm test` recomputes them from the packs (`requestSha256(pack)` in
+   `seller/review-prompt.js`). The pins are constants of the deployed code: the
+   owner can't change them; new code (a new prompt version) changes them, and the
+   deploy smoke test checks the live pins against the repo.
+2. **The key can't change after the review.** The buyer commits
+   `sha256(u32_be(len K) || K || salt)` at `create` with a fresh 32-byte salt and
+   reveals only after the signed review is on-chain; the key must be for the
+   job's pack.
+3. **The grade is on-chain.** `reveal` grades the signed response's findings with
+   the on-chain grader; nobody can submit a verdict.
+
+What this does not stop: a seller paying for jobs from its own buyer accounts
+(the Sybil limit above), and a buyer committing a valid but wrong key for the
+pack to force a fail and get a free review (security review MED-2, decision
+A-014). The calibration runs (`packs/results/`) used exactly the pinned requests.
 
 ### Trust and owner powers
 
@@ -119,8 +159,9 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
   transfers. If the buyer deletes its account before one lands, that NEAR stays
   in the contract; there is no sweep method (a sweep would also give the owner
   power over escrow).
-- Every submitted review leaves one permanent 32-byte entry (the replay guard),
-  paid from the contract's balance (about 0.0008 NEAR each).
+- Every submitted review leaves one permanent 32-byte entry (the replay guard,
+  its `response_sha256`), paid from the contract's balance (about 0.0008 NEAR
+  each).
 - Each buyer's first pass for a seller leaves one permanent (seller, buyer) entry
   (the unique-buyer set), also paid from the contract's balance (up to about
   0.0018 NEAR each, no per-seller limit).
@@ -138,7 +179,7 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
 
 ## Layout
 
-- `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash), `accept`, `decline`, `submit_review` (on-chain signature + allowlist + replay check), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `owner` / `signers` / `add_signer` / `remove_signer`.
+- `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash for one official pack), `accept`, `decline`, `submit_review` (pinned request + on-chain signature + allowlist + replay check), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `review_pins` (the pinned request per pack, `contract/src/pins.rs`), `owner` / `signers` / `add_signer` / `remove_signer`.
 - `cli/`: the `earned` CLI (Node, ESM): `earned init` creates a throwaway testnet buyer account; `earned quote` prints a seller's record-driven quote. `cli/quote.js` is the shared, browser-safe quote module (CLI and website).
 - `grader/`: the commit-reveal code grader (`findingsFromResponse` reads a TEE response the same way the contract does).
 - `packs/`: exam bug packs 1-3 (Python, written from scratch, MIT), 5 planted bugs each, see "Exam packs" below.
@@ -170,7 +211,11 @@ and two cross-function bugs). Each pack folder holds the code under review, its 
   commits the key with a fresh 32-byte salt before the review runs, so the buyer can't change it
   later; that salt hides nothing from the seller. The honest review request holds only the
   comment-stripped code (never tests or keys); what stops a seller from adding the key to the
-  prompt is the contract pinning each pack's exact request hash (being added in T-048).
+  prompt is the contract pinning each pack's exact request hash (T-048, see "Public answer
+  keys: what protects the grade"). Changing a pack or the prompt moves those pins:
+  `node scripts/freeze-packs.mjs` rewrites `packs/index.json` and
+  `test-vectors/review-pins.json`, then `contract/src/pins.rs` must be updated (the Rust tests
+  fail until it is) and the contract redeployed.
 - Calibration runs (10 live reviews per pack, per-bug hit rates): `packs/results/`. Round 4
   (pack 3) was re-graded offline after the B4 key moved; its `summary.json` keeps the live
   verdict as history and adds the re-grade (same responses, same request bytes, no new calls).
@@ -213,7 +258,8 @@ differ from the deployed one.
 ```sh
 scripts/deploy.sh --dry-run   # build + checks, signs nothing
 scripts/deploy.sh             # deploy to earned-price.testnet, check the on-chain code_hash,
-                              # then smoke-call name, quote, get_record, create, get_job
+                              # then smoke-call name, quote, get_record, review_pins,
+                              # create, get_job
 ```
 
 Safety rails:
