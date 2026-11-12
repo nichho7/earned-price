@@ -1,6 +1,7 @@
 // Proves verify/receipt.js (+ nearai-verify.js, grade.js, @noble) runs unchanged in a real browser:
 // headless Chrome rebuilds, verifies and tamper-verifies the real T-003 receipt, matching Node.
 // Same Chrome rules as test/grader.browser.test.js: skips without Chrome unless REQUIRE_BROWSER=1/CI.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -11,7 +12,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tamperReceipt, verifyReceipt } from "../verify/receipt.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ALLOWED = ["/grader/", "/verify/", "/node_modules/@noble/hashes/", "/node_modules/@noble/curves/", "/test/browser/", "/test/fixtures/"];
 const TYPES = { ".js": "text/javascript", ".json": "application/json", ".html": "text/html" };
 const CHROME = [
@@ -44,9 +45,11 @@ test("verify/receipt.js runs in headless Chrome with the same results as Node", 
   const profile = mkdtempSync(join(tmpdir(), "receipt-chrome-"));
   try {
     const url = `http://127.0.0.1:${server.address().port}/test/browser/verify.html`;
+    // --use-mock-keychain: under a fresh user (T-041 clean-clone run, empty HOME) macOS Chrome waits on
+    // the login keychain and the page never prints; this flag skips it (ignored on Linux).
     const { stdout } = await promisify(execFile)(
       CHROME,
-      ["--headless=new", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`, "--virtual-time-budget=10000", "--dump-dom", url],
+      ["--headless=new", "--disable-gpu", "--no-first-run", "--use-mock-keychain", `--user-data-dir=${profile}`, "--virtual-time-budget=10000", "--dump-dom", url],
       { timeout: 45_000, maxBuffer: 20 * 1024 * 1024 },
     );
     const text = stdout.match(/<pre id="out">([\s\S]*?)<\/pre>/)?.[1] ?? "";

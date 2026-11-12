@@ -8,11 +8,12 @@
 //   - the seller pastes the public answer key into the prompt (the A-014 MED-1 exploit);
 //   - a different prompt text (what a PROMPT_VERSION bump produces);
 //   - the official prompt sent to another model.
+import { fileURLToPath } from "node:url";
 import { loadPack, readIndex } from "../packs/packs.js";
 import { sha256Hex } from "../grader/grade.js";
 import { PROMPT_VERSION, REVIEW_MODEL, buildReviewRequest, requestSha256 } from "../seller/review-prompt.js";
 
-export const PINS_FILE = new URL("../test-vectors/review-pins.json", import.meta.url).pathname;
+export const PINS_FILE = fileURLToPath(new URL("../test-vectors/review-pins.json", import.meta.url));
 
 /** The official request with its single user message rewritten by `edit(content)`. */
 function withContent(files, edit) {

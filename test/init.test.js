@@ -1,4 +1,5 @@
 // earned init (S-020 / T-014). All network calls are fakes: no account, faucet or tx is touched.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, statSync, chmodSync, writeFileSync, symlinkSync, existsSync } from "node:fs";
@@ -18,7 +19,7 @@ import { SPEND_CAP_YOCTO, SpendCapError, assertCanSpend, recordSpend } from "../
 
 const PRIV = "ed25519:FAKEPRIVATEKEYdoNotUseAnywhere1111111111111111111111111111111111";
 const PUB = "ed25519:FakePublicKey11111111111111111111111111111111";
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 function fakes({ exists = false, faucet = { status: { SuccessValue: "" }, transaction: { hash: "TXHASH1" } }, http = 200, rpcDown = false } = {}) {
   const calls = { faucet: [], view: 0, keyGen: 0 };

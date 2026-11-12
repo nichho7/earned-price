@@ -27,6 +27,7 @@ import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, defa
 import { STEP4_PACK, step4Report } from "./step4.js";
 import { REVEAL_GAS, TIMEOUT_GAS, TxError, parseTxOutcome } from "./tx.js";
 import { makeLocalSeller } from "./seller-local.js";
+import { fileURLToPath } from "node:url";
 import { readReceipt, writeReceipt } from "./receipt-file.js";
 import { loadPack as loadPackDefault } from "../packs/packs.js";
 import { findingsFromResponse, grade, sha256Hex } from "../grader/grade.js";
@@ -34,7 +35,7 @@ import { buildReceipt, printable, verifyReceipt } from "../verify/receipt.js";
 import { TRUST } from "../verify/trust-anchors.js";
 
 export const RECEIPTS_DIR_NAME = "receipts";
-export const RECORDED_DIR = new URL("../recorded/", import.meta.url).pathname; // past live runs (T-032)
+export const RECORDED_DIR = fileURLToPath(new URL("../recorded/", import.meta.url)); // past live runs (T-032); fileURLToPath, not .pathname (T-064 R-1)
 export const JOB_ID_RE = /^\d{1,20}$/;
 const U64_MAX = 2n ** 64n - 1n;
 export const POLL_MS = 2000; // view lag after a tx: final trails optimistic by a block or two

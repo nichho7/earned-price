@@ -1,5 +1,6 @@
 // T-027 seller review module (seller/review.js). Every test runs on recorded NEAR AI Cloud bodies
 // (packs/results/*/raw, spike/evidence/runs) through a mocked fetch: no live call, no key, no spend.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -11,7 +12,7 @@ import { REVIEW_MODEL, buildReviewRequest } from "../seller/review-prompt.js";
 import { ethAddress, verifyCompletionSignature } from "../verify/nearai-verify.js";
 import { NEAR_AI_BASE, ReviewError, readApiKey, reviewJob, teeReview } from "../seller/review.js";
 
-const repo = new URL("../", import.meta.url).pathname;
+const repo = fileURLToPath(new URL("../", import.meta.url));
 const readJson = (rel) => JSON.parse(readFileSync(repo + rel, "utf8"));
 const KEY = "sk-test-DO-NOT-LEAK-7f3a9c";
 const NONCE = "ab".repeat(32);

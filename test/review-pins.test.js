@@ -1,6 +1,7 @@
 // T-048 (A-016 = B): the escrow contract pins each official pack's exact review request. These
 // tests recompute the shared vector (test-vectors/review-pins.json) from the packs and the prompt
 // builder; contract/src/pins.rs is checked against the same file by `cargo test`.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -10,7 +11,7 @@ import { loadPack, readIndex } from "../packs/packs.js";
 import { PROMPT_VERSION, REVIEW_MODEL, buildReviewRequest, requestSha256 } from "../seller/review-prompt.js";
 import { PINS_FILE, buildReviewPins } from "../scripts/review-pins.mjs";
 
-const repo = new URL("..", import.meta.url).pathname;
+const repo = fileURLToPath(new URL("..", import.meta.url));
 const vector = JSON.parse(readFileSync(PINS_FILE, "utf8"));
 
 test("review-pins.json is exactly what the packs and prompt builder produce (regenerate on purpose only)", () => {
