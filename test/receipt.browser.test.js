@@ -45,9 +45,11 @@ test("verify/receipt.js runs in headless Chrome with the same results as Node", 
   const profile = mkdtempSync(join(tmpdir(), "receipt-chrome-"));
   try {
     const url = `http://127.0.0.1:${server.address().port}/test/browser/verify.html`;
+    // --use-mock-keychain: under a fresh user (T-041 clean-clone run, empty HOME) macOS Chrome waits on
+    // the login keychain and the page never prints; this flag skips it (ignored on Linux).
     const { stdout } = await promisify(execFile)(
       CHROME,
-      ["--headless=new", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`, "--virtual-time-budget=10000", "--dump-dom", url],
+      ["--headless=new", "--disable-gpu", "--no-first-run", "--use-mock-keychain", `--user-data-dir=${profile}`, "--virtual-time-budget=10000", "--dump-dom", url],
       { timeout: 45_000, maxBuffer: 20 * 1024 * 1024 },
     );
     const text = stdout.match(/<pre id="out">([\s\S]*?)<\/pre>/)?.[1] ?? "";
