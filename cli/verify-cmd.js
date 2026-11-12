@@ -15,7 +15,7 @@ const USAGE = "usage: earned verify <receipt.json> [--tamper] [--json]";
  * so escaping them as \uXXXX keeps the text valid JSON with the same value.
  */
 export const printableJson = (text) =>
-  text.replace(/[\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  text.replace(/[\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
 /** argv after "verify" -> { path, tamper, json }. */
 export function parseVerifyArgs(argv) {

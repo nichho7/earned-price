@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // `earned` CLI. Commands land story by story (S-020 init first).
 import { BRAND, CLI_BIN, CONTRACT_ACCOUNT, NETWORK } from "./names.js";
+import { errorLine } from "./errors.js";
 
 const args = process.argv.slice(2);
 const [cmd] = args;
@@ -21,7 +22,7 @@ if (cmd === "names") {
     await runInit({ ...deps, network });
   } catch (err) {
     // Errors never carry the private key (only the public key leaves the file).
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "init failed; retry `earned init`"}`);
+    console.error(errorLine(err, "init failed; retry `earned init`"));
     process.exitCode = 1;
   }
 } else if (cmd === "quote") {
@@ -29,7 +30,7 @@ if (cmd === "names") {
   try {
     await runQuote(parseQuoteArgs(args.slice(1)));
   } catch (err) {
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "quote failed; retry"}`);
+    console.error(errorLine(err, "quote failed; retry"));
     process.exitCode = 1;
   }
 } else if (cmd === "pick") {
@@ -40,7 +41,7 @@ if (cmd === "names") {
     await runPick({ ...deps, ...opts, seller: opts.seller ?? deps.seller, yes: opts.yes });
   } catch (err) {
     // Errors never carry the private key (pick redacts it from every message).
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "pick failed; check `earned pick` usage and retry"}`);
+    console.error(errorLine(err, "pick failed; check `earned pick` usage and retry"));
     process.exitCode = 1;
   }
 } else if (cmd === "hire") {
@@ -52,7 +53,7 @@ if (cmd === "names") {
     process.exitCode = r.pass ? 0 : 1;
   } catch (err) {
     // Errors never carry a private key (hire redacts the buyer key; the seller module its own keys).
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "hire failed; run `earned hire` again (it resumes from .earned/job.json)"}`);
+    console.error(errorLine(err, "hire failed; run `earned hire` again (it resumes from .earned/job.json)"));
     process.exitCode = 1;
   }
 } else if (cmd === "verify") {
@@ -61,7 +62,7 @@ if (cmd === "names") {
     const v = await runVerify(parseVerifyArgs(args.slice(1)));
     process.exitCode = v.ok ? 0 : 1;
   } catch (err) {
-    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "verify failed; check the receipt file"}`);
+    console.error(errorLine(err, "verify failed; check the receipt file"));
     process.exitCode = 2;
   }
 } else {

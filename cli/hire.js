@@ -17,13 +17,13 @@
 //   passed flag, and verifyReceipt ok. verify ok means AUTHENTIC, never PASSED (T-029 N-2).
 // - .earned/job.json ends with status exactly "closed" after settle, refund or timeout.
 // Network access and the seller are injected, so tests never touch testnet or NEAR AI.
-import { closeSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONTRACT_ACCOUNT, NETWORK } from "./names.js";
 import { RPC_RETRIES, RPC_URLS, assertTestnet, assertTestnetRpc, loadState, redact, saveState, stateDir } from "./init.js";
 import { formatNear } from "./spend-cap.js";
 import { YOCTO_PER_MNEAR, fetchQuote, formatMilli, viewFunction } from "./quote.js";
-import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, loadJob, reconcileCreate, releaseSpend, saveJob, sendCreateTx } from "./pick.js";
+import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, jobFilePath, loadJob, reconcileCreate, releaseSpend, saveJob, sendCreateTx } from "./pick.js";
 import { REVEAL_GAS, TIMEOUT_GAS, TxError, parseTxOutcome } from "./tx.js";
 import { makeLocalSeller } from "./seller-local.js";
 import { readReceipt, writeReceipt } from "./receipt-file.js";
@@ -42,6 +42,8 @@ export const WAIT_POLL_MS = 10_000; // while waiting for a stage deadline
 export const COUNTDOWN_EVERY_MS = 30_000;
 export const DEADLINE_MARGIN_MS = 3000; // our clock vs block time: timeout only after deadline + this
 export const TIMEOUT_TRIES = 4;
+export const LOOKUP_TRIES = 6; // a saved closing tx: looked up this many times (POLL_MS apart) before giving up
+const RESTART = Symbol("restart"); // the stage changed under a timeout: go round the main loop again
 const MAX_REVIEW_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_ROUNDS = 8; // stage changes per run: open -> accepted -> reviewed is 3
 const USAGE = "usage: earned hire [--local-seller]";
@@ -100,14 +102,17 @@ function writeJsonAtomic(file, value, mode = 0o644) {
   return file;
 }
 
-/** The full review result (request + response bodies, signature, attestation): no secret in it. */
+/**
+ * Saves a review result (request + response bodies, signature, attestation; no secret in it) as
+ * receipts/job-<id>.review-<first 16 hex of sha256(response)>.json. Keyed by the body's hash, so a
+ * second review in a later run never overwrites the body whose submit may have landed (review M-5).
+ */
 export function saveReviewFile(dir, jobId, review) {
-  return writeJsonAtomic(receiptPaths(dir, jobId).review, review);
+  const sha = sha256Hex(review.response_body);
+  return writeJsonAtomic(join(receiptPaths(dir, jobId).folder, `job-${assertJobId(jobId)}.review-${sha.slice(0, 16)}.json`), review);
 }
 
-/** The saved review result for this job, or null. A symlink, a huge or unreadable file counts as none. */
-export function loadReviewFile(dir, jobId) {
-  const file = receiptPaths(dir, jobId).review;
+function readReviewFile(file) {
   try {
     const st = lstatSync(file);
     if (!st.isFile() || st.size > MAX_REVIEW_FILE_BYTES) return null;
@@ -117,6 +122,25 @@ export function loadReviewFile(dir, jobId) {
     return null;
   }
 }
+
+/** Every saved review result for this job (keyed files and the one next to the receipt). Symlinks, huge or unreadable files are skipped. */
+export function loadReviewFiles(dir, jobId) {
+  const { folder } = receiptPaths(dir, jobId);
+  const name = new RegExp(`^job-${assertJobId(jobId)}\\.review(-[0-9a-f]{16})?\\.json$`);
+  let names = [];
+  try {
+    names = readdirSync(folder).filter((n) => name.test(n)).sort();
+  } catch {
+    return [];
+  }
+  return names.map((n) => readReviewFile(join(folder, n))).filter(Boolean);
+}
+
+/** The saved review whose response hashes to `sha` (hex), or null. */
+const reviewWithHash = (reviews, sha) => reviews.find((r) => typeof sha === "string" && sha256Hex(r.response_body) === sha.toLowerCase().replace(/^0x/, "")) ?? null;
+
+/** Closing tx hashes this job signed that may have landed (a definite refusal or not-sent is removed). */
+const pendingTxs = (job, kind) => [...new Set([...(Array.isArray(job[`${kind}_txs`]) ? job[`${kind}_txs`] : []), job[`${kind}_tx`]].filter((h) => typeof h === "string" && h !== ""))];
 
 const nsToMs = (ns) => Number(BigInt(ns) / 1_000_000n);
 const lc = (s) => (typeof s === "string" ? s.toLowerCase().replace(/^0x/, "") : null);
@@ -265,27 +289,24 @@ class Hire {
     }
     this.job = job;
     this.jobId = assertJobId(job.job_id);
-    this.key = JSON.parse(job.K);
+    try {
+      this.key = JSON.parse(job.K);
+    } catch {
+      throw new HireError("JOB_FILE_CORRUPT", "refused: the job file's sealed key is not JSON; nothing was sent");
+    }
     const packN = /^pack-([1-3])$/.exec(job.pack_id)?.[1];
     if (!packN) throw new HireError("JOB_FILE_CORRUPT", `refused: ${job.pack_id} is not an official pack`);
     this.pack = this.loadPack(packN);
-    this.review = loadReviewFile(this.dir, this.jobId);
+    this.reviews = loadReviewFiles(this.dir, this.jobId);
+    this.review = reviewWithHash(this.reviews, job.review_checked_sha256) ?? this.reviews.at(-1) ?? null;
     this.seller = this.d.makeSeller ? this.d.makeSeller({ accountId: job.seller, contractId: this.contractId, getJob: () => this.getJob(), say: (l) => this.say(l) }) : null;
 
     this.say(`Job ${this.jobId} (${job.pack_id}) on ${this.contractId}: ${formatNear(BigInt(job.price_yocto))} NEAR in escrow, seller ${job.seller}`);
 
-    // A closing tx sent by an earlier run whose result we never saw: look it up first.
-    for (const [status, field, kind] of [["revealing", "reveal_tx", "reveal"], ["timing_out", "timeout_tx", "timeout"]]) {
-      if (job.status !== status || !job[field] || !this.d.lookupTx) continue;
-      const o = await this.d.lookupTx({ txHash: job[field], accountId: this.state.account_id }).catch(() => null);
-      if (!o) continue;
-      const p = parseTxOutcome(o, this.contractId);
-      if (!p.failure) {
-        this.say(`Earlier ${kind} tx ${job[field]} landed`);
-        return this.finish(kind, p, null);
-      }
-      this.say(`Earlier ${kind} tx ${job[field]} was refused: ${p.failure}`);
-      this.save({ ...job, status: kind === "reveal" ? "reviewed" : "accepted" });
+    // Closing txs sent by an earlier run whose result we never saw: look them up first (M-1).
+    for (const kind of ["reveal", "timeout"]) {
+      const r = await this.resumeClosing(kind);
+      if (r) return r;
     }
 
     let sellerTried = false;
@@ -295,7 +316,11 @@ class Hire {
       if (!view) return this.closedUnseen();
       this.assertSameJob(view);
       this.say(stageLine(view, this.now()));
-      if (view.status === "accepted" && view.review != null) return this.revealStage(view);
+      if (view.status === "accepted" && view.review != null) {
+        const r = await this.revealStage(view);
+        if (r === RESTART) continue;
+        return r;
+      }
 
       if (this.seller && !sellerTried) {
         sellerTried = true;
@@ -306,12 +331,18 @@ class Hire {
           say: (l) => this.say(l),
           saveReview: (rv) => {
             saveReviewFile(this.dir, this.jobId, rv);
+            this.reviews.push(rv);
             this.review = rv;
           },
         });
         this.save({ ...this.job, txs: { ...(this.job.txs ?? {}), ...(r.txs ?? {}) } });
         if (r.mode === "replay") {
           this.say(`Seller could not review live (${r.reason}): ${r.message}`);
+          this.showRecorded();
+          replayShown = true;
+        } else if (r.submit === "refused" || r.submit === "not_sent") {
+          // No live review can land (L-3): fall back to the RECORDED replay, then wait out the stage.
+          this.say(`Seller's submit_review ${r.submit}${r.message ? `: ${r.message}` : ""}`);
           this.showRecorded();
           replayShown = true;
         } else {
@@ -327,16 +358,72 @@ class Hire {
       }
       // Otherwise the seller already ran (its review may still be landing): wait on the stage.
       const next = await this.waitForStage(view);
-      if (next.deadline) return this.timeoutStage(next.view);
+      if (next.deadline) {
+        const t = await this.timeoutStage(next.view);
+        if (t === RESTART) continue;
+        return t;
+      }
       if (next.closed) return this.closedUnseen();
     }
     throw new HireError("STUCK", `job ${this.jobId} changed stage too often in one run; run \`earned hire\` again`);
   }
 
+  /**
+   * Finishes from a closing tx (reveal or timeout) an earlier run signed but never saw land. Every
+   * saved hash is looked up, LOOKUP_TRIES times. Landed: finish from its events. All refused:
+   * forget them and carry on. Unknown while get_job is null: our tx probably closed the job, so
+   * throw CLOSE_TX_UNCONFIRMED and leave job.json as it is (never close it blind, never re-send).
+   */
+  async resumeClosing(kind) {
+    const status = kind === "reveal" ? "revealing" : "timing_out";
+    const hashes = pendingTxs(this.job, kind);
+    if (this.job.status !== status || hashes.length === 0) return null;
+    const refused = new Set();
+    for (let i = 0; i < LOOKUP_TRIES && this.d.lookupTx; i++) {
+      if (i > 0) await this.sleep(POLL_MS);
+      for (const h of hashes) {
+        if (refused.has(h)) continue;
+        const o = await this.d.lookupTx({ txHash: h, accountId: this.state.account_id }).catch(() => null);
+        if (!o) continue;
+        const p = parseTxOutcome(o, this.contractId);
+        if (!p.failure) {
+          this.say(`Earlier ${kind} tx ${h} landed`);
+          return this.finish(kind, p, null);
+        }
+        this.say(`Earlier ${kind} tx ${h} was refused: ${p.failure}`);
+        refused.add(h);
+      }
+      if (refused.size === hashes.length) break;
+    }
+    const left = hashes.filter((h) => !refused.has(h));
+    const back = kind === "reveal" ? "reviewed" : "accepted";
+    if (left.length === 0) {
+      this.save({ ...this.job, status: back, [`${kind}_tx`]: null, [`${kind}_txs`]: [] });
+      return null;
+    }
+    if ((await this.readLiveJob()) === null) throw this.closeTxUnconfirmed(kind, left);
+    // The job is still live, so none of them has landed yet; keep the hashes and carry on.
+    this.save({ ...this.job, status: back });
+    return null;
+  }
+
+  closeTxUnconfirmed(kind, hashes) {
+    return new HireError(
+      "CLOSE_TX_UNCONFIRMED",
+      `job ${this.jobId} is closed on-chain and your ${kind} tx ${hashes.join(", ")} is not visible on the RPC yet. Nothing was changed: run \`earned hire\` again in a minute to read its outcome (and write the receipt). Check ${EXPLORER}/txns/${hashes[0]}. Only if the explorer shows that tx never landed: move ${jobFilePath(this.dir)} into ${join(this.dir, "jobs")}/.`,
+    );
+  }
+
   assertSameJob(view) {
     const j = this.job;
-    const same = String(view.id) === this.jobId && view.buyer === this.state.account_id && view.seller === j.seller && view.pack_id === j.pack_id && lc(view.commit_hash) === lc(j.commit_hash);
-    if (!same) throw new HireError("JOB_MISMATCH", `refused: on-chain job ${this.jobId} is not the job in your job file (buyer, seller, pack or commit differ). Nothing was sent.`);
+    const same =
+      String(view.id) === this.jobId &&
+      view.buyer === this.state.account_id &&
+      view.seller === j.seller &&
+      view.pack_id === j.pack_id &&
+      lc(view.commit_hash) === lc(j.commit_hash) &&
+      String(view.price) === String(j.price_yocto);
+    if (!same) throw new HireError("JOB_MISMATCH", `refused: on-chain job ${this.jobId} is not the job in your job file (buyer, seller, pack, commit or price differ). Nothing was sent.`);
   }
 
   /** Polls until the stage changes or its deadline (+ margin) passes, printing a countdown. */
@@ -371,12 +458,23 @@ class Hire {
     const r = this.review;
     const c = view.review;
     if (!r || typeof r.response_body !== "string" || !r.tee || !c) return false;
+    const str = (o, k) => typeof o[k] === "string" && o[k] !== "";
+    if (!["model", "request_sha256", "response_sha256", "signing_address"].every((k) => str(c, k) && str(r.tee, k))) return false;
     const h = sha256Hex(r.response_body);
-    return h === lc(r.tee.response_sha256) && h === lc(c.response_sha256) && lc(r.tee.request_sha256) === lc(c.request_sha256) && lc(r.tee.signing_address) === lc(c.signing_address);
+    return (
+      h === lc(r.tee.response_sha256) &&
+      h === lc(c.response_sha256) &&
+      lc(r.tee.request_sha256) === lc(c.request_sha256) &&
+      lc(r.tee.signing_address) === lc(c.signing_address) &&
+      r.tee.model === c.model
+    );
   }
 
   async revealStage(view) {
     this.save({ ...this.job, status: "reviewed" });
+    // H-1: past reveal_deadline nothing can be revealed, so close it whatever review we hold.
+    if (this.now() > nsToMs(view.reveal_deadline_ns) + DEADLINE_MARGIN_MS) return this.timeoutStage(view);
+    this.review = reviewWithHash(this.reviews, view.review?.response_sha256) ?? this.review;
     if (!this.review) {
       throw new HireError(
         "REVIEW_BODY_MISSING",
@@ -386,7 +484,6 @@ class Hire {
     if (!this.reviewMatchesChain(view)) {
       throw new HireError("REVIEW_MISMATCH", "refused: the saved review does not hash to the response_sha256 the escrow stored for this job. No key was revealed and no receipt was written.");
     }
-    if (this.now() > nsToMs(view.reveal_deadline_ns) + DEADLINE_MARGIN_MS) return this.timeoutStage(view);
     // Remembered so a later run that only finds the landed reveal tx knows this exact body was checked.
     this.save({ ...this.job, review_checked_sha256: sha256Hex(this.review.response_body) });
 
@@ -400,19 +497,25 @@ class Hire {
     let outcome;
     try {
       outcome = await this.sendTx("reveal", { job_id: this.jobId, key: this.job.K, salt: this.job.salt, response: this.review.response_body }, REVEAL_GAS, (h) => {
-        this.save({ ...this.job, reveal_tx: h });
+        this.save({ ...this.job, reveal_tx: h, reveal_txs: [...pendingTxs(this.job, "reveal"), h] });
       });
     } catch (err) {
-      const why = String(err?.message ?? err).slice(0, 200);
+      const why = redact(String(err?.message ?? err), this.state).slice(0, 200);
       if (err?.notSent) {
-        this.save({ ...this.job, status: "reviewed", reveal_tx: null });
+        this.save({ ...this.job, status: "reviewed", ...this.dropTx("reveal", this.job.reveal_tx) });
         throw new HireError("REVEAL_NOT_SENT", `the reveal did not reach the chain (${why}). Nothing moved; run \`earned hire\` again before ${new Date(nsToMs(view.reveal_deadline_ns)).toISOString()}.`);
       }
       throw new HireError("REVEAL_UNCONFIRMED", `the reveal was sent but no result came back (${why}). ${this.job.reveal_tx ? `Its tx ${this.job.reveal_tx} is saved; ` : ""}run \`earned hire\` again to look it up.`);
     }
     const p = parseTxOutcome(outcome, this.contractId);
     if (p.failure) {
-      this.save({ ...this.job, status: "reviewed" });
+      const earlier = pendingTxs(this.job, "reveal").filter((h) => h !== p.txHash);
+      if (/no open job with that id/.test(p.failure) && earlier.length) {
+        // An earlier reveal of ours probably closed the job: keep its hash and look it up next run.
+        this.save({ ...this.job, status: "revealing", ...this.dropTx("reveal", p.txHash) });
+        throw this.closeTxUnconfirmed("reveal", earlier);
+      }
+      this.save({ ...this.job, status: "reviewed", ...this.dropTx("reveal", p.txHash) });
       throw new HireError(
         "REVEAL_REJECTED",
         `Reveal rejected: ${p.failure} (tx ${p.txHash}). Nothing moved. Without a valid reveal by ${new Date(nsToMs(view.reveal_deadline_ns)).toISOString()}, the signed review pays the seller.`,
@@ -431,11 +534,11 @@ class Hire {
       this.save({ ...this.job, status: "timing_out" });
       let outcome;
       try {
-        outcome = await this.sendTx("timeout", { job_id: this.jobId }, TIMEOUT_GAS, (h) => this.save({ ...this.job, timeout_tx: h }));
+        outcome = await this.sendTx("timeout", { job_id: this.jobId }, TIMEOUT_GAS, (h) => this.save({ ...this.job, timeout_tx: h, timeout_txs: [...pendingTxs(this.job, "timeout"), h] }));
       } catch (err) {
-        last = String(err?.message ?? err).slice(0, 200);
+        last = redact(String(err?.message ?? err), this.state).slice(0, 200);
         if (err?.notSent) {
-          this.save({ ...this.job, status: prior, timeout_tx: null });
+          this.save({ ...this.job, status: prior, ...this.dropTx("timeout", this.job.timeout_tx) });
           continue;
         }
         throw new HireError("TIMEOUT_UNCONFIRMED", `timeout was sent but no result came back (${last}). Run \`earned hire\` again to look it up.`);
@@ -443,32 +546,60 @@ class Hire {
       const p = parseTxOutcome(outcome, this.contractId);
       if (!p.failure) return this.finish("timeout", p, null);
       last = p.failure;
-      this.save({ ...this.job, status: prior, timeout_tx: null });
-      if (/has not passed yet/.test(p.failure)) continue; // block time is behind our clock
+      this.save({ ...this.job, status: prior, ...this.dropTx("timeout", p.txHash) });
+      if (/has not passed yet/.test(p.failure)) {
+        // Block time behind our clock, or the stage moved (a late-visible review, M-4): re-read first.
+        const v = await this.getJob().catch(() => null);
+        if (v && stageOf(v).key !== s.key) {
+          this.say(`  the job moved on (${stageOf(v).what}); not timing out`);
+          return RESTART;
+        }
+        continue;
+      }
       if (/no open job with that id/.test(p.failure)) return this.closedUnseen();
       break;
     }
     throw new HireError("TIMEOUT_REFUSED", `timeout(${this.jobId}) did not land: ${last}. Run \`earned hire\` again.`);
   }
 
+  /** Job fields after removing a closing tx hash that can no longer land (not sent, or refused). */
+  dropTx(kind, hash) {
+    const left = pendingTxs(this.job, kind).filter((h) => h !== hash);
+    return { [`${kind}_tx`]: left.at(-1) ?? null, [`${kind}_txs`]: left };
+  }
+
   /** The job is gone from get_job and we never saw its closing tx (another caller closed it). */
   closedUnseen() {
+    // One of ours may be the closing tx: never close blind over it (M-1 / sec L-2).
+    for (const kind of ["reveal", "timeout"]) {
+      const mine = pendingTxs(this.job, kind);
+      if (mine.length) throw this.closeTxUnconfirmed(kind, mine);
+    }
     this.save({ ...this.job, status: "closed", outcome: "closed_elsewhere" });
     this.say(`Job ${this.jobId} is closed on-chain (get_job returns null), but this CLI did not see the closing tx. Find the outcome at ${EXPLORER}/address/${this.contractId}.`);
+    this.say(`If it was a refund (decline or timeout), the ${formatNear(BigInt(this.job.price_yocto))} NEAR still counts against your 0.2 NEAR cap in this CLI.`);
     this.say("Job file closed; run `earned pick <1|2|3>` for a new job.");
     return { job: this.job, outcome: null, receiptPath: null, verify: null, pass: false };
   }
 
+  /**
+   * Prints and records a landed closing tx. Order (M-2): the job stays revealing / timing_out with
+   * its tx hash saved while the quote is read and the receipt written, so an interrupted run
+   * re-enters through resumeClosing and rebuilds them; only then is it marked closed, and only
+   * after that is a refund released from the spend cap (a crash between over-counts, never under).
+   */
   async finish(kind, p, before) {
     const outcome = outcomeOf(p.events, this.jobId, this.state.account_id);
     const txs = { ...(this.job.txs ?? {}), ...(this.job.create_tx ? { create: this.job.create_tx } : {}), [kind]: p.txHash };
-    // Closed first: whatever happens below, pick can start a new job.
-    this.save({ ...this.job, status: "closed", outcome: outcome?.kind ?? "unknown", closing_tx: p.txHash, txs });
-    if (outcome?.refundYocto) {
-      const amount = BigInt(outcome.refundYocto) < BigInt(this.job.price_yocto) ? outcome.refundYocto : this.job.price_yocto;
-      this.state = releaseSpend(this.state, amount);
-      saveState(this.dir, this.state);
-    }
+    const close = () => {
+      this.save({ ...this.job, status: "closed", outcome: outcome?.kind ?? "unknown", closing_tx: p.txHash, txs });
+      if (outcome?.refundYocto) {
+        const amount = BigInt(outcome.refundYocto) < BigInt(this.job.price_yocto) ? outcome.refundYocto : this.job.price_yocto;
+        this.state = releaseSpend(this.state, amount);
+        saveState(this.dir, this.state);
+      }
+    };
+    if (kind === "reveal") this.review = reviewWithHash(this.reviews, this.job.review_checked_sha256) ?? this.review;
 
     let regrade = null;
     if (outcome?.reveal && this.review) {
@@ -482,6 +613,7 @@ class Hire {
       this.say(`Grade (escrow): ${e.found}/${e.total} found (pass mark ${e.pass_min}) -> ${e.passed ? "PASS" : "FAIL"}${e.error ? ` (${e.error})` : ""}`);
     }
     if (!outcome) {
+      close();
       this.say(`The ${kind} tx ${p.txHash} landed, but it has no closing event for job ${this.jobId}; check ${EXPLORER}/txns/${p.txHash}`);
       return { job: this.job, outcome: null, receiptPath: null, verify: null, pass: false };
     }
@@ -497,6 +629,7 @@ class Hire {
     } else if (kind === "reveal") {
       this.say("No receipt: this CLI does not hold the live review that the escrow stored for this job.");
     }
+    close();
     const pass = outcome.kind === "settled" && regrade?.passed === true && v?.ok === true && v.checks?.[3]?.ok === true && v.checks[3].regrade?.passed === true;
     if (pass) this.say("SEE: step 3 PASS");
     else this.say("Job file closed; run `earned pick <1|2|3>` for a new job.");
@@ -505,7 +638,8 @@ class Hire {
 
   /** The quote after the close, from get_record. A graded close is waited for (the view lags). */
   async nextQuote(before, graded) {
-    const beforeText = formatMilli(Number(BigInt(this.job.price_yocto) / YOCTO_PER_MNEAR));
+    // The quote just before the close if we read it, else the price this job paid (L-2).
+    const beforeText = formatMilli(before ? before.quoteMilli : Number(BigInt(this.job.price_yocto) / YOCTO_PER_MNEAR));
     let after = null;
     for (let i = 0; i < VIEW_POLLS; i++) {
       try {
@@ -541,7 +675,7 @@ class Hire {
       txs: Object.fromEntries(Object.entries(txs).filter(([, h]) => typeof h === "string" && h !== "")),
     });
     const paths = receiptPaths(this.dir, this.jobId);
-    saveReviewFile(this.dir, this.jobId, this.review);
+    writeJsonAtomic(paths.review, this.review); // the checked review, next to the receipt
     writeReceipt(paths.receipt, receipt);
     const v = verifyReceipt(receipt, { trust: this.trust });
     this.say(`Receipt: ${paths.receipt}`);

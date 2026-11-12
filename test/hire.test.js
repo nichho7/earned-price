@@ -4,7 +4,7 @@
 // test key that only TEST_TRUST allowlists. Time is a fake clock moved by sleep().
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -22,6 +22,7 @@ import { YOCTO_PER_MNEAR } from "../cli/quote.js";
 import { REVEAL_GAS, TIMEOUT_GAS, parseTxOutcome } from "../cli/tx.js";
 import { makeLocalSeller, replayReason } from "../cli/seller-local.js";
 import { HireError, assertJobId, outcomeOf, parseHireArgs, receiptPaths, runHire, stageLine } from "../cli/hire.js";
+import { errorLine } from "../cli/errors.js";
 import { parseVerifyArgs, printableJson, runVerify } from "../cli/verify-cmd.js";
 
 const CONTRACT = "earned-price.testnet";
@@ -110,6 +111,7 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
     },
     sends: [],
     nullReads: 0, // get_job answers null this many times first (view lag)
+    hideReviewReads: 0, // get_job shows review: null this many times while a review is on-chain
     seq: 0,
   };
   const quoteOf = (r) => Math.min(100, Math.max(25, 30 + 10 * r.unique_buyers - 5 * r.fails));
@@ -136,16 +138,26 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
         chain.nullReads--;
         value = null;
       } else value = chain.job && args.id === chain.job.id ? chain.job : null;
+      if (value?.review && chain.hideReviewReads > 0) {
+        chain.hideReviewReads--;
+        value = { ...value, review: null };
+      }
     } else if (p.method_name === "get_record") value = chain.record;
     else if (p.method_name === "quote") value = (BigInt(quoteOf(chain.record)) * YOCTO_PER_MNEAR).toString();
     else if (p.method_name === "signers") value = [signer];
     else throw new Error(`unexpected view ${p.method_name}`);
     return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: "BLOCK1", block_height: 1, logs: [], result: bytes(value) } }) };
   };
+  chain.outcomes = {}; // every outcome by tx hash, as an RPC lookup would return it
   chain.sendTx = async (req) => {
     chain.sends.push(req);
     const hash = `${req.methodName}Tx${++chain.seq}`;
     await req.onSigned?.(hash);
+    const o = await applyTx(req, hash);
+    chain.outcomes[hash] = o;
+    return o;
+  };
+  const applyTx = async (req, hash) => {
     if (chain.beforeSend) {
       const r = await chain.beforeSend(req, hash);
       if (r) return r;
@@ -162,6 +174,7 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
     }
     if (req.methodName === "submit_review") {
       const a = req.args;
+      if (j.review) return fail(hash, "Earned Price: a review was already submitted for this job", who);
       j.review = { model: a.model, request_sha256: a.request_sha256, response_sha256: a.response_sha256, signed_text: `${a.model}:${a.request_sha256}:${a.response_sha256}`, signature: a.signature, signing_address: a.signing_address };
       return ok(hash, null, [[ev("submit_review", { job_id: j.id, seller: j.seller })]], who);
     }
@@ -379,7 +392,7 @@ test("replay: the TEE is down after accept -> RECORDED run shown (never a receip
 // --- hash mismatch refusal ----------------------------------------------------------------------
 
 test("hash mismatch: the saved review is not the one the escrow stored -> REVIEW_MISMATCH, no reveal, no receipt", async () => {
-  const { dir, chain, clock, deps } = setup();
+  const { dir, chain, deps } = setup();
   const saved = reviewResult(PASS_BODY);
   const other = reviewResult(FAIL_BODY);
   // A seller that saves one review but submits another (or a stale review file).
@@ -391,7 +404,6 @@ test("hash mismatch: the saved review is not the one the escrow stored -> REVIEW
       return { mode: "live", review: saved, txs: {}, submit: "landed" };
     },
   });
-  void clock;
   await assert.rejects(runHire({ ...deps, makeSeller }), { code: "REVIEW_MISMATCH" });
   assert.ok(!chain.sends.some((s) => s.methodName === "reveal"), "the key is never revealed");
   assert.ok(!existsSync(receiptPaths(dir, "7").receipt));
@@ -451,7 +463,8 @@ test("resume: a review file swapped after the checked reveal gets no receipt", a
   await assert.rejects(runHire({ ...deps, makeSeller: localSellerWith(chain, clock, async ({ job }) => reviewResult(PASS_BODY, String(job.id))) }), { code: "REVEAL_UNCONFIRMED" });
   chain.beforeSend = null;
   const landed = await chain.sendTx({ state: { account_id: BUYER }, methodName: "reveal", args: chain.sends[2].args });
-  writeFileSync(receiptPaths(dir, "7").review, JSON.stringify(reviewResult(FAIL_BODY)));
+  const folder = receiptPaths(dir, "7").folder;
+  for (const n of readdirSync(folder)) if (n.includes(".review")) writeFileSync(join(folder, n), JSON.stringify(reviewResult(FAIL_BODY)));
   lines.length = 0;
   const r = await runHire({ ...deps, lookupTx: async () => landed });
   assert.equal(r.receiptPath, null);
@@ -632,4 +645,250 @@ test("verify --json (T-029 N-1): C1 and bidi characters are escaped and the outp
   const got = [];
   await runVerify({ ...parseVerifyArgs([file, "--json"]), out: (l) => got.push(l) });
   assert.equal(typeof JSON.parse(got.join("")).verdict, "string");
+});
+
+// --- review fix round (t031-code.md, t031-security.md) --------------------------------------------
+
+const liveSeller = (chain, clock, body = PASS_BODY) => localSellerWith(chain, clock, async ({ job }) => reviewResult(body, String(job.id)));
+
+/** A seller that accepts, saves `saved` and submits `submitted` (a stale or swapped review file). */
+const swappingSeller = (chain, saved, submitted) => () => ({
+  async review({ saveReview }) {
+    await chain.sendTx({ state: { account_id: DEMO_SELLER }, methodName: "accept", args: { job_id: "7" } });
+    if (saved) saveReview(saved);
+    await chain.sendTx({ state: { account_id: DEMO_SELLER }, methodName: "submit_review", args: submitted.submit_args });
+    return { mode: "live", review: saved, txs: {}, submit: "landed" };
+  },
+});
+
+test("H-1: a mismatched review past reveal_deadline still closes: timeout pays the seller, no reveal, job closed", async () => {
+  const { dir, chain, clock, deps } = setup();
+  await assert.rejects(runHire({ ...deps, makeSeller: swappingSeller(chain, reviewResult(PASS_BODY), reviewResult(FAIL_BODY)) }), { code: "REVIEW_MISMATCH" });
+  clock.t = T0 + 60 * MIN;
+  const r = await runHire(deps);
+  assert.equal(r.outcome.kind, "timeout_paid_seller");
+  assert.ok(!chain.sends.some((x) => x.methodName === "reveal"));
+  assert.equal(loadJob(dir).status, "closed");
+  assert.ok(!existsSync(receiptPaths(dir, "7").receipt));
+});
+
+test("H-1: an on-chain review with no local body past reveal_deadline still closes (timeout pays the seller)", async () => {
+  const { dir, chain, clock, deps } = setup();
+  await assert.rejects(runHire({ ...deps, makeSeller: swappingSeller(chain, null, reviewResult(PASS_BODY)) }), { code: "REVIEW_BODY_MISSING" });
+  clock.t = T0 + 60 * MIN;
+  const r = await runHire(deps);
+  assert.equal(r.outcome.kind, "timeout_paid_seller");
+  assert.equal(loadJob(dir).status, "closed");
+});
+
+/** Run 1: the reveal lands on-chain but no result comes back (REVEAL_UNCONFIRMED). Returns the landed outcome. */
+async function revealLandsUnseen({ chain, clock, deps }) {
+  const real = chain.sendTx;
+  let landed = null;
+  let stale = null;
+  chain.sendTx = async (req) => {
+    if (req.methodName === "reveal") stale = structuredClone(chain.job);
+    const o = await real(req);
+    if (req.methodName !== "reveal") return o;
+    landed = o;
+    throw new Error("socket hang up");
+  };
+  await assert.rejects(runHire({ ...deps, sendTx: chain.sendTx, makeSeller: liveSeller(chain, clock) }), { code: "REVEAL_UNCONFIRMED" });
+  chain.sendTx = real;
+  revealLandsUnseen.stale = stale;
+  return landed;
+}
+
+test("M-1: lookup fails while a lagging RPC still shows the job, then it reads null -> still CLOSE_TX_UNCONFIRMED, never closed_elsewhere", async () => {
+  const ctx = setup();
+  const { dir, chain, deps } = ctx;
+  await revealLandsUnseen(ctx);
+  const stale = revealLandsUnseen.stale;
+  let staleReads = 1;
+  const realFetch = chain.fetch;
+  const lagging = async (url, init) => {
+    const p = JSON.parse(init.body).params;
+    if (p.method_name === "get_job" && staleReads-- > 0) return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: "B", block_height: 1, logs: [], result: bytes(stale) } }) };
+    return realFetch(url, init);
+  };
+  await assert.rejects(runHire({ ...deps, fetch: lagging, lookupTx: async () => null }), { code: "CLOSE_TX_UNCONFIRMED" });
+  assert.notEqual(loadJob(dir).status, "closed");
+  assert.equal(loadJob(dir).reveal_tx, "revealTx3", "the landed hash is kept");
+  assert.equal(chain.sends.filter((x) => x.methodName === "reveal").length, 1);
+});
+
+test("M-1 / sec L-2 PoC: reveal landed but the lookup fails -> CLOSE_TX_UNCONFIRMED, job.json untouched, no second reveal; later lookup gives the receipt", async () => {
+  const ctx = setup();
+  const { dir, chain, deps, lines } = ctx;
+  const landed = await revealLandsUnseen(ctx);
+  const before = readFileSync(join(dir, "job.json"), "utf8");
+  await assert.rejects(runHire({ ...deps, lookupTx: async () => null }), { code: "CLOSE_TX_UNCONFIRMED" });
+  assert.equal(readFileSync(join(dir, "job.json"), "utf8"), before, "job file unchanged");
+  assert.equal(chain.sends.filter((x) => x.methodName === "reveal").length, 1, "never a second reveal");
+  // RPC catches up: null twice, then the outcome.
+  let n = 0;
+  lines.length = 0;
+  const r = await runHire({ ...deps, lookupTx: async () => (++n > 2 ? landed : null) });
+  assert.equal(r.pass, true);
+  assert.ok(existsSync(receiptPaths(dir, "7").receipt));
+  assert.equal(loadJob(dir).status, "closed");
+});
+
+test("M-2: interrupted after the reveal landed but before the receipt -> job not closed; the next run writes the receipt", async () => {
+  const { dir, chain, clock, deps } = setup();
+  const crashOut = (l) => {
+    if (l.startsWith("Next quote")) throw new Error("killed");
+  };
+  await assert.rejects(runHire({ ...deps, out: crashOut, makeSeller: liveSeller(chain, clock) }), /killed/);
+  const mid = loadJob(dir);
+  assert.equal(mid.status, "revealing", "still resumable, not closed");
+  assert.ok(!existsSync(receiptPaths(dir, "7").receipt));
+  const revealTx = mid.reveal_tx;
+  const r = await runHire({ ...deps, lookupTx: async ({ txHash }) => (txHash === revealTx ? chain.outcomes[revealTx] : null) });
+  assert.equal(r.pass, true);
+  assert.ok(existsSync(receiptPaths(dir, "7").receipt));
+  assert.equal(loadJob(dir).status, "closed");
+});
+
+test("M-3 / N-2: settled + authentic regrade PASS but the signer is not in the trust anchors -> verify not ok, no SEE PASS", async () => {
+  const { chain, clock, deps, lines } = setup();
+  const r = await runHire({ ...deps, trust: TRUST, makeSeller: liveSeller(chain, clock) });
+  assert.equal(r.outcome.kind, "settled");
+  assert.equal(r.verify.ok, false);
+  assert.equal(r.pass, false);
+  assert.ok(!text(lines).includes("SEE: step 3 PASS"));
+});
+
+test("M-3: escrow event says pass + payout but our regrade fails -> warning, no SEE PASS", async () => {
+  const { chain, clock, deps, lines } = setup();
+  chain.beforeSend = async (req, hash) => {
+    if (req.methodName !== "reveal") return null;
+    const j = chain.job;
+    chain.job = null;
+    const base = { job_id: j.id, buyer: j.buyer, seller: j.seller };
+    const ev = (event, data) => `EVENT_JSON:${JSON.stringify({ standard: "earned_price", event, data })}`;
+    return { status: { SuccessValue: b64("true") }, transaction: { hash }, receipts_outcome: [{ outcome: { executor_id: CONTRACT, logs: [ev("reveal", { ...base, found: 5, total: 5, pass_min: 4, passed: true, outcome: "pass" }), ev("payout", { ...base, amount: j.price, kind: "settle" })] } }] };
+  };
+  const r = await runHire({ ...deps, makeSeller: liveSeller(chain, clock, FAIL_BODY) });
+  assert.equal(r.outcome.kind, "settled");
+  assert.equal(r.verify.ok, true);
+  assert.equal(r.pass, false);
+  assert.match(text(lines), /WARNING: the escrow graded 5\/5 \(pass\); this CLI's regrade differs/);
+  assert.ok(!text(lines).includes("SEE: step 3 PASS"));
+});
+
+test("M-3: a checked review whose reveal was refused, then closed by timeout -> no receipt (receipts only after a landed reveal)", async () => {
+  const { dir, chain, clock, deps } = setup();
+  let refuse = true;
+  chain.beforeSend = async (req, hash) => {
+    if (req.methodName !== "reveal" || !refuse) return null;
+    refuse = false;
+    return { status: { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: Earned Price: the reveal deadline has passed. No funds moved." } } } } }, transaction: { hash }, receipts_outcome: [] };
+  };
+  await assert.rejects(runHire({ ...deps, makeSeller: liveSeller(chain, clock) }), { code: "REVEAL_REJECTED" });
+  assert.equal(typeof loadJob(dir).review_checked_sha256, "string");
+  clock.t = T0 + 60 * MIN;
+  const r = await runHire(deps);
+  assert.equal(r.outcome.kind, "timeout_paid_seller");
+  assert.equal(r.receiptPath, null);
+  assert.ok(!existsSync(receiptPaths(dir, "7").receipt));
+});
+
+for (const [field, value] of [["request_sha256", "11".repeat(32)], ["response_sha256", "22".repeat(32)], ["signing_address", "0x" + "33".repeat(20)], ["model", "other/model"], ["request_sha256", undefined]]) {
+  test(`M-3 / L-4: saved review with a different tee.${field}${value === undefined ? " (missing)" : ""} -> REVIEW_MISMATCH, no reveal`, async () => {
+    const { chain, deps } = setup();
+    const real = reviewResult(PASS_BODY);
+    const saved = structuredClone(real);
+    if (value === undefined) delete saved.tee[field];
+    else saved.tee[field] = value;
+    await assert.rejects(runHire({ ...deps, makeSeller: swappingSeller(chain, saved, real) }), { code: "REVIEW_MISMATCH" });
+    assert.ok(!chain.sends.some((x) => x.methodName === "reveal"));
+  });
+}
+
+for (const [field, value] of [["buyer", "someone-else.testnet"], ["price", (40n * YOCTO_PER_MNEAR).toString()]]) {
+  test(`M-3 / L-6: on-chain ${field} differs from the job file -> JOB_MISMATCH, nothing sent`, async () => {
+    const { chain, deps } = setup();
+    chain.job[field] = value;
+    await assert.rejects(runHire(deps), { code: "JOB_MISMATCH" });
+    assert.equal(chain.sends.length, 0);
+  });
+}
+
+test("M-3: outcomeOf never credits a refund to another buyer; the release is capped at the price", async () => {
+  const ev = (event, data) => ({ event, data });
+  const events = [ev("timeout", { job_id: "7", reason: "not_accepted" }), ev("refund", { job_id: "7", buyer: "other.testnet", amount: "30" })];
+  assert.equal(outcomeOf(events, "7", BUYER).refundYocto, null);
+  const { dir, chain, deps } = setup({ spent: (50n * YOCTO_PER_MNEAR).toString() });
+  chain.beforeSend = async (req, hash) => {
+    if (req.methodName !== "timeout" || req.state.account_id !== BUYER) return null;
+    chain.job = null;
+    const e = (event, data) => `EVENT_JSON:${JSON.stringify({ standard: "earned_price", event, data })}`;
+    return { status: { SuccessValue: b64("false") }, transaction: { hash }, receipts_outcome: [{ outcome: { executor_id: CONTRACT, logs: [e("timeout", { job_id: "7", reason: "not_accepted" }), e("refund", { job_id: "7", buyer: BUYER, amount: (40n * YOCTO_PER_MNEAR).toString() })] } }] };
+  };
+  await runHire(deps);
+  assert.equal(loadState(dir).spent_yocto, (20n * YOCTO_PER_MNEAR).toString(), "released 30 (the price), not 40");
+});
+
+test("M-3: timeout is only sent after the stage deadline plus the clock margin", async () => {
+  const { chain, clock, deps } = setup();
+  let sentAt = null;
+  chain.beforeSend = async (req) => {
+    if (req.methodName === "timeout" && sentAt === null) sentAt = clock.t;
+  };
+  await runHire(deps);
+  assert.ok(sentAt > T0 + 2 * MIN + 3000, `sent at +${sentAt - T0} ms`);
+});
+
+test("M-4 PoC: review landed before review_by but showed late -> refused timeout re-reads get_job and reveals (pass)", async () => {
+  const { chain, clock, deps } = setup();
+  chain.hideReviewReads = 1e9;
+  chain.beforeSend = async (req) => {
+    if (req.methodName === "timeout") chain.hideReviewReads = 0; // the view catches up
+  };
+  const r = await runHire({ ...deps, makeSeller: liveSeller(chain, clock) });
+  assert.deepEqual(chain.sends.map((x) => x.methodName), ["accept", "submit_review", "timeout", "reveal"]);
+  assert.equal(r.pass, true);
+});
+
+test("M-5: a second review in a later run never overwrites the body whose submit landed; reveal uses the on-chain one", async () => {
+  const { dir, chain, clock, deps } = setup();
+  // Run 1: R1 submitted (it landed) but the result is lost and the run dies.
+  const real = chain.sendTx;
+  chain.sendTx = async (req) => {
+    const o = await real(req);
+    if (req.methodName === "submit_review") throw new Error("socket hang up");
+    return o;
+  };
+  const dieOn = (l) => {
+    if (/submit_review unknown/.test(l)) throw new Error("killed");
+  };
+  await assert.rejects(runHire({ ...deps, sendTx: chain.sendTx, out: dieOn, makeSeller: localSellerWith(chain, clock, async () => reviewResult(PASS_BODY)) }), /killed/);
+  chain.sendTx = real;
+  // Run 2: the view still hides the review, so the seller reviews again (R2), and its submit is refused.
+  chain.hideReviewReads = 3;
+  const r = await runHire({ ...deps, makeSeller: localSellerWith(chain, clock, async () => reviewResult(FAIL_BODY)) });
+  assert.equal(r.pass, true);
+  const receipt = JSON.parse(readFileSync(receiptPaths(dir, "7").receipt, "utf8"));
+  assert.equal(receipt.tee.response_body, PASS_BODY);
+  assert.equal(readdirSync(receiptPaths(dir, "7").folder).filter((n) => /review-[0-9a-f]{16}\.json$/.test(n)).length, 2);
+});
+
+test("sec L-1 PoC: the error line escapes terminal control bytes and cuts key-shaped text", async () => {
+  const { chain, clock, deps } = setup();
+  chain.beforeSend = async (req, hash) => {
+    if (req.methodName !== "reveal") return null;
+    return { status: { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: x\x1b[2J\x1b[H\x1b[32mSEE: step 3 PASS\x1b[8m" } } } } }, transaction: { hash }, receipts_outcome: [] };
+  };
+  const err = await runHire({ ...deps, makeSeller: liveSeller(chain, clock) }).catch((e) => e);
+  assert.equal(err.code, "REVEAL_REJECTED");
+  const line = errorLine(err, "x");
+  assert.ok(!line.includes("\x1b"), line);
+  assert.match(line, /\\u001b\[2J/);
+  const secret = "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi3vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"; // base58, private-key length
+  const leak = errorLine(Object.assign(new Error(`rpc said \x1b]0;pwned\x1b\\ key ed25519:${secret}`), { code: "REVEAL_NOT_SENT" }), "x");
+  assert.ok(!leak.includes("\x1b"));
+  assert.ok(!leak.includes(secret) && leak.includes("ed25519:[redacted]"), leak);
+  assert.match(errorLine(Object.assign(new Error("pk ed25519:4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"), { code: "X" }), ""), /4vJ9JU1b/, "public keys are kept");
+  assert.equal(errorLine(new Error("boom"), "hire failed"), "error UNEXPECTED: hire failed");
 });
