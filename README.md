@@ -145,19 +145,19 @@ protects nothing; four on-chain checks do:
 4. **The grade is on-chain.** `reveal` grades the signed response's findings with
    the on-chain grader; nobody can submit a verdict.
 
-What this does not stop: a seller paying for jobs from its own buyer accounts
-(the Sybil limit above); a buyer committing a valid but wrong key for the pack
-to force a fail and get a free review (security review MED-2, decision A-014);
-and, because a signed review names no job or seller, reuse on open jobs: a
-signed review can land on any job for the same pack, by any seller, that is
-waiting for its review when the review is made (accepted up to about 7 minutes
-before it, or up to 2 minutes after), once only (the replay guard burns each
-signed response on first use). A seller can also call the TEE more than once
-after accepting and submit the best response (low uplift: calibration passed
-10/10 at temperature 0). Each pin is the request a calibration
-round actually measured (`packs/results/`): pack-1 rounds 1 and 3, pack-2 round
-1, pack-3 round 4. Pack-3 rounds 1 and 2 used older requests that predate the
-final pack-3 (`npm test` checks this list).
+What this does not stop (summed up in "Threat model and known limits" below): a
+seller paying for jobs from its own buyer accounts (the Sybil limit above); a
+buyer committing a valid but wrong key for the pack to force a fail and get a
+free review (security review MED-2, decision A-014); and, because a signed
+review names no job or seller, reuse on open jobs: a signed review can land on
+any job for the same pack, by any seller, that is waiting for its review when
+the review is made (accepted up to about 7 minutes before it, or up to 2 minutes
+after), once only (the replay guard burns each signed response on first use). A
+seller can also call the TEE more than once after accepting and submit the best
+response (low uplift: calibration passed 10/10 at temperature 0). Each pin is
+the request a calibration round actually measured (`packs/results/`): pack-1
+rounds 1 and 3, pack-2 round 1, pack-3 round 4. Pack-3 rounds 1 and 2 used older
+requests that predate the final pack-3 (`npm test` checks this list).
 
 ### Trust and owner powers
 
@@ -180,7 +180,63 @@ Until we do, trusting the escrow means trusting the key holder (us): this is a
 hackathon trust assumption, testnet only. You can check what code is live by
 comparing the account's code hash with the sha256 of a wasm you build yourself.
 
-### Known limits
+### Threat model and known limits
+
+Testnet only, hackathon build. These are the gaps we know about and have chosen
+to ship with, in plain words, each with what it costs and what would fix it.
+
+- **A buyer can force a fail and get a free signed review** (security review
+  MED-2 / X-1, decision A-014). `reveal` accepts any valid answer key for the
+  job's pack, not only the official one (a seller's own fake buyer can use the
+  same gap to force a pass; see the Sybil limit above). A buyer can commit a
+  well-formed key with the wrong bug lines: the honest review then grades as a
+  fail, the buyer is refunded and keeps the signed review, and the seller takes
+  a fail (its quote drops by up to 5 milliNEAR, never below the 25 floor). The
+  bogus key is public in the reveal transaction, and `earned verify` check 1
+  fails any receipt whose key is not the official key (`verify/trust-anchors.js`
+  holds its hash). *Roadmap:* pin each pack's official key hash in the contract,
+  so `reveal` refuses any other key.
+- **A signed review can land once on another job, and a seller can re-roll**
+  (T-048 residual, T-048 security re-check L-3). A signed review names no job or
+  seller, so it can land once on any same-pack job, by any seller, that is
+  waiting for its review when the review is made (accepted up to about 7 minutes
+  before it, or up to 2 minutes after); the replay guard refuses it after that.
+  A seller can also call the TEE more than once after accepting and submit the
+  best response (low uplift: calibration passed 10/10 at temperature 0).
+  *Roadmap:* bind the job id (and seller) into the signed review request and
+  check it on-chain; that closes reuse across jobs, though repeat calls on one
+  job would still be possible.
+- **Attestation is checked for binding only.** `earned verify` check 3 confirms
+  the TDX quotes carry the signer and nonce. It does not verify the Intel DCAP
+  quote signature, the NVIDIA GPU evidence (NRAS) or the image measurements, so
+  it can't tell a genuine NEAR AI enclave from edited quote bytes; the contract
+  trusts an owner-managed signer allowlist instead (see "Trust and owner
+  powers"). Until those checks land, check the quote with NEAR AI's verifier
+  or TEE Explorer. *Roadmap:* full DCAP, NRAS and measurement checks after the
+  hackathon.
+- **"Authentic" is not "passed".** `REVIEW AUTHENTIC (offline)` means a genuine
+  signed review of the official request, graded against the official key; a
+  review that failed is just as authentic. Check 4's PASS means our regrade
+  matches the receipt, not that the seller passed: read the regrade. The verdict
+  ends `regrade PASS` or `regrade FAIL`, and check 4 shows `n/5 found, passed`
+  or `failed` (pass mark 4/5), or `fixed fail` for a malformed review. Payment
+  and every other chain fact are not proven offline; check `txs.reveal` on the
+  explorer.
+- **You trust the RPC you read from.** The CLI reads quotes, jobs and outcomes
+  from one public testnet RPC at a time (`test.rpc.fastnear.com`, then
+  `rpc.testnet.near.org`, or your `EARNED_RPC_URL`) and does not cross-check
+  them or verify proofs. A faulty or hostile RPC could show a wrong quote, job
+  state or outcome, or drop a transaction you send. It can't move escrowed NEAR
+  or forge a TEE signature: the contract enforces price, deadlines and grade,
+  and offline verify checks the signature against its own trust anchors. For
+  anything that matters, check the transaction on the testnet explorer or point
+  `EARNED_RPC_URL` at an RPC you trust.
+- **Fake buyers and the key holder.** A seller paying for jobs from its own buyer
+  accounts can farm its quote up (see the Sybil limit above, A-014), and whoever
+  holds the contract account's full-access key can deploy new code (see "Trust
+  and owner powers").
+
+Other limits:
 
 - Refunds of excess deposits and refunds to the buyer are fire-and-forget
   transfers. If the buyer deletes its account before one lands, that NEAR stays
@@ -202,10 +258,6 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
   the security review's sandbox run. A reveal that runs out of gas is simply
   rejected, and if no valid reveal lands by the deadline the timeout pays the
   seller, so clients (CLI, site) must always attach 300 Tgas, the maximum.
-- Signer trust is an allowlist, not on-chain attestation (see above).
-- Attestation: nonce + signer binding only. No Intel DCAP quote verification, no
-  NVIDIA NRAS check and no measurement pinning, so `earned verify` check 3 can't
-  tell a genuine NEAR AI enclave from edited quote bytes.
 - The reference seller retries a malformed review (or one with more than 10
   findings) once: it discards that signed review and asks the TEE again. Only if
   the retry is also malformed (or fails, or there is no time left) does a signed
@@ -292,7 +344,8 @@ The checks: 1 commit hash matches the revealed key, and the key is the pack's
 official answer key; 2 TEE signature covers this review: the model is the pinned
 review model, the signer is on the escrow's deploy-time allowlist
 (`contract/tee-signers.json`), and the request is the pack's pinned request;
-3 attestation binds the signer and nonce (binding only, see "Known limits");
+3 attestation binds the signer and nonce (binding only, see "Threat model and
+known limits");
 4 regrade gives the same score. Offline verify trusts only the code and
 `verify/trust-anchors.js`, never a value the receipt names itself.
 
