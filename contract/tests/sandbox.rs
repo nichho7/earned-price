@@ -78,8 +78,9 @@ fn commit_vector() -> (String, String, String) {
 
 /// A TEE-shaped response body whose findings hit the first `hits` pack-1 bugs
 /// (5 = PASS, fewer than 4 = FAIL). `id` is the completion id: every real TEE
-/// call returns its own, which is what the replay guard keys on.
-fn pack1_body(hits: usize, id: &str) -> String {
+/// call returns its own, which is what the replay guard keys on. `created` is
+/// the TEE's clock in whole seconds; it must fall in the job's window (M-1).
+fn pack1_body_at(hits: usize, id: &str, created: u64) -> String {
     let key: Value = serde_json::from_str(PACK1_KEY).unwrap();
     let findings: Vec<Value> = key["bugs"].as_array().unwrap()[..hits]
         .iter()
@@ -89,10 +90,27 @@ fn pack1_body(hits: usize, id: &str) -> String {
     serde_json::to_string(&json!({
         "id": format!("chatcmpl-{id}"),
         "object": "chat.completion",
+        "created": created,
         "choices": [{ "index": 0, "message": { "role": "assistant", "content": content }, "finish_reason": "stop" }],
         "model": pins::REVIEW_MODEL,
     }))
     .unwrap()
+}
+
+/// Sandbox block time now, in whole seconds (what a TEE call made now would sign).
+async fn now_s(w: &Worker<Sandbox>) -> u64 {
+    w.view_block().await.unwrap().timestamp() / 1_000_000_000
+}
+
+/// `body` with its top-level `created` removed.
+fn without_created(body: &str) -> String {
+    let mut v: Value = serde_json::from_str(body).unwrap();
+    assert!(v.as_object_mut().unwrap().remove("created").is_some());
+    serde_json::to_string(&v).unwrap()
+}
+
+async fn pack1_body(e: &Env, hits: usize, id: &str) -> String {
+    pack1_body_at(hits, id, now_s(&e.w).await)
 }
 
 fn test_key() -> secp256k1::SecretKey {
@@ -240,8 +258,8 @@ async fn job_is_gone(e: &Env, job: &str) -> bool {
 
 /// The pass findings, padded with reasoning text to just under the
 /// MAX_RESPONSE_LEN cap (worst-case hashing and parsing gas).
-fn max_pass_body() -> String {
-    let small: Value = serde_json::from_str(&pack1_body(5, "sbx-0")).unwrap();
+async fn max_pass_body(e: &Env) -> String {
+    let small: Value = serde_json::from_str(&pack1_body(e, 5, "sbx-0").await).unwrap();
     let mut b = small.clone();
     b["choices"][0]["message"]["reasoning_content"] = json!("");
     let base = serde_json::to_string(&b).unwrap().len();
@@ -276,7 +294,7 @@ async fn balances_follow_the_escrow_rules() {
 
     // 3. PASS: accept, review (largest allowed response), reveal. The seller
     // receives exactly the quote and the pass counts (quote 0.030 -> 0.040).
-    let big = max_pass_body();
+    let big = max_pass_body(&e).await;
     accept_and_review(&e, &e.seller, &job0, &big).await;
     let s0 = balance(&e.w, &e.seller).await;
     let r = reveal(&e, &job0, &big).await;
@@ -305,7 +323,7 @@ async fn balances_follow_the_escrow_rules() {
     )
     .await;
     let job1: String = r.json().unwrap();
-    let fail_body = pack1_body(3, "sbx-1");
+    let fail_body = pack1_body(&e, 3, "sbx-1").await;
     accept_and_review(&e, &e.seller, &job1, &fail_body).await;
     let s1 = balance(&e.w, &e.seller).await;
     let c0 = balance(&e.w, e.c.as_account()).await;
@@ -361,7 +379,7 @@ async fn balances_follow_the_escrow_rules() {
     let b3 = balance(&e.w, &e.buyer).await;
     let r = create(&e, &gone_id, NearToken::from_millinear(30)).await;
     let job2: String = r.json().unwrap();
-    let pass2 = pack1_body(5, "sbx-2");
+    let pass2 = pack1_body(&e, 5, "sbx-2").await;
     accept_and_review(&e, &gone, &job2, &pass2).await;
     let r = gone.delete_account(root.id()).await.unwrap();
     assert!(r.is_success(), "{r:?}");
@@ -414,7 +432,7 @@ async fn balances_follow_the_escrow_rules() {
         .collect();
     wrong.push(pins::pinned_request("pack-2").unwrap().to_string());
     assert_eq!(wrong.len(), 4);
-    let fresh_body = pack1_body(5, "sbx-3");
+    let fresh_body = pack1_body(&e, 5, "sbx-3").await;
     for req in &wrong {
         let r = call(
             &e.seller,
@@ -430,6 +448,27 @@ async fn balances_follow_the_escrow_rules() {
             "{failure}"
         );
     }
+
+    // 6c. T-048 M-1 freshness, same job: a correctly signed review of the
+    // pinned request is refused if its TEE created time is outside the job's
+    // window (stockpiled an hour ago, dated an hour ahead) or missing.
+    let now = now_s(&e.w).await;
+    for (body, want) in [
+        (
+            pack1_body_at(5, "sbx-old", now - 3600),
+            "the review was not made during this job",
+        ),
+        (
+            pack1_body_at(5, "sbx-new", now + 3600),
+            "the review was not made during this job",
+        ),
+        (without_created(&fresh_body), "no TEE-signed created time"),
+    ] {
+        let r = call(&e.seller, &e, "submit_review", review_args(&job3, &body)).await;
+        let failure = format!("{:?}", r.into_result().unwrap_err());
+        assert!(failure.contains(want), "{failure}");
+    }
+
     let r = call(
         &e.seller,
         &e,
@@ -439,7 +478,7 @@ async fn balances_follow_the_escrow_rules() {
     .await;
     assert!(r.is_success(), "{r:?}");
 
-    // 6c. Only official packs: the unit-test-only sample pin is not in the wasm.
+    // 6d. Only official packs: the unit-test-only sample pin is not in the wasm.
     let r = e
         .buyer
         .call(e.c.id(), "create")

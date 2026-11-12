@@ -46,6 +46,50 @@ test("the pinned requests are the ones calibration measured (recorded request bo
   }
 });
 
+test("which calibration rounds used the pinned requests (README 'Public answer keys' states this)", () => {
+  const dir = join(repo, "packs/results");
+  const pinOf = new Map(vector.packs.map((p) => [p.pack_id, p.request_sha256]));
+  const rounds = {};
+  for (const round of readdirSync(dir).sort()) {
+    for (const f of readdirSync(join(dir, round, "raw"))) {
+      const { request_body } = JSON.parse(readFileSync(join(dir, round, "raw", f), "utf8"));
+      const pack = f.split("-run")[0];
+      const key = `${pack} ${round}`;
+      rounds[key] ??= new Set();
+      rounds[key].add(sha256Hex(request_body) === pinOf.get(pack) ? "pinned" : "older");
+    }
+  }
+  const summary = Object.fromEntries(Object.entries(rounds).map(([k, v]) => [k, [...v].join("+")]));
+  assert.deepEqual(summary, {
+    "pack-1 round-1": "pinned",
+    "pack-2 round-1": "pinned",
+    "pack-3 round-1": "older",
+    "pack-3 round-2": "older",
+    "pack-1 round-3": "pinned",
+    "pack-3 round-4": "pinned",
+  });
+});
+
+test("every TEE response carries a top-level integer created (Unix s) inside the signed body (T-048 M-1)", () => {
+  // The signed T-003 body hashes to the signed response_sha256, so its created is TEE-signed.
+  const sig = JSON.parse(readFileSync(join(repo, "test-vectors/tee-signature.json"), "utf8"));
+  assert.equal(sha256Hex(sig.response_body), sig.response_sha256);
+  const bodies = [sig.response_body];
+  const dir = join(repo, "packs/results");
+  for (const round of readdirSync(dir)) {
+    for (const f of readdirSync(join(dir, round, "raw"))) {
+      bodies.push(JSON.parse(readFileSync(join(dir, round, "raw", f), "utf8")).response_body);
+    }
+  }
+  assert.equal(bodies.length, 61);
+  for (const b of bodies) {
+    const { created } = JSON.parse(b);
+    assert.ok(Number.isSafeInteger(created), `created is an integer: ${created}`);
+    // Seconds, not ms: between 2026-01-01 and 2030-01-01.
+    assert.ok(created > 1_767_225_600 && created < 1_893_456_000, `created in seconds: ${created}`);
+  }
+});
+
 test("NEAR AI's request_sha256 is sha256 of the exact request body (real T-003 signature)", () => {
   const run = JSON.parse(readFileSync(join(repo, "spike/evidence/runs/recorded-review-sample-0-run08.json"), "utf8"));
   const sig = JSON.parse(readFileSync(join(repo, "test-vectors/tee-signature.json"), "utf8"));

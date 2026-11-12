@@ -94,6 +94,10 @@ const _: () = {
     assert!(REVEAL_WINDOW_NS - REVIEW_WINDOW_NS >= 5 * MINUTE_NS);
 };
 
+/// Clock drift allowed between the TEE's signed `created` time (whole seconds)
+/// and block time, either side of the job's review window (T-048 M-1).
+pub const CLOCK_SKEW_NS: u64 = 2 * MINUTE_NS;
+
 /// Salt length in bytes for the commit (see module docs).
 pub const SALT_LEN: usize = 32;
 
@@ -535,7 +539,12 @@ impl EarnedPrice {
     /// `response_sha256` never to have been used before (replay guard), and
     /// requires `sha256(response) == response_sha256`
     /// so the signed findings are public in this transaction's arguments (the
-    /// buyer needs them to reveal; the contract does not store them). Hex
+    /// buyer needs them to reveal; the contract does not store them), and
+    /// requires the response's TEE-signed `created` time (seconds) to fall in
+    /// this job's window: no earlier than `accepted_at - CLOCK_SKEW_NS`, no
+    /// later than `now + CLOCK_SKEW_NS` (T-048 M-1: a review made before the
+    /// job, e.g. stockpiled or lifted from another job's failed transaction,
+    /// is refused; a missing `created` is refused). Hex
     /// inputs may be upper or lower case; `signature` and `signing_address` may
     /// carry a 0x prefix.
     #[allow(clippy::too_many_arguments)]
@@ -607,6 +616,7 @@ impl EarnedPrice {
             "Earned Price: this signed review was already used for a job. Nothing stored."
         );
         check_response(&response, &review.response_sha256);
+        check_fresh(&response, job.accepted_at_ns.unwrap_or(job.created_at_ns));
         let view = review.view();
         emit(
             "submit_review",
@@ -928,6 +938,32 @@ fn check_response(response: &str, response_sha256: &[u8; 32]) {
     );
 }
 
+/// The only response field `check_fresh` reads; serde skips the rest.
+#[derive(near_sdk::serde::Deserialize)]
+#[serde(crate = "near_sdk::serde")]
+struct Created {
+    created: u64,
+}
+
+/// The TEE-signed `created` time (Unix seconds) of an authenticated response
+/// must lie in `[job_start - CLOCK_SKEW_NS, now + CLOCK_SKEW_NS]`. Call only
+/// after `check_response`, so `created` is the TEE's, not the caller's.
+fn check_fresh(response: &str, job_start_ns: u64) {
+    let created_s = near_sdk::serde_json::from_str::<Created>(response)
+        .map(|c| c.created)
+        .unwrap_or_else(|_| {
+            env::panic_str(
+                "Earned Price: the response has no TEE-signed created time (whole seconds). Nothing stored.",
+            )
+        });
+    let created_ns = created_s.saturating_mul(1_000_000_000);
+    require!(
+        created_ns.saturating_add(CLOCK_SKEW_NS) >= job_start_ns
+            && created_ns <= env::block_timestamp().saturating_add(CLOCK_SKEW_NS),
+        "Earned Price: the review was not made during this job (its signed created time is outside the job's window, 2 minutes skew allowed). Nothing stored."
+    );
+}
+
 /// Commit over a revealed key: sha256(u32_be(len(K)) || K || salt), K = canonical
 /// JSON bytes of the key. `reveal` compares this with `Job.commit_hash`.
 fn commit_digest(key_canonical: &[u8], salt: &[u8; SALT_LEN]) -> [u8; 32] {
@@ -1077,6 +1113,11 @@ mod tests {
     /// The grader's sample pack: test-vectors/commit.json commits its key, and
     /// in unit tests only it is pinned to the real T-003 request (pins.rs).
     const PACK: &str = "sample-0";
+    /// Test clock origin: the real T-003 review's TEE-signed `created`
+    /// (1794314695 s). Every test time is relative to it, so real and
+    /// synthetic reviews are fresh for jobs made "at t=0" (T-048 M-1).
+    const T0_S: u64 = 1_794_314_695;
+    const T0: u64 = T0_S * 1_000_000_000;
 
     fn buyer() -> AccountId {
         "buyer.testnet".parse().unwrap()
@@ -1103,7 +1144,7 @@ mod tests {
             .current_account_id(escrow())
             .predecessor_account_id(buyer())
             .attached_deposit(deposit)
-            .block_timestamp(ts)
+            .block_timestamp(T0 + ts)
             .build());
     }
 
@@ -1158,10 +1199,10 @@ mod tests {
         assert_eq!(j.commit_hash, COMMIT);
         assert_eq!(j.pack_id, PACK);
         assert_eq!(create_event()["data"]["pack_id"], PACK);
-        assert_eq!(j.created_at_ns.0, 1_000);
-        assert_eq!(j.accept_by_ns.0, 1_000 + ACCEPT_WINDOW_NS);
-        assert_eq!(j.review_by_ns.0, 1_000 + REVIEW_WINDOW_NS);
-        assert_eq!(j.reveal_deadline_ns.0, 1_000 + REVEAL_WINDOW_NS);
+        assert_eq!(j.created_at_ns.0, T0 + 1_000);
+        assert_eq!(j.accept_by_ns.0, T0 + 1_000 + ACCEPT_WINDOW_NS);
+        assert_eq!(j.review_by_ns.0, T0 + 1_000 + REVIEW_WINDOW_NS);
+        assert_eq!(j.reveal_deadline_ns.0, T0 + 1_000 + REVEAL_WINDOW_NS);
         assert_eq!(j.status, JobStatus::Open);
         assert_eq!(j.accepted_at_ns, None);
         assert_eq!(c.next_job_id().0, 1);
@@ -1180,18 +1221,18 @@ mod tests {
         assert_eq!(e["data"]["price"], mnear(30).as_yoctonear().to_string());
         assert_eq!(e["data"]["excess_refunded"], "0");
         assert_eq!(e["data"]["commit_hash"], COMMIT);
-        assert_eq!(e["data"]["created_at_ns"], "1000");
+        assert_eq!(e["data"]["created_at_ns"], (T0 + 1_000).to_string());
         assert_eq!(
             e["data"]["accept_by_ns"],
-            (1_000 + ACCEPT_WINDOW_NS).to_string()
+            (T0 + 1_000 + ACCEPT_WINDOW_NS).to_string()
         );
         assert_eq!(
             e["data"]["review_by_ns"],
-            (1_000 + REVIEW_WINDOW_NS).to_string()
+            (T0 + 1_000 + REVIEW_WINDOW_NS).to_string()
         );
         assert_eq!(
             e["data"]["reveal_deadline_ns"],
-            (1_000 + REVEAL_WINDOW_NS).to_string()
+            (T0 + 1_000 + REVEAL_WINDOW_NS).to_string()
         );
     }
 
@@ -1577,7 +1618,7 @@ mod tests {
         testing_env!(VMContextBuilder::new()
             .current_account_id(escrow())
             .predecessor_account_id(who)
-            .block_timestamp(ts)
+            .block_timestamp(T0 + ts)
             .build());
     }
 
@@ -1664,14 +1705,18 @@ mod tests {
         c.accept(U64(0));
         let j = c.get_job(U64(0)).unwrap();
         assert_eq!(j.status, JobStatus::Accepted);
-        assert_eq!(j.accepted_at_ns, Some(U64(500)));
-        assert_eq!(j.accept_by_ns.0, ACCEPT_WINDOW_NS, "deadlines never move");
-        assert_eq!(j.review_by_ns.0, REVIEW_WINDOW_NS);
-        assert_eq!(j.reveal_deadline_ns.0, REVEAL_WINDOW_NS);
+        assert_eq!(j.accepted_at_ns, Some(U64(T0 + 500)));
+        assert_eq!(
+            j.accept_by_ns.0,
+            T0 + ACCEPT_WINDOW_NS,
+            "deadlines never move"
+        );
+        assert_eq!(j.review_by_ns.0, T0 + REVIEW_WINDOW_NS);
+        assert_eq!(j.reveal_deadline_ns.0, T0 + REVEAL_WINDOW_NS);
         assert!(j.review.is_none());
         let e = &events("accept")[0];
         assert_eq!(e["data"]["job_id"], "0");
-        assert_eq!(e["data"]["accepted_at_ns"], "500");
+        assert_eq!(e["data"]["accepted_at_ns"], (T0 + 500).to_string());
         assert!(transfers().is_empty());
     }
 
@@ -1688,7 +1733,7 @@ mod tests {
         c.accept(U64(0));
         let v = json(&c);
         assert_eq!(v["status"], "accepted");
-        assert_eq!(v["accepted_at_ns"], "500");
+        assert_eq!(v["accepted_at_ns"], (T0 + 500).to_string());
         for k in [
             "created_at_ns",
             "accept_by_ns",
@@ -1743,9 +1788,9 @@ mod tests {
         submit(&mut c, &v);
         let j = c.get_job(U64(0)).unwrap();
         assert!(j.review.is_some());
-        assert_eq!(j.accepted_at_ns, Some(U64(ACCEPT_WINDOW_NS)));
+        assert_eq!(j.accepted_at_ns, Some(U64(T0 + ACCEPT_WINDOW_NS)));
         assert_eq!(
-            j.reveal_deadline_ns.0 - REVIEW_WINDOW_NS,
+            j.reveal_deadline_ns.0 - j.review_by_ns.0,
             5 * MINUTE_NS,
             "buyer keeps 5 minutes to reveal"
         );
@@ -2103,8 +2148,14 @@ mod tests {
         (g("key_canonical"), g("salt_hex"), g("commit_hex"))
     }
 
-    /// Raw response body of the named review-extract.json case.
+    /// Raw response body of the named review-extract.json case, with the
+    /// TEE's `created` (whole seconds) set to the test clock origin T0, as a
+    /// real response carries it (the shared fixture omits it).
     fn body_of(name_prefix: &str) -> String {
+        stamped(&raw_body_of(name_prefix), T0_S)
+    }
+
+    fn raw_body_of(name_prefix: &str) -> String {
         let x: Value = near_sdk::serde_json::from_str(EXTRACT).unwrap();
         x["cases"]
             .as_array()
@@ -2115,6 +2166,14 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string()
+    }
+
+    /// `body` (a JSON object without `created`) with `"created":<secs>` first.
+    fn stamped(body: &str, created_s: u64) -> String {
+        assert!(!body.contains("\"created\""), "body already has created");
+        let out = body.replacen('{', &format!("{{\"created\":{created_s},"), 1);
+        assert_ne!(out, body, "body is a JSON object");
+        out
     }
 
     /// The same review with another completion id, as a second TEE call returns.
@@ -2514,7 +2573,6 @@ mod tests {
         for name in [
             "prose instead of JSON",
             "JSON inside a markdown",
-            "response body is not JSON",
             "content null",
         ] {
             let v = signed(&body_of(name));
@@ -2525,6 +2583,143 @@ mod tests {
             // so the next case starts with no seller record.
             std::mem::forget(c);
         }
+    }
+
+    // ---- T-048 M-1: the TEE-signed `created` must fall in the job's window ----
+
+    const S: u64 = 1_000_000_000;
+    const SKEW_S: u64 = CLOCK_SKEW_NS / S;
+
+    /// A job created at T0 + `create_s`, accepted at T0 + `accept_s` (seconds).
+    fn job_at(c: &mut EarnedPrice, create_s: u64, accept_s: u64) -> u64 {
+        let (_, _, commit) = commit_vector();
+        ctx(mnear(30), create_s * S);
+        let id = c.create(seller(), commit, PACK.into()).0;
+        as_caller(seller(), accept_s * S);
+        c.accept(U64(id));
+        id
+    }
+
+    /// A test-signed pass review whose TEE `created` is `created_s` (Unix s).
+    fn review_made_at(created_s: u64) -> Vector {
+        signed(&stamped(&raw_body_of("bare findings array"), created_s))
+    }
+
+    fn submit_at(c: &mut EarnedPrice, id: u64, at_s: u64, v: &Vector) -> Result<(), String> {
+        as_caller(seller(), at_s * S);
+        try_call(|| submit_on(c, id, v))
+    }
+
+    fn assert_not_this_job(c: &mut EarnedPrice, id: u64, at_s: u64, v: &Vector) {
+        let err = submit_at(c, id, at_s, v).unwrap_err();
+        assert!(
+            err.contains("the review was not made during this job"),
+            "{err}"
+        );
+        assert!(
+            c.get_job(U64(id)).unwrap().review.is_none(),
+            "nothing stored"
+        );
+    }
+
+    #[test]
+    fn clock_skew_is_two_minutes() {
+        assert_eq!(CLOCK_SKEW_NS, 2 * MINUTE_NS);
+    }
+
+    #[test]
+    fn fresh_review_made_during_the_job_is_accepted_up_to_the_skew_edges() {
+        // Accepted at +60 s, submitted at +100 s: created may run from
+        // +60 - 120 s (TEE clock behind) to +100 + 120 s (TEE clock ahead).
+        for created_s in [T0_S + 60 - SKEW_S, T0_S + 80, T0_S + 100 + SKEW_S] {
+            let mut c = fresh_with_test_signer();
+            let id = job_at(&mut c, 0, 60);
+            submit_at(&mut c, id, 100, &review_made_at(created_s)).unwrap();
+            assert!(c.get_job(U64(id)).unwrap().review.is_some(), "{created_s}");
+            std::mem::forget(c);
+        }
+    }
+
+    #[test]
+    fn stockpiled_review_made_before_the_job_is_refused() {
+        let mut c = fresh_with_test_signer();
+        let id = job_at(&mut c, 0, 60);
+        // One second past the skew before acceptance, and a day before.
+        assert_not_this_job(&mut c, id, 100, &review_made_at(T0_S + 60 - SKEW_S - 1));
+        assert_not_this_job(&mut c, id, 100, &review_made_at(T0_S - 86_400));
+        // Refusals burn nothing: a fresh review still lands on the job.
+        submit_at(&mut c, id, 100, &review_made_at(T0_S + 90)).unwrap();
+        assert!(c.get_job(U64(id)).unwrap().review.is_some());
+    }
+
+    #[test]
+    fn review_dated_in_the_future_is_refused() {
+        let mut c = fresh_with_test_signer();
+        let id = job_at(&mut c, 0, 60);
+        assert_not_this_job(&mut c, id, 100, &review_made_at(T0_S + 100 + SKEW_S + 1));
+        assert_not_this_job(&mut c, id, 100, &review_made_at(u64::MAX));
+    }
+
+    #[test]
+    fn review_without_a_numeric_created_is_refused() {
+        let raw = raw_body_of("bare findings array");
+        let nested = raw.replacen(
+            "\"choices\":[{",
+            &format!("\"choices\":[{{\"created\":{T0_S},"),
+            1,
+        );
+        assert_ne!(nested, raw);
+        let bodies = [
+            raw.clone(),                                                 // missing
+            nested, // only nested, not top level
+            raw.replacen('{', &format!("{{\"created\":\"{T0_S}\","), 1), // string
+            raw.replacen('{', &format!("{{\"created\":{T0_S}.5,"), 1), // fraction
+            raw.replacen('{', "{\"created\":-1,", 1), // negative
+            raw.replacen('{', "{\"created\":null,", 1), // null
+        ];
+        for body in bodies {
+            let mut c = fresh_with_test_signer();
+            let id = job_at(&mut c, 0, 60);
+            let err = submit_at(&mut c, id, 100, &signed(&body)).unwrap_err();
+            assert!(
+                err.contains("no TEE-signed created time"),
+                "{err} for {body:.60}"
+            );
+            assert!(c.get_job(U64(id)).unwrap().review.is_none());
+            std::mem::forget(c);
+        }
+    }
+
+    #[test]
+    fn review_lifted_from_another_jobs_failed_submit_is_refused() {
+        let mut c = fresh_with_test_signer();
+        // Job A: the seller's review (made at +20 s) is sent after review_by,
+        // so it fails and its signed body is public in the failed tx args.
+        let a = job_at(&mut c, 0, 10);
+        let v = review_made_at(T0_S + 20);
+        let err = submit_at(&mut c, a, REVIEW_WINDOW_NS / S + 1, &v).unwrap_err();
+        assert!(err.contains("review deadline has passed"), "{err}");
+        // Job B on the same pack, ten minutes later: the lifted review is refused.
+        let b = job_at(&mut c, 600, 610);
+        assert_not_this_job(&mut c, b, 620, &v);
+        // Documented residual (README): a job accepted within the skew of the
+        // review's created time can still take it; the replay guard then stops
+        // any second use.
+        let d = job_at(&mut c, 60, 70);
+        submit_at(&mut c, d, 80, &v).unwrap();
+        let e = job_at(&mut c, 61, 71);
+        let err = submit_at(&mut c, e, 81, &v).unwrap_err();
+        assert!(err.contains("already used for a job"), "{err}");
+    }
+
+    #[test]
+    fn response_that_is_not_json_is_refused_at_submit_review() {
+        // A body that is not JSON has no TEE-signed created time, so it can't
+        // be stored (T-048 M-1); grade.rs still grades it malformed.
+        let v = signed(&raw_body_of("response body is not JSON"));
+        let mut c = fresh_with_test_signer();
+        create_accepted(&mut c);
+        assert_submit_rejected_v(&mut c, &v, "no TEE-signed created time");
     }
 
     #[test]
