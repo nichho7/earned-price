@@ -23,12 +23,13 @@
   "scripts": {
     "test": "node --test test/",
     "dev": "next dev",
-    "build": "node scripts/site-rules.mjs && node scripts/site-data-gate.mjs && next build && node scripts/site-size-gate.mjs",
+    "build": "node scripts/site-rules.mjs && node scripts/site-data-gate.mjs && next build && node scripts/site-size-gate.mjs && node scripts/site-secret-scan.mjs --bundle",
     "start": "next start",
     "site:typecheck": "tsc --noEmit",
     "site:unit": "node --test \"site/**/*.test.ts\"",
     "site:e2e": "playwright test --grep-invert @perf && playwright test --grep @perf --workers=1",
-    "site:ci": "npm run site:typecheck && npm run site:unit && npm run build && npm run site:e2e"
+    "site:secrets": "node scripts/site-secret-scan.mjs --repo",
+    "site:ci": "npm run site:typecheck && npm run site:unit && npm run build && npm run site:secrets && npm run site:e2e"
   },
   "dependencies": {
     "@noble/curves": "2.4.0",
