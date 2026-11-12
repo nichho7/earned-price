@@ -10,7 +10,7 @@ import {
   recoverEip191,
   sha256Hex,
   verifyCompletionSignature,
-} from "../spike/nearai-verify.mjs";
+} from "../verify/nearai-verify.js";
 
 const evidence = JSON.parse(
   readFileSync(new URL("../spike/evidence/attestation-keyless-2026-11-10.json", import.meta.url), "utf8"),
@@ -63,4 +63,20 @@ test("completion signature binds exact request + response bytes; any byte change
   assert.equal(wrongSigner.ok, false);
   const forged = verifyCompletionSignature({ requestBody, responseBody, model, sig: { ...sig, text: text.replace(/.$/, "0") }, expectedSigner: addr });
   assert.equal(forged.ok, false);
+});
+
+test("high-s signatures are refused, like the escrow's ecrecover (malleability_flag); the low-s twin recovers", () => {
+  const sk = secp256k1.utils.randomSecretKey();
+  const addr = ethAddress(secp256k1.getPublicKey(sk));
+  const low = eip191Sign("hello", sk);
+  const b = Buffer.from(low.slice(2), "hex");
+  const s = secp256k1.Point.Fn.ORDER - BigInt("0x" + b.subarray(32, 64).toString("hex"));
+  const high = "0x" + b.subarray(0, 32).toString("hex") + s.toString(16).padStart(64, "0") + (b[64] === 27 ? 28 : 27).toString(16);
+  // Without the check this recovers the same signer: noble's recovery itself accepts high s.
+  const raw = new Uint8Array([(b[64] === 27 ? 28 : 27) - 27, ...Buffer.from(high.slice(2, 130), "hex")]);
+  const msg = new TextEncoder().encode("hello");
+  const digest = keccak_256(new Uint8Array([...new TextEncoder().encode(`\x19Ethereum Signed Message:\n${msg.length}`), ...msg]));
+  assert.equal(ethAddress(secp256k1.recoverPublicKey(raw, digest, { prehash: false })), addr);
+  assert.equal(recoverEip191("hello", low), addr);
+  assert.throws(() => recoverEip191("hello", high), /high-s/);
 });

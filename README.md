@@ -1,6 +1,6 @@
 # Earned Price
 
-A seller agent that haggles its price, is paid from testnet escrow only when a commit-reveal code grade passes its TEE-attested (NEAR AI Cloud) review, and every pass or fail moves its next quote.
+A seller agent that haggles its price, is paid from testnet escrow only when a commit-reveal code grade passes its TEE-signed (NEAR AI Cloud) review, and every pass or fail moves its next quote.
 
 *Price earned, not claimed.*
 
@@ -47,10 +47,13 @@ sent with it hashes to `response_sha256`, and that the response's TEE-signed
 `created` time falls in the job's window (from acceptance to now, 2 minutes of
 clock skew either side). The contract does not store that body,
 but it stays public in the `submit_review` transaction's arguments, so a seller
-can't hide the findings the buyer needs to reveal. **The TEE attestation that
-binds a signer address to a real NEAR AI TEE is checked offline, by
-`earned verify` (check 3), not on-chain;** the allowlist is how the contract
-trusts that result.
+can't hide the findings the buyer needs to reveal. **The TEE attestation is
+checked offline for nonce and signer binding only (`earned verify` check 3), not
+on-chain.** Our code does not verify the Intel DCAP quote signature, the NVIDIA
+GPU evidence (NRAS) or the image measurements; verify those with NEAR AI's
+verifier or TEE Explorer. The contract trusts the owner-managed signer
+allowlist. Each receipt lists exactly what was checked
+(`receipt.tee.attestation_checks`).
 
 **Reveal and grade.** The buyer calls `reveal(job_id, key, salt, response)` after
 the review is on-chain and by the reveal deadline. The contract checks
@@ -164,7 +167,8 @@ NEAR, edit jobs or records, or change deadlines. Removing a signer stops new
 reviews by it; a review already on-chain keeps counting. The list is public:
 `signers` view (seeded from `contract/tee-signers.json`, the NEAR AI signer from
 our 2026-11-10 runs). A dishonest owner could allowlist its own key and sign fake
-reviews, which `earned verify` check 3 would still flag offline.
+reviews, which only a full DCAP + measurement check (not done by our code) would
+catch.
 
 **The account key is a bigger power than the owner role.** The contract account
 still holds a full-access key (the one `scripts/deploy.sh` signs with). Whoever
@@ -198,6 +202,14 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
   rejected, and if no valid reveal lands by the deadline the timeout pays the
   seller, so clients (CLI, site) must always attach 300 Tgas, the maximum.
 - Signer trust is an allowlist, not on-chain attestation (see above).
+- Attestation: nonce + signer binding only. No Intel DCAP quote verification, no
+  NVIDIA NRAS check and no measurement pinning, so `earned verify` check 3 can't
+  tell a genuine NEAR AI enclave from edited quote bytes.
+- The reference seller retries a malformed review (or one with more than 10
+  findings) once: it discards that signed review and asks the TEE again. Only if
+  the retry is also malformed (or fails, or there is no time left) does a signed
+  malformed review reach the chain as the fixed FAIL. The whole seller review
+  ends within 240 s and at least 45 s before `review_by`.
 
 ## Layout
 

@@ -130,9 +130,10 @@ const isFinding = (f) =>
 
 /**
  * Checks seller output. Returns {error} for a fixed FAIL, or {list} of {file, line, category}
- * sorted by (file, line, category). Never truncates and never drops a finding.
+ * sorted by (file, line, category). Never truncates and never drops a finding. Exported so the
+ * seller (seller/review.js) applies the exact rule grade() will apply, before it submits.
  */
-function normaliseFindings(findings) {
+export function normaliseFindings(findings) {
   if (!Array.isArray(findings)) return { error: ERROR_MALFORMED };
   if (findings.length > MAX_FINDINGS) return { error: ERROR_TOO_MANY };
   if (!findings.every(isFinding)) return { error: ERROR_MALFORMED };

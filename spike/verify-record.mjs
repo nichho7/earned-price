@@ -4,7 +4,7 @@
 // Checks: both TDX quotes bind our nonce + signer address; the completion signature
 // recovers to the attested model signer and its text binds sha256(request) and sha256(response).
 import { readFileSync } from "node:fs";
-import { bindingOk, checkAttestationBinding, verifyCompletionSignature } from "./nearai-verify.mjs";
+import { bindingOk, checkAttestationBinding, verifyCompletionSignature } from "../verify/nearai-verify.js";
 
 const path = process.argv[2];
 if (!path) {
