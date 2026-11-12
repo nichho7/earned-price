@@ -21,7 +21,7 @@ import { DEMO_SELLER, loadJob, saveJob, sealPick } from "../cli/pick.js";
 import { YOCTO_PER_MNEAR } from "../cli/quote.js";
 import { REVEAL_GAS, TIMEOUT_GAS, parseTxOutcome } from "../cli/tx.js";
 import { makeLocalSeller, replayReason } from "../cli/seller-local.js";
-import { HireError, assertJobId, outcomeOf, parseHireArgs, receiptPaths, runHire, stageLine } from "../cli/hire.js";
+import { HireError, RECORDED_DIR, assertJobId, outcomeOf, parseHireArgs, receiptPaths, runHire, stageLine } from "../cli/hire.js";
 import { errorLine } from "../cli/errors.js";
 import { FAIL_LINE, classifyClose, recordDelta, step4Report } from "../cli/step4.js";
 import { parseVerifyArgs, printableJson, runVerify } from "../cli/verify-cmd.js";
@@ -1299,3 +1299,23 @@ test("R-1: a closing tx whose receipts carry no block_hash is never compared (un
   assert.equal(r.step4.kind, "unclear");
   assert.ok(!lines.includes("SEE: step 4 PASS"));
 });
+
+// --- T-064: the shipped RECORDED replay (recorded/pack-2.json, pack-3.json from the 2026-11-12 run) ----
+
+for (const [pack, want] of [["2", { job: 1, grade: "5/5", settle: "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB" }], ["3", { job: 2, grade: "4/5", settle: "3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw" }]]) {
+  test(`replay ships: no live seller -> the recorded pack-${pack} run, labelled RECORDED, REVIEW AUTHENTIC with the real anchors; no receipt for this job`, async () => {
+    const { dir, chain, deps, lines } = setup({ pack });
+    // The real shipped folder and the real trust anchors (not the test signer).
+    const r = await runHire({ ...deps, trust: TRUST, recordedDir: RECORDED_DIR });
+    const out = text(lines);
+    assert.ok(!out.includes("ships with this version yet"), out);
+    assert.match(out, new RegExp(`RECORDED \\(a past run, job ${want.job}; not your job, and no receipt is written for your job\\)`));
+    assert.match(out, new RegExp(`RECORDED grade: ${want.grade} PASS; settle tx ${want.settle}`));
+    assert.match(out, new RegExp(`RECORDED REVIEW AUTHENTIC \\(offline\\): genuine NEAR AI TEE review of the official pack-${pack} request`));
+    // Replay-only: nothing recorded is submitted; the job just times out and refunds.
+    assert.deepEqual(chain.sends.map((s) => s.methodName), ["timeout"]);
+    assert.equal(r.outcome.kind, "timeout_refund");
+    assert.equal(r.receiptPath, null);
+    assert.ok(!existsSync(receiptPaths(dir, "7").receipt));
+  });
+}
