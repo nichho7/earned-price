@@ -44,7 +44,7 @@ const noLinkWhy = (tx, f) => isPh(tx) ? 'no explorer link: placeholder' : isSand
 function chipsHTML(v, o) {
   return chipsOf(v.story, o.live).map(c => {
     // S-010 AC 2: the RECORDED chip carries the latest attestation tx, clickable (the data gate resolves it on testnet)
-    const att = c.att ? ` <span class="att" data-chip-att="${esc(c.att.tx)}">att ${idHTML(c.att.tx, c.att.f, { explorer: o.explorer, what: 'signed TEE review tx' })}</span>` : '';
+    const att = c.att ? ` <span class="att" data-chip-att="${esc(c.att.tx)}">· attestation ${idHTML(c.att.tx, c.att.f, { explorer: o.explorer, what: 'signed TEE review tx' })}</span>` : '';
     return `<span class="chip ${esc(c.kind)}"${c.kind === 'ph' ? ' title="Placeholder values. This run can never ship." data-chip="placeholder"' : ` data-chip="${esc(c.kind)}"`}>${esc(c.text)}${att}</span>`;
   }).join('');
 }

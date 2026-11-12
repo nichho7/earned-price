@@ -292,5 +292,6 @@ html.ep-js .ep:not([data-ep-mounted]){opacity:0;animation:ep-failsafe 1ms linear
   .ep .qc-x li{font-size:var(--fs-row-n)}
 }
 @container (max-width:420px){
-  .ep .chip.net{white-space:normal;flex-wrap:wrap;row-gap:var(--s1)}
+  .ep .chip.net{display:block;white-space:normal;line-height:1.6}
+  .ep .chip.net::before{display:inline-block;vertical-align:middle;margin-right:var(--s2)}
 }
