@@ -232,6 +232,18 @@ test("closer: links only a github.com repo URL; anything else is a marked placeh
   assert.match(bad, /PLACEHOLDER URL/);
 });
 
+test("closer CTA (T-085, S-028 AC10): the README's Tier 1 command, word for word; never npx earned-price init", () => {
+  // README Tier 1: the first command of the first sh block, without its comment (t075-review §5.3: the card
+  // copies the README verbatim, so if Tier 1's first command changes, this test fails until the card follows).
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const tier1 = readme.slice(readme.indexOf("### Tier 1"));
+  const cmd = /```sh\n([^\n#]+?)\s*(#|\n)/.exec(tier1)?.[1] ?? "";
+  assert.equal(cmd, "node scripts/self-check.mjs");
+  const cls = /<div class="cmd">([^]*?)<\/div>/.exec(finalHTML([...RUNS]))?.[1] ?? "";
+  assert.equal(cls.replace(/<[^>]+>[^<]*<\/span>/, ""), cmd, "the closer prints the Tier 1 command after the $ prompt");
+  assert.doesNotMatch(finalHTML([...RUNS]), /npx|earned-price init/);
+});
+
 test("slimRun keeps every field the view reads: same final HTML from slim and full runs", () => {
   assert.equal(finalHTML(RUNS.map(slimRun)), finalHTML([...RUNS]));
   const fat = JSON.stringify(RUNS).length, slim = JSON.stringify(RUNS.map(slimRun)).length;

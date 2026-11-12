@@ -241,7 +241,7 @@ function closerHTML(o) {
   const safe = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/.test(o.repoUrl || '') ? o.repoUrl : '';
   const repo = safe ? `<a class="lnk" href="${esc(safe)}"><b>${esc(safe.replace(/^https:\/\//, ''))}</b></a>` : '<b>not public yet</b> <span class="ph">PLACEHOLDER URL</span>';
   return `<div><h2 id="closer-heading">Earned Price.<em>Price earned, not claimed.</em></h2></div>
-    <div><div class="cmd"><span aria-hidden="true">$</span>npx earned-price init</div>
+    <div><div class="cmd"><span aria-hidden="true">$</span>node scripts/self-check.mjs</div>
     <div class="cmeta">Repo ${repo}<br>Sister project: <b>NEAR Real-World Money</b> (realworld track)</div></div>`;
 }
 

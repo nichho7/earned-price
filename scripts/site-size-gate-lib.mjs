@@ -11,6 +11,7 @@ import { gzipSync } from "node:zlib";
 const ROOT = process.cwd();
 const NEXT = join(ROOT, ".next");
 const HTML = join(NEXT, "server/app/index.html");
+const VERIFY_HTML = join(NEXT, "server/app/verify.html");
 
 // B5 budgets. JS: the empty Next 16.4.3 scaffold measured 133.2 KB gz on 2026-11-12 (131.5 external +
 // 1.7 inline; nomodule polyfill not counted). That is over 130, so per B5 the gate is baseline + 40 = 173.
@@ -21,6 +22,11 @@ export const BUDGET = {
   imageKB: 30, // raster/SVG files referenced by the page (inline SVG counts as HTML, not here)
   walletBytes: 0, // near-api-js / wallet code on `/` (R4); checked by marker strings
 };
+
+// T-039 (code review O-3): `/verify` has its own JS ceiling. It bundles the real recorded receipt (~81 KB gz,
+// mostly the attestation) so pressing Verify makes no request; measured 249 KB gz on 2026-11-12. Fonts and
+// images come from the shared layout, so the `/` budgets above already cover them.
+export const VERIFY_BUDGET = { jsGzipKB: 260, walletBytes: 0 };
 
 const WALLET_MARKERS = ["near-api-js", "@near-js/", "@near-wallet-selector", "helper.nearprotocol.com", "rpc.testnet.near.org"];
 
@@ -167,6 +173,15 @@ export function main() {
       `fonts ${r.fontFiles} files ${kb(r.fontBytes)} KB (budget ${BUDGET.fontFiles} / ${BUDGET.fontKB}) · images ${kb(r.imageBytes)} KB (budget ${BUDGET.imageKB}) · ` +
       `HTML ${kb(r.htmlGzip)} KB gz · nomodule not counted: ${r.nomoduleNotCounted.length}`,
   );
+  if (!existsSync(VERIFY_HTML)) {
+    fails.push(`${VERIFY_HTML} not found (is /verify still static?)`);
+  } else {
+    const v = measure(readFileSync(VERIFY_HTML, "utf8"));
+    if (v.missing.length) fails.push(`assets referenced by /verify but not found in .next: ${v.missing.join(", ")}`);
+    if (v.jsTotalGzip > VERIFY_BUDGET.jsGzipKB * 1024) fails.push(`/verify JS ${kb(v.jsTotalGzip)} KB gz > ${VERIFY_BUDGET.jsGzipKB} KB`);
+    if (v.walletHits.length > VERIFY_BUDGET.walletBytes) fails.push(`wallet/RPC code on /verify: ${v.walletHits.join("; ")}`);
+    console.log(`[size gate] /verify JS ${kb(v.jsTotalGzip)} KB gz (budget ${VERIFY_BUDGET.jsGzipKB}) · HTML ${kb(v.htmlGzip)} KB gz`);
+  }
   if (fails.length) {
     console.error(`[size gate] FAIL\n  - ${fails.join("\n  - ")}`);
     process.exit(1);

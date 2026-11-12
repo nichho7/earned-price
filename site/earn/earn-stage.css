@@ -114,9 +114,10 @@ html.ep-js .ep:not([data-ep-mounted]){opacity:0;animation:ep-failsafe 1ms linear
 .ep .real,.ep .sbt{display:inline-block;font:500 var(--fs-label-n)/1 var(--mono);letter-spacing:.1em;padding:calc(var(--s1) / 2) var(--s1);border:var(--hairline) solid currentColor;border-radius:1px;vertical-align:1px}
 .ep .sbt{border-style:dashed}
 .ep .lnk{color:inherit;text-decoration:underline;text-underline-offset:3px;text-decoration-thickness:1px}
-/* Designer QA note 3: a 24 px (--s5) hit area with no layout change. The inline box is about 1.15-1.4em tall,
-   so padding of (--s5 - 1em) / 2 a side reaches 24 px; the matching negative margin cancels it in flex rows. */
-.ep .lnk{padding-block:calc((var(--s5) - 1em) / 2);margin-block:calc((1em - var(--s5)) / 2)}
+/* Designer QA note 3 + L2-1: a 24 px (--s5) hit area from a pseudo-element, so the link box (and its focus ring)
+   stays text-tight and adjacent links at a 26 px pitch no longer overlap. Safe because every tx link is one box (nowrap). */
+.ep .lnk{position:relative}
+.ep .lnk::before{content:"";position:absolute;inset-inline:0;top:50%;height:max(100%,var(--s5));translate:0 -50%}
 .ep .paper .lnk{color:var(--violet)}
 .ep .lnk:focus-visible{outline:var(--focus-on-violet);outline-offset:var(--focus-offset)}
 .ep .paper .lnk:focus-visible{outline:var(--focus-on-sheet)}

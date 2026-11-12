@@ -7,6 +7,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,4 +67,18 @@ test("data gate run through a symlink to this repo still passes on the recorded 
   const r = run(REPO_LINK, "site-data-gate");
   assert.match(r.out, /\[data gate\] PASS/);
   assert.equal(r.status, 0);
+});
+
+test("size gate holds /verify to its own 260 KB gz JS ceiling (code review O-3), and needs /verify to exist", () => {
+  const root = join(TMP, "verify-budget");
+  cpSync(join(REPO, "scripts"), join(root, "scripts"), { recursive: true });
+  mkdirSync(join(root, ".next/server/app"), { recursive: true });
+  mkdirSync(join(root, ".next/static/chunks"), { recursive: true });
+  writeFileSync(join(root, ".next/server/app/index.html"), "<html><p>ok</p></html>");
+  assert.match(run(root, "site-size-gate").out, /verify\.html not found/);
+  writeFileSync(join(root, ".next/static/chunks/big.js"), randomBytes(270 * 1024).toString("base64"));
+  writeFileSync(join(root, ".next/server/app/verify.html"), '<html><script src="/_next/static/chunks/big.js"></script></html>');
+  const r = run(root, "site-size-gate");
+  assert.match(r.out, /\/verify JS \d+(\.\d)? KB gz > 260 KB/);
+  assert.equal(r.status, 1);
 });
