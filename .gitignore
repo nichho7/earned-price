@@ -28,6 +28,12 @@ node_modules/
 dist/
 .next/
 out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Site test output (Playwright)
+test-results/
+playwright-report/
 
 # Spike run output (records are ~300 KB each; commit chosen ones by hand)
 spike/results/
