@@ -780,6 +780,62 @@ test("re-check R-1: a job saved back to 'reviewed' with a pending reveal hash is
   assert.equal(loadJob(dir).status, "closed");
 });
 
+/** F-1 setup: a reveal hash that never landed (signed, never broadcast) plus a timeout that landed unseen. */
+async function ghostRevealThenTimeoutUnseen({ dir, chain, clock, deps }) {
+  await assert.rejects(runHire({ ...deps, makeSeller: swappingSeller(chain, reviewResult(PASS_BODY), reviewResult(FAIL_BODY)) }), { code: "REVIEW_MISMATCH" });
+  saveJob(dir, { ...loadJob(dir), reveal_tx: "ghostReveal", reveal_txs: ["ghostReveal"] }); // signed, never broadcast
+  clock.t = T0 + 60 * MIN;
+  const real = chain.sendTx;
+  let landed = null;
+  chain.sendTx = async (req) => {
+    const o = await real(req);
+    if (req.methodName !== "timeout") return o;
+    landed = o;
+    throw new Error("socket hang up");
+  };
+  await runHire({ ...deps, sendTx: chain.sendTx, lookupTx: async () => null }).catch((e) => e);
+  chain.sendTx = real;
+  assert.ok(landed, "the timeout landed on-chain");
+  return landed;
+}
+
+test("T-061 / T-031 sec F-1 probe Z: an unlanded reveal hash does not block the lookup of a landed timeout", async () => {
+  const ctx = setup();
+  const { dir, chain, deps } = ctx;
+  const landed = await ghostRevealThenTimeoutUnseen(ctx);
+  const tHash = landed.transaction.hash;
+  const mid = loadJob(dir);
+  assert.equal(mid.status, "timing_out");
+  assert.deepEqual(mid.timeout_txs, [tHash]);
+  const sendsBefore = chain.sends.length;
+  const looked = new Set();
+  const r = await runHire({ ...deps, lookupTx: async ({ txHash }) => (looked.add(txHash), txHash === tHash ? landed : null) });
+  assert.equal(r.outcome.kind, "timeout_paid_seller", "finished from the landed timeout");
+  assert.ok(looked.has("ghostReveal") && looked.has(tHash), "both kinds looked up");
+  assert.equal(chain.sends.length, sendsBefore, "nothing re-sent");
+  assert.ok(!chain.sends.some((x) => x.methodName === "reveal"), "no reveal ever went out");
+  assert.equal(loadJob(dir).status, "closed");
+  assert.ok(!existsSync(receiptPaths(dir, "7").receipt), "a timeout writes no receipt");
+  await assert.rejects(runHire({ ...deps, lookupTx: async () => landed }), { code: "NO_OPEN_JOB" }, "nothing settles twice");
+});
+
+test("T-061: both an unlanded reveal and an unseen timeout unknown -> CLOSE_TX_UNCONFIRMED naming both hashes, status timing_out, nothing sent", async () => {
+  const ctx = setup();
+  const { dir, chain, deps } = ctx;
+  const landed = await ghostRevealThenTimeoutUnseen(ctx);
+  const tHash = landed.transaction.hash;
+  const sendsBefore = chain.sends.length;
+  const err = await runHire({ ...deps, lookupTx: async () => null }).catch((e) => e);
+  assert.equal(err.code, "CLOSE_TX_UNCONFIRMED");
+  assert.match(err.message, /ghostReveal/);
+  assert.ok(err.message.includes(tHash), "the timeout hash is named too");
+  assert.equal(chain.sends.length, sendsBefore, "nothing sent");
+  const job = loadJob(dir);
+  assert.equal(job.status, "timing_out", "status does not regress to revealing");
+  assert.deepEqual(job.reveal_txs, ["ghostReveal"]);
+  assert.deepEqual(job.timeout_txs, [tHash]);
+});
+
 test("re-check X3: a second reveal refused with 'no open job' keeps the earlier landed hash -> CLOSE_TX_UNCONFIRMED, then the receipt", async () => {
   const ctx = setup();
   const { dir, chain, deps } = ctx;
