@@ -1,0 +1,27 @@
+# [CTO] T-033 · site CI (ADR-001 Addendum B: R9 size gate + Playwright WebKit from day one).
+# Runs once the repo has a GitHub remote (A-021). Free for public repos. No secrets, no deploy.
+name: site
+on:
+  push:
+    paths: ["app/**", "site/**", "scripts/site-*.mjs", "package.json", "package-lock.json", "next.config.ts", "tsconfig.json", "playwright.config.ts", ".github/workflows/site.yml"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run site:typecheck
+      - run: npm run site:unit
+      - run: npm run build # site rules + data gate + next build + size gate
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run site:e2e
+        env: { CI: "true" }
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: playwright-report, path: playwright-report, retention-days: 7 }
