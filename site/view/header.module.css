@@ -1,0 +1,31 @@
+/* [CTO] T-033 · header (lab .fh/.rail/.chips) */
+.bar {
+  position: relative; z-index: 6; display: flex; align-items: center; gap: var(--s3);
+  height: var(--header-h); border-bottom: var(--hairline) solid var(--line);
+}
+.mark { width: 22px; height: 22px; flex: none; }
+.wordmark { font: 400 var(--fs-wordmark)/1 var(--serif); letter-spacing: -.01em; white-space: nowrap; }
+.rail { margin: 0 auto; display: flex; gap: var(--s5); font: 400 var(--fs-small)/1 var(--mono); color: var(--cream-2); }
+.rail span { position: relative; padding: 7px 0; white-space: nowrap; }
+.done::before { content: "✓ "; font-size: 10px; }
+.on { color: var(--cream); font-weight: 500; }
+.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 2px; background: currentColor; }
+.chips { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.chip {
+  font: 500 var(--fs-label)/1 var(--mono); letter-spacing: .08em; padding: var(--s2) var(--s3);
+  border: var(--hairline) solid currentColor; border-radius: var(--r1);
+  display: inline-flex; gap: var(--s2); align-items: center; white-space: nowrap;
+}
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--canary); }
+.sandbox { border-style: dashed; }
+.sandbox::before { border-radius: 0; background: transparent; box-shadow: inset 0 0 0 1.5px var(--canary); }
+.placeholder { background: var(--canary); color: var(--ink); border-color: var(--canary); }
+.placeholder::before { background: var(--ink); }
+
+@container app (max-width: 760px) {
+  .bar { height: auto; min-height: 60px; flex-wrap: wrap; gap: var(--s2) var(--s3); padding: var(--s3) 0; }
+  .rail { display: none; }
+  .chips { margin-left: auto; }
+  .chip { padding: 6px var(--s2); font-size: var(--fs-label-n); }
+}
+@container app (max-width: 420px) { .wordmark { display: none; } }

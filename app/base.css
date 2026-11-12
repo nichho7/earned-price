@@ -1,0 +1,61 @@
+/* [CTO] T-033 · global base: reset, page frame and the few utilities every section shares.
+   Colours come only from tokens.css. Component styles live in site/view/*.module.css. */
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--violet); }
+body {
+  font: 400 var(--fs-body)/1.5 var(--sans);
+  color: var(--cream);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+#app { container-type: inline-size; container-name: app; }
+.pg {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 0 var(--pg-x) var(--pg-bottom);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+@container app (max-width: 760px) {
+  .pg { padding: 0 var(--pg-x-n) var(--pg-bottom-n); padding-top: env(safe-area-inset-top, 0px); }
+}
+.layer { position: relative; z-index: 3; }
+
+/* visually hidden, still read by screen readers */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* focus: canary on violet, violet on the sheet (build spec 2.1) */
+:focus-visible { outline: var(--focus-on-violet); outline-offset: var(--focus-offset); }
+.sheet :focus-visible { outline: var(--focus-on-sheet); }
+
+a { color: inherit; }
+.lnk { color: var(--violet); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+
+/* placeholder marking: a placeholder never passes as a real value (lab T-053) */
+.ph {
+  display: inline-block; font: 500 9px/1 var(--mono); letter-spacing: .1em; padding: 3px var(--s1);
+  background: var(--canary); color: var(--ink); border-radius: 1px; vertical-align: 1px; white-space: nowrap;
+}
+.sheet .ph { background: var(--ink); color: var(--canary); }
+.phv { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.phv s {
+  text-decoration: line-through; text-decoration-thickness: 1px; opacity: .62;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 20ch;
+}
+.real {
+  display: inline-block; font: 500 9px/1 var(--mono); letter-spacing: .1em; padding: 2px var(--s1);
+  border: var(--hairline) solid currentColor; border-radius: 1px; vertical-align: 1px;
+}
+
+/* stamp: a word in a box, rotated (EARNED / NOT COUNTED / REFUNDED are real text) */
+.stamp {
+  display: inline-block; font: 500 var(--fs-data)/1 var(--mono); letter-spacing: .16em;
+  padding: 7px var(--s3); border: var(--stamp-border) solid currentColor; border-radius: var(--r1);
+  transform: rotate(-8deg); white-space: nowrap;
+}
+
+/* the still postal-cancel waves on the ground (a static layer, never animated) */
+.waves { position: absolute; left: 0; right: 0; width: 100%; pointer-events: none; z-index: 0; top: 120px; height: 200px; }
+.waves path { fill: none; stroke: var(--violet-deep); stroke-width: 9; stroke-linecap: round; }

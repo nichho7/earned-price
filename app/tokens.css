@@ -1,0 +1,75 @@
+/* [CTO] T-033 · design tokens: the ONLY file allowed to hold colour values (S-029 AC 1; checked by
+   scripts/site-rules.mjs). Source: Designer build spec T-054 section 2 (Cancel Violet, decisions
+   2026-11-11). Tokens tagged "pending A-018" may change when Nicho decides the brand redline; if he
+   does, only this file changes. */
+:root {
+  /* 2.1 colour: frozen (decisions 2026-11-11) */
+  --violet: #5B34DB;       /* page ground; stamp/mark colour on the sheet; focus ring on the sheet */
+  --violet-deep: #4A28C4;  /* still postal-cancel waves; pressed */
+  --slot: #3A1E9E;         /* strip, slot, unlit hero dots, print shadow */
+  --canary: #F5D53B;       /* the one accent, on violet surfaces only (never on the sheet) */
+  --sheet: #FBF9F3;        /* receipt surface; main text on violet */
+  --cream: var(--sheet);
+  --ink: #1B1A17;          /* text on the sheet */
+  /* 2.1 colour: pending A-018 */
+  --cream-2: #E3DBFF;      /* secondary text on violet */
+  --line: #9C86EE;         /* decorative hairlines on violet only (2.39:1, never text) */
+  --ink-2: #5C574D;        /* secondary text on the sheet */
+  --rule: #CFC7B5;         /* decorative dashed rules inside the receipt */
+  /* masks (alpha only, not visible colour): the receipt's perforated edge */
+  --mask-on: #000;
+  --mask-off: #0000;
+
+  /* 2.2 type: next/font sets --font-*; metric-adjusted fallbacks come with it */
+  --serif: var(--font-serif), "Iowan Old Style", Georgia, serif;
+  --serif-italic: var(--font-serif-italic), "Iowan Old Style", Georgia, serif;
+  --sans: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
+
+  --fs-hero: 76px;         /* "647 agents. / 547 jobs." (≤ 760: 54) */
+  --fs-hero-n: 54px;
+  --fs-stage: 116px;       /* stage headline (≤ 760: 76) */
+  --fs-stage-n: 76px;
+  --fs-price: 104px;       /* receipt price (≤ 760: 66) */
+  --fs-price-n: 66px;
+  --fs-closer: 64px;       /* closer heading (≤ 760: 46) */
+  --fs-closer-n: 46px;
+  --fs-record: 34px;       /* record card + strip figures */
+  --fs-wordmark: 23px;
+  --fs-body: 16px;         /* body, lede, hero source line: never below 16 (S-028 AC 4) */
+  --fs-move: 15px;         /* move line (≤ 760: 13.5) */
+  --fs-move-n: 13.5px;
+  --fs-row: 12px;          /* receipt rows, hold band */
+  --fs-row-n: 11.2px;
+  --fs-data: 13px;
+  --fs-small: 11.5px;
+  --fs-micro: 11px;
+  --fs-label: 10.5px;      /* chips, labels */
+  --fs-label-n: 9.5px;
+
+  /* 2.3 space (4-pt), radius, layout */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px; --s9: 96px;
+  --r1: 2px;
+  --pg-x: 56px;            /* page side padding (≤ 760: 18) */
+  --pg-x-n: 18px;
+  --pg-bottom: 48px;
+  --pg-bottom-n: 28px;
+  --header-h: 76px;
+  --hairline: 1px;
+  --stamp-border: 2.4px;
+  --shadow-print-x: 10px;  /* receipt's hard print-offset shadow (no filter) */
+  --shadow-print-y: 12px;
+  --tilt: 0.9deg;          /* receipt tilt (≤ 760: .6deg) */
+  --tilt-n: 0.6deg;
+
+  /* 2.4 motion (used from M1 on; listed so every value lives here) */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-stamp: cubic-bezier(.3, 1.4, .5, 1);
+  --ease-heavy: cubic-bezier(.7, 0, .2, 1);
+  --ease-travel: cubic-bezier(.5, 0, .2, 1);
+
+  /* focus: canary on violet / deep / slot, violet on the sheet */
+  --focus-on-violet: 2px solid var(--canary);
+  --focus-on-sheet: 2px solid var(--violet);
+  --focus-offset: 3px;
+}
