@@ -339,7 +339,7 @@ export function VerifyPanel() {
                       <p className={s.word}>Not checked.</p>
                       <p className={s.line}>{err}</p>
                       {src.kind === "file" && (
-                        <p className={s.hint}>Nothing was checked. To check the recorded receipt, press Use the recorded receipt.</p>
+                        <p className={s.hint}>Your file was refused, not the recorded receipt. Press Use the recorded receipt to go back to it.</p>
                       )}
                     </div>
                   ) : (

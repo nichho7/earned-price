@@ -162,7 +162,7 @@ for (const [what, file, reason] of [
     await expect(page.locator("[data-error]")).toContainText(reason);
     // Designer QA B3: the sheet names the refused file, never the recorded receipt, and shows no literal backticks
     await expect(page.locator("[data-error-name]")).toHaveText(file.name);
-    await expect(page.locator("[data-error]")).toContainText("Nothing was checked.");
+    await expect(page.locator("[data-error]")).toContainText("Your file was refused, not the recorded receipt. Press Use the recorded receipt to go back to it.");
     await expect(page.locator("[data-error]")).not.toContainText("`");
     await expect(page.locator("[data-error]")).not.toContainText("pack-2");
     await expect(page.locator("[data-file-name]")).toHaveText(file.name);
