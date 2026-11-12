@@ -14,15 +14,17 @@
 //
 // Allowance (estimate): each job prepays 30 Tgas (accept) + 300 Tgas (submit_review). At testnet's
 // minimum gas price (1e-4 NEAR per Tgas) that is ~0.033 NEAR of allowance per job, and the
-// allowance is charged on prepaid gas. 5 NEAR covers ~150 jobs (the cap is 35 a day, A-028). When it runs
-// out, txs are refused (the site replays); add a fresh key with this script.
+// allowance is charged on prepaid gas. A decline prepays 30 Tgas (~0.003 NEAR), at most 35 a day
+// (site-api/caps.js DAILY_DECLINE_CAP). 10 NEAR (A-028) covers ~300 jobs, or ~7.9 days at the
+// 35-a-day cap plus a full decline budget. When it runs out, txs are refused (the site replays); add
+// a fresh key with this script.
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { CONTRACT_ACCOUNT } from "../cli/names.js";
 import { DEMO_SELLER } from "../cli/pick.js";
 import { SELLER_KEY_METHODS } from "../site-api/chain.js";
 
-export const DEFAULT_ALLOWANCE = "5 NEAR";
+export const DEFAULT_ALLOWANCE = "10 NEAR"; // A-028
 
 /** The near-cli-rs command (argv) that adds `publicKey` as a scoped function-call key. */
 export function fcKeyCommand(publicKey, { seller = DEMO_SELLER, contract = CONTRACT_ACCOUNT, allowance = DEFAULT_ALLOWANCE } = {}) {
