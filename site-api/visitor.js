@@ -4,7 +4,8 @@
 // as is. Only the hash is kept, never the IP. On Vercel the IP headers are set by the platform:
 // "we currently overwrite the X-Forwarded-For header and do not forward external IPs"
 // (https://vercel.com/docs/headers/request-headers, read 2026-11-12), so a client can't pick its
-// own. Off Vercel (local dev) these headers are client-controlled; don't rely on the cap there.
+// own. x-real-ip is read first (security I-1: Vercel sets it; whether a client-sent
+// x-vercel-forwarded-for is always stripped could not be confirmed offline). Off Vercel (local dev) these headers are client-controlled; don't rely on the cap there.
 //
 // What it does NOT stop (say so, don't overclaim): a new IP resets it (VPN, mobile network, Tor,
 // another /64); people behind one NAT (an office, a venue) share 3. Clearing cookies or making a
@@ -12,9 +13,10 @@
 import { createHmac } from "node:crypto";
 import { isIP } from "node:net";
 
-const IP_HEADERS = ["x-vercel-forwarded-for", "x-real-ip", "x-forwarded-for"];
+const IP_HEADERS = ["x-real-ip", "x-vercel-forwarded-for", "x-forwarded-for"];
 
-const header = (headers, name) => (typeof headers?.get === "function" ? headers.get(name) : (headers?.[name] ?? null));
+/** Header lookup on a Web Headers object or a plain object. */
+export const header = (headers, name) => (typeof headers?.get === "function" ? headers.get(name) : (headers?.[name] ?? null));
 
 /** The client IP from the first platform header that holds a valid one (first hop), else null. */
 export function clientIp(headers) {

@@ -5,12 +5,18 @@
 // Where the counters live (Vercel Hobby, $0, no paid KV):
 //   - Upstash Redis over its REST API when UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN (or the
 //     Vercel Marketplace names KV_REST_API_URL + KV_REST_API_TOKEN) are set. Free tier, durable,
-//     shared by every function instance. Needs a free Upstash account: Nicho's call, not made here.
-//   - Otherwise a per-instance memory store. Not durable: a cold start or a second instance starts
-//     from zero, so the daily and visitor caps are best effort. The spend stop is still durable
-//     through the on-chain floor the handler passes in (the seller's closed jobs x the per-review
-//     reserve, read from get_record), and NEAR AI itself refuses with 402 once the key is out of
-//     credit, which the function treats as "replay".
+//     shared by every function instance. Needs a free Upstash account (approval A-019).
+//   - Otherwise a per-instance memory store, for tests and local dev ONLY. It is not durable: a cold
+//     start, a redeploy or a second instance starts from zero. So in production a memory store
+//     counts as "not configured" and the function never runs a live review on it (security H-1,
+//     Nicho 2026-11-12; enforced in site-api/vercel.js).
+//
+// None of this is the hard spend stop. The on-chain floor the handler passes in ((passes + fails) x
+// the per-review reserve, from get_record) is only a partial backstop: a buyer who never reveals
+// ends in timeout "no_reveal", which leaves the record unchanged, so those jobs are never counted.
+// The real hard stop is outside this code: Vercel uses its OWN NEAR AI key loaded with at most $2
+// (NEAR_AI_API_KEY, loaded by Nicho at A-003), so NEAR AI answers 402 (= replay) once that credit is
+// gone, even if every counter here fails.
 //
 // Every check is increment-then-compare with a rollback, so concurrent requests can't both slip
 // under a limit (INCRBY is atomic in Redis and in the single-threaded memory store).
@@ -148,7 +154,7 @@ export function storeFromEnv(env, fetch) {
 /**
  * Takes one live review slot for `jobId`: job lock, daily, visitor (hashed IP) and buyer counts,
  * then the spend reservation. Returns { ok: false, reason } (job_busy | cap_daily | cap_visitor |
- * cap_spend) with every counter rolled back, or { ok: true, release(), settle(actualMicro) }:
+ * cap_buyer | cap_spend) with every counter rolled back, or { ok: true, release(), settle(actualMicro) }:
  * release() undoes it all (nothing was spent), settle() lowers the reservation to the actual
  * estimate once the review is done. Store failures throw CapStoreError (caller fails closed).
  */
@@ -174,7 +180,8 @@ export async function reserveLive({ store, jobId, visitor, buyer, day, reserveMi
     if ((await bump(`day:${day}`, 1, DAY_TTL_S)) > DAILY_LIVE_CAP) return await refuse("cap_daily");
     const v = await bump(`visitor:${day}:${visitor}`, 1, DAY_TTL_S);
     const b = await bump(`buyer:${day}:${buyer}`, 1, DAY_TTL_S);
-    if (v > VISITOR_DAILY_CAP || b > VISITOR_DAILY_CAP) return await refuse("cap_visitor");
+    if (v > VISITOR_DAILY_CAP) return await refuse("cap_visitor"); // this caller's IP
+    if (b > VISITOR_DAILY_CAP) return await refuse("cap_buyer"); // the job's buyer account
     const spent = await bump(SPEND_KEY, reserveMicro);
     if (Math.max(spent, floorMicro + reserveMicro) > SPEND_STOP_MICRO_USD) return await refuse("cap_spend");
   } catch (e) {

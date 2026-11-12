@@ -44,11 +44,67 @@ export function sellerChain({ fetch, urls, contractId, sellerId, send }) {
     getJob: (id) => view("get_job", { id }),
     signers: () => view("signers", {}),
     getRecord: (seller) => view("get_record", { seller }),
+    // M-1: is `publicKey` an access key of `accountId` (the job's buyer)? true / false; throws if unreachable.
+    hasAccessKey: async (accountId, publicKey) => (await viewAccessKey({ fetch, urls, accountId, publicKey })) !== null,
     accept: (id) => call("accept", { job_id: id }, ACCEPT_GAS),
     decline: (id) => call("decline", { job_id: id }, ACCEPT_GAS),
     submitReview: (args) => call("submit_review", args, SUBMIT_GAS),
     sellerId,
   };
+}
+
+/**
+ * Keyless view_access_key with failover over `urls` (finality final). Returns the key's
+ * `permission` ("FullAccess" or { FunctionCall: { allowance, receiver_id, method_names } }), or null
+ * when the account has no such key. Throws (no detail) when no RPC answers. Shapes as in
+ * near-api-js 7.4.0 (provider.viewAccessKey; errors UNKNOWN_ACCESS_KEY / "access key ... does not
+ * exist while viewing"; unknown account UNKNOWN_ACCOUNT).
+ */
+export async function viewAccessKey({ fetch, urls, accountId, publicKey, timeoutMs = 15000 }) {
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    id: "earned",
+    method: "query",
+    params: { request_type: "view_access_key", finality: "final", account_id: accountId, public_key: publicKey },
+  });
+  for (const url of urls) {
+    let out;
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) continue;
+      out = await res.json();
+    } catch {
+      continue;
+    }
+    if (!out || typeof out !== "object") continue;
+    if (out.error) {
+      const name = out.error.cause?.name ?? out.error.name;
+      if (name === "UNKNOWN_ACCESS_KEY" || name === "UNKNOWN_ACCOUNT") return null;
+      continue; // INTERNAL_ERROR, TIMEOUT_ERROR, ...: try the next RPC
+    }
+    if (typeof out.result?.error === "string") {
+      if (/does not exist while viewing/.test(out.result.error)) return null;
+      continue;
+    }
+    if (out.result && "permission" in out.result) return out.result.permission;
+  }
+  throw new Error("testnet RPC unreachable");
+}
+
+export const SELLER_KEY_METHODS = ["accept", "decline", "submit_review"];
+
+/**
+ * Security M-2 (Nicho 2026-11-12): the Vercel seller key must be a function-call key for the escrow
+ * limited to accept / decline / submit_review. "ok" | "full_access" | "wrong_scope" | "missing".
+ */
+export function sellerKeyScope(permission, contractId) {
+  if (permission === null || permission === undefined) return "missing";
+  if (permission === "FullAccess") return "full_access";
+  const fc = permission?.FunctionCall;
+  if (!fc || fc.receiver_id !== contractId || !Array.isArray(fc.method_names)) return "wrong_scope";
+  const names = new Set(fc.method_names);
+  // An empty list means "any method" on NEAR: too wide.
+  return names.size > 0 && [...names].every((m) => SELLER_KEY_METHODS.includes(m)) ? "ok" : "wrong_scope";
 }
 
 /**

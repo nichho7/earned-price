@@ -50,13 +50,13 @@ test("a visitor gets 3 live reviews a day, then cap_visitor; counters roll back 
   assert.equal((await take(store, { jobId: "5", day: "2026-11-13" })).ok, true);
 });
 
-test("a new buyer account from the same visitor does not reset the cap, nor a new IP with the same buyer", async () => {
+test("a new buyer account from the same visitor does not reset the cap (cap_visitor), nor a new IP with the same buyer (cap_buyer)", async () => {
   const store = memoryStore();
   for (let i = 1; i <= 3; i++) await take(store, { jobId: String(i), buyer: `b${i}.testnet` });
   assert.equal((await take(store, { jobId: "9", buyer: "fresh.testnet" })).reason, "cap_visitor");
   const store2 = memoryStore();
   for (let i = 1; i <= 3; i++) await take(store2, { jobId: String(i), visitor: `ip${i}` });
-  assert.equal((await take(store2, { jobId: "9", visitor: "ip-new" })).reason, "cap_visitor");
+  assert.equal((await take(store2, { jobId: "9", visitor: "ip-new" })).reason, "cap_buyer");
 });
 
 test("site-wide 100 live reviews a day, then cap_daily", async () => {
@@ -186,7 +186,8 @@ test("storeFromEnv: Upstash when its URL+token are set (either naming), else per
 // ---- visitor identity ----
 const H = (o) => new Headers(o);
 
-test("clientIp prefers x-vercel-forwarded-for, then x-real-ip, then x-forwarded-for; first hop only", () => {
+test("clientIp prefers x-real-ip, then x-vercel-forwarded-for, then x-forwarded-for; first hop only", () => {
+  assert.equal(clientIp(H({ "x-real-ip": "203.0.113.6", "x-vercel-forwarded-for": "198.51.100.2" })), "203.0.113.6", "security I-1");
   assert.equal(clientIp(H({ "x-vercel-forwarded-for": "203.0.113.7", "x-forwarded-for": "198.51.100.1" })), "203.0.113.7");
   assert.equal(clientIp(H({ "x-real-ip": "203.0.113.8" })), "203.0.113.8");
   assert.equal(clientIp(H({ "x-forwarded-for": "203.0.113.9, 10.0.0.1" })), "203.0.113.9");
