@@ -2,8 +2,8 @@
 // [CTO] T-033 · build-time data gate (ADR-001 Addendum B, B3 "Build-time data"; decisions 2026-11-11
 // "the build fails on SAMPLE/placeholder fixtures or tx hashes testnet can't resolve").
 // Always fails on: a quote that disagrees with get_record, a malformed run, hero.json missing a field.
-// Ship mode (Vercel, or EARNED_SHIP=1) also fails on: any placeholder (findPlaceholders), an empty
-// REPO_URL, and the RPC tx check, which is not built yet and so refuses (it lands with the first
+// Ship mode (Vercel, or EARNED_SHIP=1) also fails on: any placeholder (findPlaceholders), a REPO_URL that
+// is not a github.com repo URL, and the RPC tx check, which is not built yet and so refuses (it lands with the first
 // recorded run). Local builds print the placeholder count; the page itself marks every placeholder.
 // Node >= 22.18 strips the TypeScript types, so this reads the exact modules the page renders.
 // Skills used: ci-cd-and-automation, security-and-hardening, karpathy-guidelines
@@ -31,11 +31,16 @@ RUNS.forEach((run, i) => {
   if (out === "in-progress") hard.push(`run ${i + 1}: incomplete (no settled + quote(after))`);
   placeholders.push(...findPlaceholders(run).map((p) => `run ${i + 1} ${p}`));
 });
+// The page tells one story: run 1 earns, run 2 (same buyer) holds. Anything else must not build (code review L-1).
+const story = RUNS.map((run) => outcomeOf(fold(run)));
+if (story[0] !== undefined && story[0] !== "earned") hard.push(`run 1 must end "earned", got "${story[0]}"`);
+if (story[1] !== undefined && story[1] !== "holds") hard.push(`run 2 must end "holds" (repeat buyer), got "${story[1]}"`);
 if (RUNS[1] && RUNS[0] && RUNS[1].buyer !== RUNS[0].buyer) hard.push("run 2 must be the same buyer as run 1 (repeat-buyer beat)");
 
 if (ship) {
   if (placeholders.length) hard.push(`${placeholders.length} placeholder values (${RUNS_SOURCE}); first: ${placeholders[0]}`);
-  if (!process.env.REPO_URL) hard.push("REPO_URL is empty (the closer needs the public repo URL)");
+  if (!/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/.test(process.env.REPO_URL ?? ""))
+    hard.push(`REPO_URL must be https://github.com/<owner>/<repo> (the closer links to it); got "${process.env.REPO_URL ?? ""}"`);
   hard.push("RPC tx check of every hash is not built yet; it lands with the first recorded run (build spec open item 1)");
 }
 

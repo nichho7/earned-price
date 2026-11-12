@@ -2,7 +2,7 @@
 // [CTO] T-033 · site build rules as a check that fails the build (ADR-001 Addendum B, B4).
 // Scope: app/ and site/ only (the CLI is not checked here). Grep-based on purpose: no ESLint
 // dependency for four rules.
-//   colour  hex / rgb() / hsl() colours only in app/tokens.css (S-029 AC 1)
+//   colour  hex / rgb() / hsl() / modern colour functions / named colours only in app/tokens.css (S-029 AC 1)
 //   R2      no feTurbulence, mix-blend-mode, backdrop-filter
 //   R3      no three / R3F / Rive / GSAP / OGL / Pixi in package.json; no WebGL context
 //   R4      near-api-js, @near-js/*, @near-wallet-selector/* only via dynamic import() under app/live/,
@@ -19,6 +19,20 @@ const EXT = /\.(css|ts|tsx|js|mjs|jsx|svg|json)$/;
 const TOKENS = join("app", "tokens.css");
 
 export const DENY_DEPS = [/^three$/, /^@react-three\//, /^@rive-app\//, /^gsap$/, /^ogl$/, /^pixi\.js$/];
+// CSS named colours (CSS Color 4), minus transparent / currentcolor, which carry no hue of their own.
+const NAMED_COLOURS = new Set(("aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown " +
+  "burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray " +
+  "darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue " +
+  "darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite " +
+  "forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory " +
+  "khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen " +
+  "lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime " +
+  "limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue " +
+  "mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive " +
+  "olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum " +
+  "powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue " +
+  "slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke " +
+  "yellow yellowgreen").split(" "));
 const WALLET = /(?:near-api-js|@near-js\/[\w-]+|@near-wallet-selector\/[\w-]+)/;
 
 /** Files the rules apply to: bundle-able source under app/ or site/. Tests and e2e never ship. */
@@ -84,11 +98,21 @@ export function checkFile(rel, raw, read) {
   const src = stripComments(raw, rel);
   const line = (i) => src.slice(0, i).split("\n").length;
   if (rel !== TOKENS) {
-    for (const m of src.matchAll(/#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(/g)) {
+    for (const m of src.matchAll(/#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix)\(/g)) {
       // allow "#" ids/anchors made only of hex-ish letters only when used as href="#..."; colours need a CSS/style context
       const before = src.slice(Math.max(0, m.index - 6), m.index);
       if (/href=["'{]?$/.test(before)) continue;
       errs.push(`${rel}:${line(m.index)} colour "${m[0]}" outside app/tokens.css (use a token)`);
+    }
+  }
+  if (rel !== TOKENS) {
+    // Named colours ("white", "black", ...) in a colour property or SVG paint attribute (code review L-5).
+    const decl = /\.css$/.test(rel)
+      ? /(?:^|[;{\s])(?:color|background(?:-color)?|fill|stroke|border(?:-[a-z-]+)?|outline(?:-color)?|box-shadow|text-shadow|text-decoration(?:-color)?|caret-color|accent-color|stop-color)\s*:\s*([^;}]+)/g
+      : /\b(?:color|background(?:Color)?|fill|stroke|stopColor|stop-color|borderColor|outlineColor)\s*[:=]\s*\{?\s*["'`]([^"'`]+)["'`]/g;
+    for (const m of src.matchAll(decl)) {
+      const named = m[1].toLowerCase().replace(/var\(--[\w-]+/g, "").match(/[a-z]+/g)?.find((w) => NAMED_COLOURS.has(w));
+      if (named) errs.push(`${rel}:${line(m.index)} colour "${named}" outside app/tokens.css (use a token)`);
     }
   }
   for (const m of src.matchAll(/feTurbulence|mix-blend-mode|backdrop-filter/g))

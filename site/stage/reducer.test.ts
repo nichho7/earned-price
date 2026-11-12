@@ -109,3 +109,19 @@ test("format helpers", () => {
   assert.equal(postmarkDate("2026-11-13T10:02:00Z"), "13 NOV 2026 UTC");
   assert.equal(postmarkDate("nope"), "");
 });
+
+test("a quote(after) whose delta, prev or jobs disagree is a mismatch (code review L-2)", () => {
+  for (const name of ["pass", "repeat", "fail"]) assert.deepEqual(fold(load(name)).mismatch, [], name);
+  const f = load("pass");
+  const i = f.events.findIndex((e) => e.type === "quote" && e.data.phase === "after");
+  const bad = (patch: object) => {
+    const g = structuredClone(f);
+    const e = g.events[i] as Extract<LabEvent, { type: "quote" }>;
+    Object.assign(e.data, patch);
+    return fold(g).mismatch;
+  };
+  assert.match(bad({ delta_mnear: 15 }).join(), /delta 15 != quote/);
+  assert.match(bad({ prev_quote_mnear: 35, delta_mnear: 5 }).join(), /prev_quote 35 != quote\(before\) 30/);
+  const e = f.events[i] as Extract<LabEvent, { type: "quote" }>;
+  assert.match(bad({ record: { ...e.data.record, jobs: e.data.record.jobs + 1 } }).join(), /record jobs/);
+});

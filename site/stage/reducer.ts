@@ -46,6 +46,14 @@ export function apply(prev: StageState, e: LabEvent): StageState {
     case "quote": {
       const calc = quoteOf(e.data.record);
       if (calc !== e.data.quote_mnear) s.mismatch.push(`seq ${e.seq}: get_record gives ${calc}, quote says ${e.data.quote_mnear}`);
+      const r = e.data.record;
+      if (r.jobs !== r.passes + r.fails) s.mismatch.push(`seq ${e.seq}: record jobs ${r.jobs} != passes ${r.passes} + fails ${r.fails}`);
+      if (e.data.phase === "after") {
+        // The G9 branch reads delta_mnear, so it must agree with the quotes it claims to compare (code review L-2).
+        const { prev_quote_mnear: prev, delta_mnear: delta, quote_mnear: q } = e.data;
+        if (prev !== undefined && delta !== undefined && delta !== q - prev) s.mismatch.push(`seq ${e.seq}: delta ${delta} != quote ${q} - prev ${prev}`);
+        if (prev !== undefined && s.quoteBefore && prev !== s.quoteBefore.quote_mnear) s.mismatch.push(`seq ${e.seq}: prev_quote ${prev} != quote(before) ${s.quoteBefore.quote_mnear}`);
+      }
       if (e.data.phase === "before") s.quoteBefore = e.data;
       else s.quoteAfter = e.data;
       break;

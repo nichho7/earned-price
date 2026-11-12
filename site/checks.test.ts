@@ -14,6 +14,16 @@ test("colour rule: hex / rgb outside tokens.css fails; tokens.css and comments p
   assert.equal(checkFile("site/view/X.tsx", '<a href="#closer">x</a>').length, 0);
 });
 
+test("colour rule: modern colour functions and named colours fail; var() / currentColor pass (code review L-5)", () => {
+  for (const bad of [".a{color:oklch(60% .2 280)}", ".a{background:color-mix(in srgb, var(--a), var(--b))}", ".a{color:white}", ".a{border:1px solid black}", ".a{fill: Tomato}"])
+    assert.equal(checkFile("site/view/x.module.css", bad).length, 1, bad);
+  assert.equal(checkFile("site/view/X.tsx", '<path fill="white" />').length, 1);
+  assert.equal(checkFile("site/view/X.tsx", "<p style={{ color: 'red' }} />").length, 1);
+  for (const ok of [".a{color:var(--ink)}", ".a{border:var(--hairline) solid currentColor}", ".a{background:transparent}", ".a{outline:2px solid var(--canary)}", ".a{color:var(--violet)}", ".a{background:var(--violet-deep, var(--violet))}"])
+    assert.equal(checkFile("site/view/x.module.css", ok).length, 0, ok);
+  assert.equal(checkFile("site/view/X.tsx", '<path fill="currentColor" stroke="none" />').length, 0);
+});
+
 test("R2: runtime noise and blend modes fail", () => {
   assert.equal(checkFile("site/view/a.css", ".g{mix-blend-mode:multiply}").length, 1);
   assert.equal(checkFile("site/view/A.tsx", "<feTurbulence baseFrequency='.9'/>").length, 1);
