@@ -1344,6 +1344,27 @@ test("R-1: get_job is not null at the pinned block (that state does not include 
   assert.ok(!lines.includes("SEE: step 4 PASS"));
 });
 
+test("T-078 / review O-5: the RPC answers a pinned read from another block than asked -> never compared (unclear, no SEE)", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  let swapped = 0;
+  const fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    const p = body.params;
+    if (p.block_id !== undefined && p.method_name === "get_record" && chain.blocks.has(p.block_id)) {
+      // Same state, but the node says it answered from another block (it echoes that block's hash).
+      const other = `${p.block_id}-other`;
+      chain.blocks.set(other, chain.blocks.get(p.block_id));
+      swapped++;
+      return chain.fetch(url, { ...init, body: JSON.stringify({ ...body, params: { ...p, block_id: other } }) });
+    }
+    return chain.fetch(url, init);
+  };
+  const r = await runHire({ ...deps, fetch, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.ok(swapped > 0, "the pinned read was answered from another block");
+  assert.equal(r.step4.kind, "unclear");
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
 test("R-1: a closing tx whose receipts carry no block_hash is never compared (unclear, no SEE)", async () => {
   const { chain, clock, deps, lines } = step4Setup();
   const sendTx = async (req) => {

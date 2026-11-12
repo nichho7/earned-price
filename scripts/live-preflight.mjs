@@ -25,6 +25,9 @@ export const MIN_SELLER_YOCTO = 10n ** 23n; // 0.1 NEAR: gas for accept + submit
 export const SELLER_METHODS = ["accept", "submit_review"];
 const NODE_MIN_MAJOR = 20;
 
+/** A yocto amount from the RPC as a BigInt, or null when it is not a plain decimal string (sec L-5). */
+const yocto = (x) => (typeof x === "string" && /^\d{1,40}$/.test(x) ? BigInt(x) : null);
+
 async function rpc(fetchFn, urls, params) {
   let last = "no RPC answered";
   for (const url of urls) {
@@ -104,8 +107,13 @@ export async function runPreflight(deps) {
   if (seller.unreachable) add(false, "seller account", `testnet RPC unreachable (${seller.unreachable})`, "check the network and retry");
   else if (seller.missing) add(false, "seller account", `${DEMO_SELLER} does not exist`, `create ${DEMO_SELLER} as a sub-account of ${CONTRACT_ACCOUNT} (Nicho; near-cli-rs) and fund it with ~1 NEAR`);
   else {
-    const amount = BigInt(seller.value.amount ?? "0");
-    add(amount >= MIN_SELLER_YOCTO, "seller account", `${DEMO_SELLER} exists, balance ${amount} yocto`, `fund ${DEMO_SELLER} with at least 0.1 NEAR for gas`);
+    const amount = yocto(seller.value.amount);
+    add(
+      amount !== null && amount >= MIN_SELLER_YOCTO,
+      "seller account",
+      amount === null ? `${DEMO_SELLER} exists, balance unreadable (${String(seller.value.amount)})` : `${DEMO_SELLER} exists, balance ${amount} yocto`,
+      `fund ${DEMO_SELLER} with at least 0.1 NEAR for gas`,
+    );
   }
 
   // Review O-3 / CoS 5: the demo's 0.030 -> 0.040 -> 0.040 needs a seller with an empty record.
@@ -144,7 +152,7 @@ export async function runPreflight(deps) {
         const fc = perm?.FunctionCall;
         const methods = Array.isArray(fc?.method_names) ? fc.method_names : [];
         const callsOurs = fc?.receiver_id === CONTRACT_ACCOUNT && (methods.length === 0 || SELLER_METHODS.every((m) => methods.includes(m)));
-        const allowanceOk = fc?.allowance == null || BigInt(fc.allowance) >= MIN_SELLER_YOCTO;
+        const allowanceOk = fc?.allowance == null || (yocto(fc.allowance) ?? -1n) >= MIN_SELLER_YOCTO;
         add(
           Boolean(fc) && callsOurs && allowanceOk,
           "seller key on-chain",
@@ -203,4 +211,12 @@ async function main(argv) {
   process.exitCode = printChecks(checks) ? 0 : 3;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) await main(process.argv.slice(2));
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  try {
+    await main(process.argv.slice(2));
+  } catch (err) {
+    // Sec L-5: an unexpected error is one printable line (Node would print RPC text raw), exit 3.
+    console.error(printable(`preflight error: ${err?.message ?? err} Nothing was sent.`));
+    process.exitCode = 3;
+  }
+}
