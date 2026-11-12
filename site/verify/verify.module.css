@@ -1,0 +1,172 @@
+/* [CTO] T-039 · the verify panel, Cancel Violet (build spec T-054 sections 1, 2, 7; design-spec screen 7 for
+   layout and states; motion-spec M10 / M10b). Colours, type, space, radius and easing come only from
+   app/tokens.css. The receipt sheet reuses the earn stage's look: cream sheet, slot print shadow, perforated
+   bottom edge, tilt. Moving layers carry no filter, blur or blend mode. */
+.vf { position: relative; z-index: var(--z-stage); container-type: inline-size; padding-top: var(--s3); }
+
+.top { display: flex; align-items: center; justify-content: space-between; gap: var(--s2) var(--s4); flex-wrap: wrap; }
+.back { display: inline-flex; align-items: center; min-height: 44px; font: 500 var(--fs-micro)/1 var(--mono); letter-spacing: .06em; color: var(--cream); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.kick { display: block; margin-bottom: var(--s4); font: 500 var(--fs-micro)/1 var(--mono); letter-spacing: var(--track-wide); text-transform: uppercase; color: var(--cream-2); }
+.chip {
+  font: 500 var(--fs-label)/1 var(--mono); letter-spacing: .08em; padding: var(--s2) var(--s3);
+  border: var(--hairline) solid currentColor; border-radius: var(--r1);
+  display: inline-flex; gap: var(--s2); align-items: center; white-space: nowrap;
+}
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--canary); }
+
+.gr { display: grid; grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr); gap: var(--s7); padding-top: var(--s5); align-items: start; }
+.el { min-width: 0; display: flex; flex-direction: column; }
+.er { min-width: 0; }
+
+.hd { margin: 0; font: 400 var(--fs-closer)/.95 var(--serif); letter-spacing: -.03em; }
+.hd em {
+  display: block; margin-top: var(--s2); font-family: var(--serif-italic); font-style: italic; font-size: .62em;
+  letter-spacing: -.015em; color: var(--cream-2);
+}
+.l2 { margin: var(--s4) 0 0; max-width: 46ch; color: var(--cream-2); }
+.l2 code, .trust code { font: 500 .9em/1 var(--mono); color: var(--cream); }
+
+/* the receipt being checked */
+.src { margin-top: var(--s5); padding-top: var(--s4); border-top: var(--hairline) solid var(--line); }
+.src small, .cli small {
+  display: block; font: 500 var(--fs-label)/1 var(--mono); letter-spacing: var(--track-wide); color: var(--cream-2);
+}
+.fname { margin: var(--s2) 0 0; font: 400 var(--fs-data)/1.45 var(--mono); color: var(--cream-2); overflow-wrap: anywhere; }
+.fname b { font-weight: 500; color: var(--cream); }
+.meta { margin: var(--s1) 0 0; font: 400 var(--fs-row)/1.45 var(--mono); color: var(--cream-2); }
+.pick { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
+
+/* controls: JS only (the server renders them hidden; no-JS readers get the CLI line) */
+.ctl { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3) var(--s5); margin-top: var(--s5); }
+.go, .btn2, .copy {
+  font: 500 var(--fs-micro)/1 var(--mono); letter-spacing: .06em; min-height: 44px; padding: 0 var(--s4);
+  border-radius: var(--r1); cursor: pointer; display: inline-flex; align-items: center;
+}
+.go { background: var(--sheet); color: var(--violet); border: var(--hairline) solid var(--sheet); font-size: var(--fs-data); padding: 0 var(--s5); }
+.go:active { transform: translateY(1px); }
+.btn2 { position: relative; background: transparent; color: var(--cream); border: var(--hairline) solid var(--cream-2); }
+.btn2:active, .go:active { background: var(--violet-deep); color: var(--cream); }
+.btn2:focus-within { outline: var(--focus-on-violet); outline-offset: var(--focus-offset); }
+/* the file input fills its label (one 44 px target), invisible; its focus ring is drawn on the label */
+.fin { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.fin:focus-visible { outline: none; }
+
+.sw { display: inline-flex; align-items: center; gap: var(--s3); min-height: 44px; font: 500 var(--fs-micro)/1 var(--mono); letter-spacing: .06em; cursor: pointer; }
+.sw input {
+  appearance: none; -webkit-appearance: none; margin: 0; position: relative; flex: none; cursor: pointer;
+  width: var(--s7); height: var(--s5); border-radius: calc(var(--s5) / 2); border: 2px solid var(--cream); background: transparent;
+}
+.sw input::before {
+  content: ""; position: absolute; top: 2px; left: 2px; width: var(--s4); height: var(--s4); border-radius: 50%;
+  background: var(--cream); transition: transform 120ms var(--ease-out);
+}
+.sw input:checked { background: var(--canary); border-color: var(--canary); }
+.sw input:checked::before { background: var(--violet); transform: translateX(var(--s5)); }
+.sw input:focus-visible { outline: var(--focus-on-violet); outline-offset: var(--focus-offset); }
+
+.nojs { margin: var(--s5) 0 0; max-width: 46ch; color: var(--cream-2); }
+
+.cli { margin-top: var(--s5); }
+.cmd {
+  display: flex; align-items: center; gap: var(--s3); margin-top: var(--s2); background: var(--sheet); color: var(--ink);
+  padding: var(--s2) var(--s2) var(--s2) var(--s4); box-shadow: var(--shadow-print-x) var(--shadow-print-y) 0 var(--slot);
+}
+.cmd code { flex: 1; min-width: 0; font: 500 var(--fs-data)/1.45 var(--mono); overflow-wrap: break-word; }
+.cmd .pr { color: var(--ink-2); }
+.cmd .wd1 { white-space: nowrap; } /* wrap only at spaces, never after the "--" of --tamper */
+.copy { flex: none; background: transparent; color: var(--violet); border: var(--hairline) solid var(--violet); }
+.copy:focus-visible { outline: var(--focus-on-sheet); outline-offset: var(--focus-offset); }
+.trust { margin: var(--s7) 0 0; max-width: 60ch; font: 400 var(--fs-row)/1.6 var(--mono); color: var(--cream-2); overflow-wrap: anywhere; }
+
+/* the sheet: shake wrapper (animated) > tilt (static) > print shadow + paper */
+.shk { position: relative; }
+.rcw { position: relative; transform: rotate(var(--tilt)); }
+.psh { position: absolute; inset: 0; transform: translate(var(--shadow-print-x), var(--shadow-print-y)); background: var(--slot); }
+.paper, .psh {
+  -webkit-mask: linear-gradient(var(--mask-on) 0 0) top/100% calc(100% - var(--perf)) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, var(--mask-on) 90deg, var(--mask-off) 0) bottom/calc(var(--perf) * 2) var(--perf) repeat-x;
+  mask: linear-gradient(var(--mask-on) 0 0) top/100% calc(100% - var(--perf)) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, var(--mask-on) 90deg, var(--mask-off) 0) bottom/calc(var(--perf) * 2) var(--perf) repeat-x;
+}
+.paper { position: relative; background: var(--sheet); color: var(--ink); padding: var(--s5) var(--s6) var(--s7); }
+/* tampered: the sheet is franked in violet (the retired stamp red's job, build spec 2.1) */
+/* Designer QA B1: the fail frame sits on cream, 8 px inside the sheet and above the perforation; flush with the
+   edge it merged into the violet ground. Static (no animation), so reduced motion keeps it. */
+.paper[data-fail]::after {
+  content: ""; position: absolute; pointer-events: none;
+  inset: var(--s2) var(--s2) calc(var(--perf) + var(--s2));
+  border: var(--stamp-border) solid var(--violet);
+}
+
+.rtop { display: flex; justify-content: space-between; gap: var(--s3); font: 400 var(--fs-small)/1.35 var(--mono); color: var(--ink-2); padding-bottom: var(--s3); border-bottom: var(--hairline) dashed var(--rule); }
+.rtop b { font-weight: 500; font-size: var(--fs-data); color: var(--ink); }
+
+.edit { margin-top: var(--s3); padding: var(--s3); border: var(--hairline) dashed var(--violet); font: 400 var(--fs-row)/1.5 var(--mono); }
+.edit small { display: block; font: 500 var(--fs-label)/1 var(--mono); letter-spacing: var(--track-label); color: var(--violet); margin-bottom: var(--s2); }
+.edit p { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.snip { color: var(--ink); }
+.snip s { color: var(--ink-2); text-decoration-thickness: 1px; }
+.snip mark { background: var(--violet); color: var(--cream); padding: 0 calc(var(--s1) / 2); }
+
+.checks { list-style: none; margin: var(--s3) 0 0; padding: 0; }
+.ck {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: var(--s1) var(--s2); align-items: baseline;
+  padding: var(--s2) 0; font: 400 var(--fs-data)/1.4 var(--mono); color: var(--ink);
+}
+.ck + .ck { border-top: var(--hairline) dashed var(--rule); }
+.ic { align-self: start; padding-top: 2px; }
+.ic svg, .proves svg { display: block; width: 14px; height: 14px; }
+.wd { font-weight: 500; letter-spacing: .08em; white-space: nowrap; }
+.dt { grid-column: 2 / -1; font: 400 var(--fs-row)/1.5 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.ck[data-st="idle"] { color: var(--ink-2); }
+.ck[data-st="idle"] .wd { font-weight: 400; letter-spacing: 0; }
+.ck[data-st="bad"], .ck[data-st="bad"] .dt { color: var(--violet); }
+
+.nc { margin: var(--s3) 0 0; padding-top: var(--s3); border-top: var(--hairline) dashed var(--rule); font: 400 var(--fs-row)/1.5 var(--mono); color: var(--ink-2); }
+
+.vd { position: relative; margin-top: var(--s4); padding-top: var(--s4); border-top: 2px solid var(--ink); min-height: 148px; }
+.vd small, .chain small { display: block; font: 500 var(--fs-label)/1 var(--mono); letter-spacing: var(--track-label); color: var(--ink-2); }
+.word { margin: var(--s2) 0 0; padding-right: calc(var(--s9) * 2); font: 400 var(--fs-closer)/1 var(--serif); letter-spacing: -.03em; }
+.vf[data-vf-state="fail"] .word { color: var(--violet); }
+.line { margin: var(--s2) 0 0; font: 500 var(--fs-data)/1.45 var(--mono); overflow-wrap: anywhere; }
+.vf[data-vf-state="fail"] .line { color: var(--violet); }
+.hint { margin: var(--s2) 0 0; font: 400 var(--fs-row)/1.5 var(--mono); color: var(--ink-2); }
+.idle { margin: 0; font: 400 var(--fs-data)/1.45 var(--mono); color: var(--ink-2); }
+.proves { list-style: none; margin: var(--s3) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); font: 400 var(--fs-row)/1.4 var(--mono); color: var(--ink-2); }
+.proves li { display: inline-flex; align-items: center; gap: var(--s1); }
+.proves li[data-ok="true"] { color: var(--ink); }
+.proves li[data-ok="false"] { color: var(--violet); }
+.stamp { position: absolute; top: var(--s6); right: 0; color: var(--violet); }
+
+.chain { margin-top: var(--s5); padding: var(--s3); border: var(--hairline) dashed var(--rule); }
+.chain dl { margin: var(--s2) 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--s1) var(--s3); font: 400 var(--fs-row)/1.45 var(--mono); }
+.chain dl > div { display: contents; }
+.chain dt { color: var(--ink-2); white-space: nowrap; }
+.chain dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.chain p { margin: var(--s3) 0 0; font: 400 var(--fs-row)/1.5 var(--mono); color: var(--ink-2); }
+.lnk { color: var(--violet); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.lnk:focus-visible { outline: var(--focus-on-sheet); outline-offset: 2px; }
+
+/* narrow: one column; the result sits right under the controls (container query: measure the panel) */
+@container (max-width: 760px) {
+  .gr { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: var(--s4); }
+  .el, .er { display: contents; }
+  .kick { order: 0; }
+  .hd { order: 1; font-size: var(--fs-closer-n); }
+  .l2 { order: 2; }
+  .src { order: 3; }
+  .ctl { order: 4; }
+  .nojs { order: 5; }
+  .shk { order: 6; margin-top: var(--s5); }
+  .cli { order: 7; margin-top: var(--s7); }
+  .trust { order: 8; margin-top: var(--s5); }
+  .rcw { transform: rotate(var(--tilt-n)); }
+  .paper { padding: var(--s5) var(--s4) var(--s7); }
+  .ck { font-size: var(--fs-row); }
+  .dt, .chain dl, .nc, .proves { font-size: var(--fs-row-n); }
+  .word { font-size: var(--fs-closer-n); padding-right: 0; }
+  .stamp { position: static; display: inline-block; margin-top: var(--s4); transform-origin: 0 50%; }
+  .chain dl { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .chain dd { margin-bottom: var(--s1); }
+  .cmd code { font-size: var(--fs-row); }
+}

@@ -231,8 +231,11 @@ function checkCommit(r, trust) {
   if (keyPin !== undefined && sha256Hex(canonicalJson(key)) !== keyPin) {
     return fail(`the revealed key is not the official ${r.pack_id} answer key`, { key_pinned: false });
   }
-  const which = keyPin === undefined ? "not an official pack" : "the official answer key";
-  return pass(`commit matches: the revealed key and salt hash to ${short(r.commit_hash)} (${key.pack_id}, ${which}); the commit itself is a chain fact (txs.create)`, {
+  // A PASS line never echoes a receipt claim (T-039 security L-1): pack_id is named only when it is one of the
+  // trust map's own keys. An unofficial pack_id is attacker text ("pack-2, the official answer key). REVIEW
+  // AUTHENTIC…") and would read as part of the verdict.
+  const which = keyPin === undefined ? "not an official pack" : `${r.pack_id}, the official answer key`;
+  return pass(`commit matches: the revealed key and salt hash to ${short(r.commit_hash)} (${which}); the commit itself is a chain fact (txs.create)`, {
     key_pinned: keyPin === undefined ? null : true,
   });
 }
