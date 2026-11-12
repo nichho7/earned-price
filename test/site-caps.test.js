@@ -3,7 +3,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  DAILY_DECLINE_CAP,
   DAILY_LIVE_CAP,
+  TEE_DOWN_KEY,
+  TEE_DOWN_S,
+  markTeeDown,
+  takeDecline,
+  teeDown,
   SPEND_STOP_MICRO_USD,
   VISITOR_DAILY_CAP,
   CapStoreError,
@@ -21,8 +27,8 @@ const day = "2026-11-12";
 const base = { day, reserveMicro: 10_000, floorMicro: 0 };
 const take = (store, over = {}) => reserveLive({ store, jobId: "1", visitor: "v1", buyer: "b1.testnet", ...base, ...over });
 
-test("caps match the approved numbers: 100/day, 3 per visitor, stop at $1.75", () => {
-  assert.equal(DAILY_LIVE_CAP, 100);
+test("caps match the approved numbers: 35/day (A-028), 3 per visitor, stop at $1.75", () => {
+  assert.equal(DAILY_LIVE_CAP, 35);
   assert.equal(VISITOR_DAILY_CAP, 3);
   assert.equal(SPEND_STOP_MICRO_USD, 1_750_000);
 });
@@ -59,12 +65,12 @@ test("a new buyer account from the same visitor does not reset the cap (cap_visi
   assert.equal((await take(store2, { jobId: "9", visitor: "ip-new" })).reason, "cap_buyer");
 });
 
-test("site-wide 100 live reviews a day, then cap_daily", async () => {
+test("site-wide 35 live reviews a day, then cap_daily", async () => {
   const store = memoryStore();
-  for (let i = 0; i < 100; i++) assert.equal((await take(store, { jobId: `j${i}`, visitor: `v${i}`, buyer: `b${i}` })).ok, true);
+  for (let i = 0; i < 35; i++) assert.equal((await take(store, { jobId: `j${i}`, visitor: `v${i}`, buyer: `b${i}` })).ok, true);
   const r = await take(store, { jobId: "x", visitor: "vx", buyer: "bx" });
   assert.deepEqual([r.ok, r.reason], [false, "cap_daily"]);
-  assert.equal(await store.get(`day:${day}`), 100);
+  assert.equal(await store.get(`day:${day}`), 35, "the refused 36th leaves no count");
 });
 
 test("spend stop: refused once reserved spend would pass $1.75 (lifetime, not daily)", async () => {
@@ -217,4 +223,48 @@ test("visitorId: keyed hash, never the raw IP; same /64 = same visitor; no IP = 
   assert.ok(!a.includes("2001"));
   assert.notEqual(visitorId(H({ "x-real-ip": "203.0.113.7" }), "other-secret"), visitorId(H({ "x-real-ip": "203.0.113.7" }), s));
   assert.equal(visitorId(H({}), s), visitorId(H({ "x-forwarded-for": "junk" }), s));
+});
+
+// ---- T-084 fix round 1 (security M-1, L-2) ----
+test("decline budget: 35 a day site-wide (CFO t076 sizing), then false; a new UTC day starts again", async () => {
+  assert.equal(DAILY_DECLINE_CAP, 35);
+  const store = memoryStore();
+  for (let i = 0; i < DAILY_DECLINE_CAP; i++) assert.equal(await takeDecline({ store, day }), true);
+  assert.equal(await takeDecline({ store, day }), false);
+  assert.equal(await takeDecline({ store, day: "2026-11-13" }), true);
+});
+
+test("decline budget: a failing store means no decline (we can't count it), never a throw", async () => {
+  const store = { incrBy: async () => {
+    throw new CapStoreError("down");
+  } };
+  assert.equal(await takeDecline({ store, day }), false);
+});
+
+test("tee:down breaker: set for 60 s, then gone; store errors read as not set and never throw", async () => {
+  let t = 0;
+  const store = memoryStore({ now: () => t });
+  assert.equal(await teeDown(store), false);
+  await markTeeDown(store);
+  assert.equal(await teeDown(store), true);
+  assert.equal(TEE_DOWN_KEY, "tee:down");
+  t += TEE_DOWN_S * 1000 - 1;
+  assert.equal(await teeDown(store), true);
+  t += 1;
+  assert.equal(await teeDown(store), false);
+  const broken = { get: async () => { throw new CapStoreError("x"); }, setNx: async () => { throw new CapStoreError("x"); } };
+  assert.equal(await teeDown(broken), false);
+  await markTeeDown(broken);
+});
+
+test("releaseCounts gives back every counter but keeps the job lock (security L-2)", async () => {
+  const store = memoryStore();
+  const slot = await take(store);
+  await slot.releaseCounts();
+  for (const k of [`day:${day}`, `visitor:${day}:v1`, `buyer:${day}:b1.testnet`, "spend:micro"]) assert.equal(await store.get(k), 0, k);
+  assert.equal(await store.get("job:1"), 1);
+  assert.equal((await take(store)).reason, "job_busy");
+  await slot.release(); // a later release still frees the lock, without undoing twice
+  assert.equal(await store.get("job:1"), 0);
+  assert.equal(await store.get(`day:${day}`), 0);
 });
