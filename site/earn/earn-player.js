@@ -63,7 +63,7 @@ export function mountEarnStage(host, opts = {}) {
   if (!root) { host.innerHTML = renderStage(C.storyStateAt(story, C.finalIndex(story)), viewOpts()); root = host.querySelector('.ep'); }
   const $ = s => root.querySelector(s), $$ = s => [...root.querySelectorAll(s)];
   const cache = {};
-  let k = -1, token = 0, busy = false, played = new Map(), liveAnchor = null, ticker = null, destroyed = false, io = null;
+  let k = -1, token = 0, busy = false, played = new Map(), liveAnchor = null, ticker = null, destroyed = false, io = null, hdChanged = false;
 
   const A = (el, kf, op) => (el && el.animate ? el.animate(kf, Object.assign({ fill: 'backwards', easing: T.ease.out }, op)) : null);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -82,6 +82,7 @@ export function mountEarnStage(host, opts = {}) {
       else el.innerHTML = html;
       cache[name] = html; changed.push(name);
     }
+    hdChanged = changed.includes('hd'); // swapHead runs only on a real headline change (Designer QA L2-2)
     const { wasCloser, wasRes } = applyFlags(root, flags);
     return { changed, flags, closerOn: flags.closer && !wasCloser, residueOn: flags.residue && !wasRes };
   }
@@ -145,7 +146,9 @@ export function mountEarnStage(host, opts = {}) {
   /* ---------- beats ------------------------------------------------------- */
   function swapHead(at = 0) {
     const a = $('.hd .h-a'), b = $('.hd .h-b');
-    if (!a || a.textContent === b.textContent) return;
+    // .h-a is refreshed only when 'hd' changes, so on an unchanged headline it holds the word from two steps back:
+    // swapping then painted that stale word for a frame (Designer QA L2-2). Swap only on a real change.
+    if (!a || !hdChanged || a.textContent === b.textContent) return;
     A(a, [{ opacity: 1 }, { opacity: 1, offset: .99 }, { opacity: 0 }], { duration: at || 1, easing: 'linear' });
     A(b, [{ opacity: 0, transform: 'translateY(30%)', clipPath: 'inset(0 0 100% 0)' }, { opacity: 1, transform: 'none', clipPath: 'inset(-20% -5% -20% -5%)' }], { duration: 620, delay: at });
   }

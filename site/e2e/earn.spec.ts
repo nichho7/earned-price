@@ -147,6 +147,38 @@ test("R6 amended: OS Reduce Motion plays the same story as opacity-only crossfad
   await ctx.close();
 });
 
+test("headline (Designer QA L2-2): the old-word layer animates only when the headline changes, so no stale word ever flashes", async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" });
+  const page = await ctx.newPage();
+  // Each .h-a animation is a headline swap. A swap is honest only if the headline (.h-b) changed in the same task,
+  // i.e. differs from what the last animation frame showed. Before the fix, an unchanged headline still swapped
+  // and painted the word from two steps back at full opacity for a frame (7 times per playback).
+  await page.addInitScript(() => {
+    const w = window as unknown as { __hd: { swaps: number; stale: string[]; frameB: string | null } };
+    w.__hd = { swaps: 0, stale: [], frameB: null };
+    const orig = Element.prototype.animate;
+    Element.prototype.animate = function (kf, opts) {
+      if (this.classList.contains("h-a")) {
+        const b = this.parentElement?.querySelector(".h-b")?.textContent ?? "";
+        w.__hd.swaps++;
+        if (b === w.__hd.frameB) w.__hd.stale.push(`"${this.textContent}" over unchanged "${b}"`);
+      }
+      return orig.call(this, kf, opts);
+    };
+    const tick = () => { w.__hd.frameB = document.querySelector(".ep .hd .h-b")?.textContent ?? null; requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+  await page.clock.install();
+  await mount(page);
+  await toHeadline(page);
+  const seen = await playAll(page);
+  expect(seen[seen.length - 1].state).toBe("holds");
+  const hd = await page.evaluate(() => (window as unknown as { __hd: { swaps: number; stale: string[] } }).__hd);
+  expect(hd.swaps, "headline swaps happen at all").toBeGreaterThan(5);
+  expect(hd.stale, "stale headline swaps").toEqual([]);
+  await ctx.close();
+});
+
 test("Skip jumps straight to the final state (full and reduced motion); INP proxy <= 200 ms in Chromium", async ({ browser, browserName }) => {
   for (const reducedMotion of ["no-preference", "reduce"] as const) {
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion });
