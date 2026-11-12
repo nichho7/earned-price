@@ -9,7 +9,11 @@
 //! submits the signed NEAR AI TEE review with `submit_review` by `review_by`.
 //! The EIP-191 signer is checked on-chain with ecrecover and must be on the
 //! owner-set allowlist (A-012); the TDX attestation that binds that signer to a
-//! TEE is checked offline by `earned verify` check 3. The buyer then `reveal`s
+//! TEE is checked offline by `earned verify` check 3. T-048 (A-016 = B): every
+//! job names an official exam pack at `create`, and `submit_review` accepts only
+//! that pack's pinned review request (`pins.rs`: sha256 of the exact request
+//! body, prompt and model included), so a seller can't feed the public answer
+//! key to the reviewer; `reveal` accepts only a key for the job's pack. The buyer then `reveal`s
 //! the key by `reveal_deadline`: the contract checks the commit, grades the
 //! review's findings with the on-chain copy of the grader (`grade.rs`) and pays
 //! the seller (pass) or refunds the buyer and records a fail. `timeout` closes a
@@ -34,8 +38,11 @@
 //!
 //! Two storage growths are permanent, both paid from the contract balance:
 //! 1. The replay guard: 32 bytes (plus key prefix and trie overhead) per
-//!    submitted review's `request_sha256`, so a signed review can never be
-//!    reused on another job (about 0.0008 NEAR each).
+//!    submitted review's `response_sha256`, so a signed review can never be
+//!    reused on another job (about 0.0008 NEAR each). It keys on the response,
+//!    not the request: since T-048 every honest review of a pack has the same
+//!    pinned request, while each TEE response body carries its own completion
+//!    `id` and `created` time.
 //! 2. `pass_buyers`: one (seller, buyer) entry on a seller's first paid pass
 //!    from each buyer. Key = 1 B prefix + two borsh account ids (4 B length +
 //!    up to 64 B each), empty value, ~40 B trie overhead: up to ~177 B, so up
@@ -49,6 +56,7 @@
 
 pub mod grade;
 pub mod names;
+pub mod pins;
 pub mod quote;
 
 use near_sdk::json_types::{U128, U64};
@@ -109,7 +117,9 @@ pub const PAYOUT_CALLBACK_GAS: Gas = Gas::from_tgas(10);
 enum StorageKey {
     Jobs,
     Records,
-    UsedRequests,
+    /// Replay guard: `response_sha256` of every submitted review (T-048; was
+    /// keyed on the request before the requests were pinned).
+    UsedResponses,
     /// (seller, buyer) pairs with at least one counted pass (T-024). Appended
     /// last so the earlier variants keep their borsh tags.
     PassBuyers,
@@ -179,8 +189,8 @@ impl PayoutKind {
 /// The seller's signed NEAR AI TEE review. The contract checks that an
 /// allowlisted `signing_address` produced `signature` over
 /// `<model>:<request_sha256>:<response_sha256>` (EIP-191) and that the response
-/// body sent with it hashes to `response_sha256`. That the request body names
-/// this job is checked offline.
+/// body sent with it hashes to `response_sha256`. `request_sha256` must be the
+/// job's pack pin (`pins.rs`, T-048).
 #[near(serializers = [borsh])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TeeReview {
@@ -214,6 +224,8 @@ pub struct Job {
     /// The seller's quote at `create`; exactly what is held in escrow.
     pub price: NearToken,
     pub commit_hash: [u8; 32],
+    /// Official exam pack (`pins::PACKS`), public from `create` on (T-048).
+    pub pack_id: String,
     pub created_at_ns: u64,
     pub accept_by_ns: u64,
     pub review_by_ns: u64,
@@ -234,6 +246,8 @@ pub struct JobView {
     pub seller: AccountId,
     pub price: U128,
     pub commit_hash: String,
+    /// `pack-1` | `pack-2` | `pack-3` (T-048).
+    pub pack_id: String,
     pub created_at_ns: U64,
     /// Seller must accept or decline by then (countdown while `open`).
     pub accept_by_ns: U64,
@@ -259,8 +273,8 @@ pub struct EarnedPrice {
     next_job_id: u64,
     jobs: LookupMap<u64, Job>,
     records: LookupMap<AccountId, SellerRecord>,
-    /// `request_sha256` of every review ever submitted (replay guard).
-    used_requests: LookupSet<[u8; 32]>,
+    /// `response_sha256` of every review ever submitted (replay guard).
+    used_responses: LookupSet<[u8; 32]>,
     /// (seller, buyer) pairs that already have a counted pass (T-024).
     pass_buyers: LookupSet<(AccountId, AccountId)>,
 }
@@ -277,7 +291,7 @@ impl EarnedPrice {
             next_job_id: 0,
             jobs: LookupMap::new(StorageKey::Jobs),
             records: LookupMap::new(StorageKey::Records),
-            used_requests: LookupSet::new(StorageKey::UsedRequests),
+            used_responses: LookupSet::new(StorageKey::UsedResponses),
             pass_buyers: LookupSet::new(StorageKey::PassBuyers),
         };
         for s in signers {
@@ -302,6 +316,21 @@ impl EarnedPrice {
             .iter()
             .map(|a| format!("0x{}", to_hex(a)))
             .collect()
+    }
+
+    /// The review requests this code accepts (T-048): the prompt version and
+    /// model they were built with, and per official pack the sha256 of the
+    /// exact request body (`seller/review-prompt.js` `buildReviewRequest`).
+    /// Constants of the deployed code; nobody can change them on-chain.
+    pub fn review_pins(&self) -> near_sdk::serde_json::Value {
+        json!({
+            "prompt_version": pins::PROMPT_VERSION,
+            "model": pins::REVIEW_MODEL,
+            "packs": pins::PACKS
+                .iter()
+                .map(|(id, h)| json!({ "pack_id": id, "request_sha256": h }))
+                .collect::<Vec<_>>(),
+        })
     }
 
     /// Owner only, 1 yoctoNEAR attached (so a function-call access key can't do
@@ -355,11 +384,14 @@ impl EarnedPrice {
     }
 
     /// Lock the seller's current quote from the attached deposit against
-    /// `commit_hash` (hex, format in the module docs). Any deposit above the quote
-    /// is refunded to the buyer in the same call. Fails, and refunds the whole
-    /// deposit, if the deposit is below the quote. Returns the job id.
+    /// `commit_hash` (hex, format in the module docs) for the official exam pack
+    /// `pack_id` (`review_pins`; T-048: the seller's review must be that pack's
+    /// pinned request and the revealed key must be for that pack). Any deposit
+    /// above the quote is refunded to the buyer in the same call. Fails, and
+    /// refunds the whole deposit, if the deposit is below the quote or the pack
+    /// is not official. Returns the job id.
     #[payable]
-    pub fn create(&mut self, seller: AccountId, commit_hash: String) -> U64 {
+    pub fn create(&mut self, seller: AccountId, commit_hash: String, pack_id: String) -> U64 {
         let buyer = env::predecessor_account_id();
         let deposit = env::attached_deposit().as_yoctonear();
         require!(
@@ -371,6 +403,13 @@ impl EarnedPrice {
             "Earned Price: the escrow contract cannot be the seller"
         );
         let commit = parse_commit_hash(&commit_hash);
+        if pins::pinned_request(&pack_id).is_none() {
+            env::panic_str(&format!(
+                "Earned Price: unknown pack_id {:?}; the official packs are {}. No funds moved.",
+                pack_id,
+                pins::PACKS.map(|(id, _)| id).join(", "),
+            ));
+        }
 
         let quote = self.quote_yocto(&seller);
         if deposit < quote {
@@ -391,6 +430,7 @@ impl EarnedPrice {
             seller,
             price: NearToken::from_yoctonear(quote),
             commit_hash: commit,
+            pack_id,
             created_at_ns: now,
             accept_by_ns: now + ACCEPT_WINDOW_NS,
             review_by_ns: now + REVIEW_WINDOW_NS,
@@ -408,6 +448,7 @@ impl EarnedPrice {
                 "price": quote.to_string(),
                 "excess_refunded": excess.to_string(),
                 "commit_hash": to_hex(&job.commit_hash),
+                "pack_id": job.pack_id,
                 "created_at_ns": job.created_at_ns.to_string(),
                 "accept_by_ns": job.accept_by_ns.to_string(),
                 "review_by_ns": job.review_by_ns.to_string(),
@@ -439,6 +480,7 @@ impl EarnedPrice {
             seller: j.seller.clone(),
             price: U128(j.price.as_yoctonear()),
             commit_hash: to_hex(&j.commit_hash),
+            pack_id: j.pack_id.clone(),
             created_at_ns: U64(j.created_at_ns),
             accept_by_ns: U64(j.accept_by_ns),
             review_by_ns: U64(j.review_by_ns),
@@ -485,10 +527,13 @@ impl EarnedPrice {
     }
 
     /// Seller only, accepted job, at or before `review_by`, once (S-027).
-    /// Recovers the EIP-191 signer of `<model>:<request_sha256>:<response_sha256>`
-    /// with ecrecover, requires it to equal `signing_address` and to be on the
-    /// allowlist (A-012), requires `request_sha256` never to have been used
-    /// before (replay guard), and requires `sha256(response) == response_sha256`
+    /// Requires `model` to be `pins::REVIEW_MODEL` and `request_sha256` to be
+    /// the job's pack pin (T-048: the exact official request, so no answer key
+    /// or other text can be in the prompt). Recovers the EIP-191 signer of
+    /// `<model>:<request_sha256>:<response_sha256>` with ecrecover, requires it
+    /// to equal `signing_address` and to be on the allowlist (A-012), requires
+    /// `response_sha256` never to have been used before (replay guard), and
+    /// requires `sha256(response) == response_sha256`
     /// so the signed findings are public in this transaction's arguments (the
     /// buyer needs them to reveal; the contract does not store them). Hex
     /// inputs may be upper or lower case; `signature` and `signing_address` may
@@ -532,6 +577,21 @@ impl EarnedPrice {
             signature: parse_signature(&signature),
             signing_address: parse_hex_n::<20>(strip_0x(&signing_address), "signing_address"),
         };
+        if review.model != pins::REVIEW_MODEL {
+            env::panic_str(&format!(
+                "Earned Price: model must be {}, the reviewer every pinned request names. Nothing stored.",
+                pins::REVIEW_MODEL
+            ));
+        }
+        let pin = pins::pinned_request(&job.pack_id)
+            .unwrap_or_else(|| env::panic_str("Earned Price: the job's pack has no pin"));
+        if to_hex(&review.request_sha256) != pin {
+            env::panic_str(&format!(
+                "Earned Price: request_sha256 is not the pinned review request for {} (prompt v{}). The seller must send buildReviewRequest for that pack unchanged; any other prompt is rejected. Nothing stored.",
+                job.pack_id,
+                pins::PROMPT_VERSION
+            ));
+        }
         match recover_eip191_address(review.signed_text().as_bytes(), &review.signature) {
             Some(addr) if addr == review.signing_address => {}
             _ => env::panic_str(
@@ -543,7 +603,7 @@ impl EarnedPrice {
             "Earned Price: signing_address is not an allowlisted NEAR AI TEE signer. Nothing stored."
         );
         require!(
-            !self.used_requests.contains(&review.request_sha256),
+            !self.used_responses.contains(&review.response_sha256),
             "Earned Price: this signed review was already used for a job. Nothing stored."
         );
         check_response(&response, &review.response_sha256);
@@ -558,7 +618,7 @@ impl EarnedPrice {
                 "signing_address": view.signing_address,
             }),
         );
-        self.used_requests.insert(review.request_sha256);
+        self.used_responses.insert(review.response_sha256);
         job.review = Some(review);
         self.jobs.insert(job_id.0, job);
     }
@@ -577,7 +637,9 @@ impl EarnedPrice {
     /// salt that is not 32 bytes, a key + salt that don't match the commit, a
     /// key that is not canonical or not a valid answer key (that is the buyer's
     /// fault, so the job then runs to the R2 timeout, which pays the seller), or
-    /// a response that doesn't hash to the signed `response_sha256`.
+    /// a response that doesn't hash to the signed `response_sha256`. A valid key
+    /// for another pack than the job's (T-048) is also the buyer's fault: the
+    /// seller reviewed the pack the job names.
     pub fn reveal(
         &mut self,
         job_id: U64,
@@ -613,6 +675,12 @@ impl EarnedPrice {
                 "Earned Price: the committed answer key is invalid ({e}). No funds moved; the job runs to its timeout."
             ))
         });
+        if answer_key.pack_id != job.pack_id {
+            env::panic_str(&format!(
+                "Earned Price: the committed key is for {} but this job is for {}. No funds moved; the job runs to its timeout.",
+                answer_key.pack_id, job.pack_id
+            ));
+        }
         check_response(&response, &review.response_sha256);
         let result = grade::grade(&answer_key, &grade::findings_from_response(&response));
 
@@ -1006,6 +1074,9 @@ mod tests {
     use near_sdk::testing_env;
 
     const COMMIT: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+    /// The grader's sample pack: test-vectors/commit.json commits its key, and
+    /// in unit tests only it is pinned to the real T-003 request (pins.rs).
+    const PACK: &str = "sample-0";
 
     fn buyer() -> AccountId {
         "buyer.testnet".parse().unwrap()
@@ -1078,13 +1149,15 @@ mod tests {
     fn create_at_quote_stores_job_only_and_moves_no_funds_back() {
         ctx(mnear(30), 1_000);
         let mut c = fresh();
-        let id = c.create(seller(), COMMIT.to_string());
+        let id = c.create(seller(), COMMIT.to_string(), PACK.into());
         assert_eq!(id.0, 0);
         let j = c.get_job(id).unwrap();
         assert_eq!(j.buyer, buyer());
         assert_eq!(j.seller, seller());
         assert_eq!(j.price.0, mnear(30).as_yoctonear());
         assert_eq!(j.commit_hash, COMMIT);
+        assert_eq!(j.pack_id, PACK);
+        assert_eq!(create_event()["data"]["pack_id"], PACK);
         assert_eq!(j.created_at_ns.0, 1_000);
         assert_eq!(j.accept_by_ns.0, 1_000 + ACCEPT_WINDOW_NS);
         assert_eq!(j.review_by_ns.0, 1_000 + REVIEW_WINDOW_NS);
@@ -1136,8 +1209,8 @@ mod tests {
         ctx(mnear(30), 0);
         let mut c = fresh();
         assert_eq!(c.next_job_id().0, 0);
-        c.create(seller(), COMMIT.to_string());
-        c.create(seller(), COMMIT.to_string());
+        c.create(seller(), COMMIT.to_string(), PACK.into());
+        c.create(seller(), COMMIT.to_string(), PACK.into());
         assert_eq!(c.next_job_id().0, 2);
     }
 
@@ -1145,7 +1218,7 @@ mod tests {
     fn create_above_quote_locks_quote_and_refunds_excess() {
         ctx(mnear(45), 0);
         let mut c = fresh();
-        let id = c.create(seller(), COMMIT.to_string());
+        let id = c.create(seller(), COMMIT.to_string(), PACK.into());
         assert_eq!(c.get_job(id).unwrap().price.0, mnear(30).as_yoctonear());
         assert_eq!(transfers(), vec![(buyer(), mnear(15).as_yoctonear())]);
         assert_eq!(
@@ -1158,7 +1231,7 @@ mod tests {
     fn fat_finger_deposit_is_refunded_down_to_quote() {
         ctx(NearToken::from_near(4), 0);
         let mut c = fresh();
-        let id = c.create(seller(), COMMIT.to_string());
+        let id = c.create(seller(), COMMIT.to_string(), PACK.into());
         assert_eq!(c.get_job(id).unwrap().price.0, mnear(30).as_yoctonear());
         assert_eq!(
             transfers(),
@@ -1173,8 +1246,8 @@ mod tests {
     fn ids_increase_and_hash_is_normalised() {
         ctx(mnear(30), 0);
         let mut c = fresh();
-        assert_eq!(c.create(seller(), COMMIT.to_string()).0, 0);
-        assert_eq!(c.create(seller(), COMMIT.to_uppercase()).0, 1);
+        assert_eq!(c.create(seller(), COMMIT.to_string(), PACK.into()).0, 0);
+        assert_eq!(c.create(seller(), COMMIT.to_uppercase(), PACK.into()).0, 1);
         assert_eq!(c.get_job(U64(1)).unwrap().commit_hash, COMMIT);
     }
 
@@ -1184,21 +1257,21 @@ mod tests {
     )]
     fn create_below_quote_fails_readably() {
         ctx(mnear(20), 0);
-        fresh().create(seller(), COMMIT.to_string());
+        fresh().create(seller(), COMMIT.to_string(), PACK.into());
     }
 
     #[test]
     #[should_panic(expected = "below seller.testnet's current quote 0.030 NEAR")]
     fn create_one_yocto_below_quote_fails() {
         ctx(NearToken::from_yoctonear(mnear(30).as_yoctonear() - 1), 0);
-        fresh().create(seller(), COMMIT.to_string());
+        fresh().create(seller(), COMMIT.to_string(), PACK.into());
     }
 
     #[test]
     #[should_panic(expected = "below seller.testnet's current quote")]
     fn create_with_no_deposit_fails() {
         ctx(NearToken::from_yoctonear(0), 0);
-        fresh().create(seller(), COMMIT.to_string());
+        fresh().create(seller(), COMMIT.to_string(), PACK.into());
     }
 
     #[test]
@@ -1208,7 +1281,7 @@ mod tests {
         c.record_pass(&seller(), &buyer());
         assert_eq!(c.quote(seller()).0, mnear(40).as_yoctonear());
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            c.create(seller(), COMMIT.to_string());
+            c.create(seller(), COMMIT.to_string(), PACK.into());
         }));
         assert!(res.is_err(), "0.030 is below a 0.040 quote");
     }
@@ -1217,28 +1290,28 @@ mod tests {
     #[should_panic(expected = "commit_hash must be 64 hex characters")]
     fn create_rejects_short_hash() {
         ctx(mnear(30), 0);
-        fresh().create(seller(), "abc".to_string());
+        fresh().create(seller(), "abc".to_string(), PACK.into());
     }
 
     #[test]
     #[should_panic(expected = "commit_hash must contain only hex characters")]
     fn create_rejects_non_hex_hash() {
         ctx(mnear(30), 0);
-        fresh().create(seller(), "z".repeat(64));
+        fresh().create(seller(), "z".repeat(64), PACK.into());
     }
 
     #[test]
     #[should_panic(expected = "buyer and seller must be different accounts")]
     fn create_rejects_self_dealing() {
         ctx(mnear(30), 0);
-        fresh().create(buyer(), COMMIT.to_string());
+        fresh().create(buyer(), COMMIT.to_string(), PACK.into());
     }
 
     #[test]
     #[should_panic(expected = "the escrow contract cannot be the seller")]
     fn create_rejects_contract_as_seller() {
         ctx(mnear(30), 0);
-        fresh().create(escrow(), COMMIT.to_string());
+        fresh().create(escrow(), COMMIT.to_string(), PACK.into());
     }
 
     #[test]
@@ -1252,7 +1325,7 @@ mod tests {
         let mut c = fresh();
         let before = env::storage_usage();
 
-        let id = c.create(seller(), COMMIT.to_string()).0;
+        let id = c.create(seller(), COMMIT.to_string(), PACK.into()).0;
         c.jobs.flush();
         c.records.flush();
         assert!(env::storage_usage() > before, "create writes the job");
@@ -1271,7 +1344,7 @@ mod tests {
     fn close_job_twice_fails() {
         ctx(mnear(30), 0);
         let mut c = fresh();
-        let id = c.create(seller(), COMMIT.to_string()).0;
+        let id = c.create(seller(), COMMIT.to_string(), PACK.into()).0;
         c.close_job(id);
         c.close_job(id);
     }
@@ -1516,7 +1589,7 @@ mod tests {
     fn with_open_job() -> EarnedPrice {
         ctx(mnear(30), 0);
         let mut c = fresh();
-        c.create(seller(), COMMIT.to_string());
+        c.create(seller(), COMMIT.to_string(), PACK.into());
         c
     }
 
@@ -1692,7 +1765,7 @@ mod tests {
         let mut c = fresh();
         c.jobs.flush();
         let before = env::storage_usage();
-        c.create(seller(), COMMIT.to_string());
+        c.create(seller(), COMMIT.to_string(), PACK.into());
 
         as_caller(seller(), 5);
         c.decline(U64(0));
@@ -1838,10 +1911,10 @@ mod tests {
         v.resp = good.req.clone();
         assert_submit_rejected(&mut c, seller(), 20, &v, want);
 
-        // Different model name.
+        // Different model name: refused by the model pin before ecrecover.
         let mut v = vector();
         v.model = "some/other-model".into();
-        assert_submit_rejected(&mut c, seller(), 20, &v, want);
+        assert_submit_rejected(&mut c, seller(), 20, &v, "model must be deepseek-ai/");
 
         // Malleated twin (s -> n - s, v flipped) is rejected: low-s only.
         let mut v = vector();
@@ -2044,6 +2117,17 @@ mod tests {
             .to_string()
     }
 
+    /// The same review with another completion id, as a second TEE call returns.
+    fn with_id(body: &str, id: &str) -> String {
+        let out = body.replacen(
+            "\"chatcmpl-test\"",
+            &format!("{:?}", format!("chatcmpl-{id}")),
+            1,
+        );
+        assert_ne!(out, body, "body has the test completion id");
+        out
+    }
+
     /// Throwaway secp256k1 key the tests may allowlist (never a real TEE key).
     fn test_key() -> secp256k1::SecretKey {
         secp256k1::SecretKey::from_slice(&[0x11; 32]).unwrap()
@@ -2055,10 +2139,20 @@ mod tests {
         format!("0x{}", to_hex(&h[12..]))
     }
 
-    /// A review over `body` signed by the test key; `tag` makes request_sha256 unique.
-    fn signed(body: &str, tag: &str) -> Vector {
-        let model = "test/model".to_string();
-        let req = to_hex(&env::sha256_array(tag.as_bytes()));
+    /// A review over `body` for the sample pack's pinned request, signed by the
+    /// test key. Distinct bodies give distinct reviews (replay guard).
+    fn signed(body: &str) -> Vector {
+        signed_for(
+            body,
+            pins::pinned_request(PACK).unwrap(),
+            pins::REVIEW_MODEL,
+        )
+    }
+
+    /// A review over `body` claiming request `req` and `model`, signed by the test key.
+    fn signed_for(body: &str, req: &str, model: &str) -> Vector {
+        let model = model.to_string();
+        let req = req.to_string();
         let resp = to_hex(&env::sha256_array(body.as_bytes()));
         let text = format!("{model}:{req}:{resp}");
         let mut prefixed = format!("\x19Ethereum Signed Message:\n{}", text.len()).into_bytes();
@@ -2090,7 +2184,7 @@ mod tests {
     fn create_accepted(c: &mut EarnedPrice) -> u64 {
         let (_, _, commit) = commit_vector();
         ctx(mnear(30), 0);
-        let id = c.create(seller(), commit).0;
+        let id = c.create(seller(), commit, PACK.into()).0;
         as_caller(seller(), 10);
         c.accept(U64(id));
         id
@@ -2240,7 +2334,7 @@ mod tests {
 
     #[test]
     fn self_signed_review_rejected_until_allowlisted() {
-        let v = signed(&body_of("bare findings array"), "job-0");
+        let v = signed(&body_of("bare findings array"));
         let mut c = fresh(); // only the real TEE signer
         create_accepted(&mut c);
         assert_submit_rejected_v(&mut c, &v, "not an allowlisted NEAR AI TEE signer");
@@ -2254,7 +2348,7 @@ mod tests {
         c.remove_signer(test_addr());
         let id = create_accepted(&mut c);
         as_caller(seller(), 20);
-        let v2 = signed(&body_of("bare findings array"), "job-1");
+        let v2 = signed(&body_of("bare findings array"));
         let err = try_call(|| submit_on(&mut c, id, &v2)).unwrap_err();
         assert!(err.contains("not an allowlisted"), "{err}");
     }
@@ -2271,7 +2365,7 @@ mod tests {
 
     #[test]
     fn same_signed_review_rejected_on_a_second_job() {
-        let v = signed(&body_of("bare findings array"), "job-0");
+        let v = signed(&body_of("bare findings array"));
         let mut c = reviewed(&v);
         let id = create_accepted(&mut c);
         assert_eq!(id, 1);
@@ -2297,10 +2391,10 @@ mod tests {
 
     #[test]
     fn submit_review_requires_the_signed_response_body() {
-        let v = signed(&body_of("bare findings array"), "job-0");
+        let v = signed(&body_of("bare findings array"));
         let mut c = fresh_with_test_signer();
         create_accepted(&mut c);
-        let mut wrong = signed(&body_of("bare findings array"), "job-0");
+        let mut wrong = signed(&body_of("bare findings array"));
         wrong.body = body_of("JSON-mode object");
         assert_submit_rejected_v(
             &mut c,
@@ -2308,7 +2402,7 @@ mod tests {
             "does not hash to the review's response_sha256",
         );
         let big = format!("{}{}", v.body, " ".repeat(MAX_RESPONSE_LEN));
-        let too_long = signed(&big, "job-0");
+        let too_long = signed(&big);
         assert_submit_rejected_v(&mut c, &too_long, "longer than 131072 bytes");
         // The failed attempts did not burn the request hash.
         as_caller(seller(), 20);
@@ -2317,14 +2411,14 @@ mod tests {
         let mut c = fresh_with_test_signer();
         create_accepted(&mut c);
         let pad = MAX_RESPONSE_LEN - v.body.len();
-        let at_cap = signed(&format!("{}{}", v.body, " ".repeat(pad)), "job-cap");
+        let at_cap = signed(&format!("{}{}", v.body, " ".repeat(pad)));
         as_caller(seller(), 20);
         submit_on(&mut c, 0, &at_cap);
     }
 
     #[test]
     fn reveal_pass_pays_seller_then_counts_pass_in_callback() {
-        let v = signed(&body_of("bare findings array"), "job-0");
+        let v = signed(&body_of("bare findings array"));
         let mut c = reviewed(&v);
         let r = reveal_ok(&mut c, &v.body);
         assert!(is_promise(&r), "pass returns the payout promise");
@@ -2365,7 +2459,7 @@ mod tests {
 
     #[test]
     fn reveal_json_mode_object_also_grades() {
-        let v = signed(&body_of("JSON-mode object"), "job-0");
+        let v = signed(&body_of("JSON-mode object"));
         let mut c = reviewed(&v);
         assert!(is_promise(&reveal_ok(&mut c, &v.body)));
     }
@@ -2397,7 +2491,7 @@ mod tests {
 
     #[test]
     fn reveal_fail_refunds_buyer_and_records_fail() {
-        let v = signed(&body_of("bare array with whitespace"), "job-0");
+        let v = signed(&body_of("bare array with whitespace"));
         let mut c = reviewed(&v);
         let r = reveal_ok(&mut c, &v.body);
         assert_fail_refund(&c, r, 3, Value::Null);
@@ -2409,7 +2503,7 @@ mod tests {
 
     #[test]
     fn reveal_too_many_findings_is_a_fixed_fail() {
-        let v = signed(&body_of("11 findings"), "job-0");
+        let v = signed(&body_of("11 findings"));
         let mut c = reviewed(&v);
         let r = reveal_ok(&mut c, &v.body);
         assert_fail_refund(&c, r, 0, "too_many_findings".into());
@@ -2417,16 +2511,13 @@ mod tests {
 
     #[test]
     fn reveal_malformed_review_is_a_fixed_fail() {
-        for (i, name) in [
+        for name in [
             "prose instead of JSON",
             "JSON inside a markdown",
             "response body is not JSON",
             "content null",
-        ]
-        .iter()
-        .enumerate()
-        {
-            let v = signed(&body_of(name), &format!("job-{i}"));
+        ] {
+            let v = signed(&body_of(name));
             let mut c = reviewed(&v);
             let r = reveal_ok(&mut c, &v.body);
             assert_fail_refund(&c, r, 0, "malformed_finding".into());
@@ -2447,7 +2538,7 @@ mod tests {
 
     #[test]
     fn reveal_rejects_bad_commit_salt_and_response_with_nothing_moved() {
-        let v = signed(&body_of("bare findings array"), "job-0");
+        let v = signed(&body_of("bare findings array"));
         let mut c = reviewed(&v);
         let (key, salt, _) = commit_vector();
         let other_salt = "00".repeat(32);
@@ -2512,7 +2603,7 @@ mod tests {
         let commit = to_hex(&commit_digest(key_text.as_bytes(), &salt_b));
         let mut c = fresh_with_test_signer();
         ctx(mnear(30), 0);
-        c.create(seller(), commit);
+        c.create(seller(), commit, PACK.into());
         as_caller(seller(), 10);
         c.accept(U64(0));
         as_caller(seller(), 20);
@@ -2536,7 +2627,9 @@ mod tests {
             (pretty.as_str(), "key is not in canonical form"),
             ("not json", "key is not valid JSON"),
         ] {
-            let v = signed(&body_of("bare findings array"), text);
+            // Mocked storage (the replay guard) outlives each contract here,
+            // so every case needs its own response body.
+            let v = signed(&with_id(&body_of("bare findings array"), text));
             let mut c = reviewed_with_key(text, &v);
             let err = reveal_as(&mut c, buyer(), 30, text, &salt, &v.body)
                 .err()
@@ -2556,7 +2649,7 @@ mod tests {
 
     #[test]
     fn reveal_guards_caller_state_and_deadline() {
-        let v = signed(&body_of("bare findings array"), "job-0");
+        let v = signed(&body_of("bare findings array"));
         let (key, salt, commit) = commit_vector();
         // Not the buyer.
         let mut c = reviewed(&v);
@@ -2581,7 +2674,7 @@ mod tests {
         // Open (not accepted) job.
         let mut c = fresh_with_test_signer();
         ctx(mnear(30), 0);
-        c.create(seller(), commit.clone());
+        c.create(seller(), commit.clone(), PACK.into());
         let err = reveal_as(&mut c, buyer(), 30, &key, &salt, &v.body)
             .err()
             .unwrap();
@@ -2594,8 +2687,8 @@ mod tests {
             .unwrap();
         assert!(err.contains("no signed review is on-chain yet"), "{err}");
         assert!(c.get_job(U64(0)).is_some());
-        // Closed job.
-        let v = signed(&body_of("bare findings array"), "job-closed");
+        // Closed job (a new response: the replay guard outlives the mock contract).
+        let v = signed(&with_id(&body_of("bare findings array"), "closed"));
         let mut c = reviewed(&v);
         assert!(is_promise(&reveal_ok(&mut c, &v.body)));
         let err = reveal_as(&mut c, buyer(), 31, &key, &salt, &v.body)
@@ -2617,7 +2710,7 @@ mod tests {
         c.jobs.flush();
         c.records.flush();
         let before = env::storage_usage();
-        c.create(seller(), COMMIT.to_string());
+        c.create(seller(), COMMIT.to_string(), PACK.into());
         let err = timeout_as(&mut c, ACCEPT_WINDOW_NS).err().unwrap();
         assert!(err.contains("accept deadline"), "{err}");
         assert!(err.contains("has not passed yet"), "{err}");
@@ -2680,7 +2773,7 @@ mod tests {
 
     #[test]
     fn timeout_no_reveal_pays_seller_without_record_change() {
-        let v = signed(&body_of("bare array with whitespace"), "job-0");
+        let v = signed(&body_of("bare array with whitespace"));
         let mut c = reviewed(&v);
         for ts in [REVIEW_WINDOW_NS + 1, REVEAL_WINDOW_NS] {
             let err = timeout_as(&mut c, ts).err().unwrap();
@@ -2707,11 +2800,11 @@ mod tests {
     fn last_block_review_then_timeout_boundaries() {
         // Accept and review in their last allowed block; the no-review timeout
         // can't fire at review_by, and the buyer still reveals at reveal_deadline.
-        let v = signed(&body_of("bare findings array"), "job-0");
+        let v = signed(&body_of("bare findings array"));
         let (key, salt, commit) = commit_vector();
         let mut c = fresh_with_test_signer();
         ctx(mnear(30), 0);
-        c.create(seller(), commit);
+        c.create(seller(), commit, PACK.into());
         as_caller(seller(), ACCEPT_WINDOW_NS);
         c.accept(U64(0));
         assert!(timeout_as(&mut c, REVIEW_WINDOW_NS).is_err());
@@ -2726,6 +2819,168 @@ mod tests {
             &reveal_as(&mut c, buyer(), REVEAL_WINDOW_NS, &key, &salt, &v.body).unwrap()
         ));
         assert_eq!(payout_callback_kind().as_deref(), Some("settle"));
+    }
+
+    // ---- T-048 (A-016 = B): pinned review requests ----
+
+    const PINS_JSON: &str = include_str!("../../test-vectors/review-pins.json");
+
+    fn pin_of(pack: &str) -> String {
+        pins::pinned_request(pack).unwrap().to_string()
+    }
+
+    /// Job `id` for `pack` created at t=0 with `commit`, accepted at 10.
+    fn create_accepted_for(c: &mut EarnedPrice, pack: &str, commit: &str) -> u64 {
+        ctx(mnear(30), 0);
+        let id = c.create(seller(), commit.to_string(), pack.into()).0;
+        as_caller(seller(), 10);
+        c.accept(U64(id));
+        id
+    }
+
+    #[test]
+    fn create_rejects_unknown_packs_with_nothing_moved() {
+        for bad in ["pack-4", "", "Pack-1", "pack-1 ", "sample-1", "pack-01"] {
+            ctx(mnear(30), 0);
+            let mut c = fresh();
+            let err = try_call(|| {
+                c.create(seller(), COMMIT.to_string(), bad.into());
+            })
+            .unwrap_err();
+            assert!(err.contains("unknown pack_id"), "{bad:?}: {err}");
+            assert!(
+                err.contains("the official packs are pack-1, pack-2, pack-3"),
+                "{err}"
+            );
+            assert!(transfers().is_empty(), "panic refunds the deposit");
+            assert_eq!(c.next_job_id().0, 0);
+            std::mem::forget(c);
+        }
+    }
+
+    #[test]
+    fn every_official_pack_can_be_created_and_is_public_on_the_job() {
+        ctx(mnear(90), 0);
+        let mut c = fresh();
+        for (i, (pack, _)) in pins::PACKS.iter().enumerate() {
+            let id = c.create(seller(), COMMIT.to_string(), pack.to_string());
+            assert_eq!(id.0, i as u64);
+            assert_eq!(c.get_job(id).unwrap().pack_id, *pack);
+        }
+    }
+
+    #[test]
+    fn review_pins_view_matches_the_shared_vector() {
+        let v: Value = near_sdk::serde_json::from_str(PINS_JSON).unwrap();
+        let view = fresh().review_pins();
+        assert_eq!(view["prompt_version"], v["prompt_version"]);
+        assert_eq!(view["model"], v["model"]);
+        assert_eq!(view["packs"], v["packs"]);
+    }
+
+    #[test]
+    fn submit_review_accepts_only_the_job_packs_pinned_request() {
+        let body = body_of("bare findings array");
+        let mut c = fresh_with_test_signer();
+        let id = create_accepted_for(&mut c, "pack-1", COMMIT);
+        let want = "request_sha256 is not the pinned review request for pack-1 (prompt v1)";
+        // Real near-misses of pack-1's request (key pasted into the prompt,
+        // prompt drift, another model in the body), from the shared vector.
+        let v: Value = near_sdk::serde_json::from_str(PINS_JSON).unwrap();
+        let rejected = v["rejected"].as_array().unwrap();
+        assert_eq!(rejected.len(), 3);
+        for r in rejected {
+            let req = r["request_sha256"].as_str().unwrap();
+            assert_submit_rejected_v(&mut c, &signed_for(&body, req, pins::REVIEW_MODEL), want);
+        }
+        // Another official pack's request, and the unit-test sample pin.
+        for other in ["pack-2", "pack-3", "sample-0"] {
+            let v = signed_for(&body, &pin_of(other), pins::REVIEW_MODEL);
+            assert_submit_rejected_v(&mut c, &v, want);
+        }
+        // Pinned request, but the review names another model.
+        let v = signed_for(&body, &pin_of("pack-1"), "test/model");
+        assert_submit_rejected_v(
+            &mut c,
+            &v,
+            "model must be deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        );
+        // Uppercase hex of the right pin is the same 32 bytes; the rejected
+        // attempts above burned nothing, so the same body still goes through.
+        let mut good = signed_for(&body, &pin_of("pack-1"), pins::REVIEW_MODEL);
+        good.req = good.req.to_uppercase();
+        as_caller(seller(), 20);
+        submit_on(&mut c, id, &good);
+        let r = c.get_job(U64(id)).unwrap().review.unwrap();
+        assert_eq!(r.request_sha256, pin_of("pack-1"));
+    }
+
+    #[test]
+    fn honest_repeat_reviews_of_one_pack_both_land() {
+        // Same pinned request on two jobs (a repeat buyer, beat 4): each TEE
+        // response is its own body, so the replay guard lets both through.
+        let mut c = fresh_with_test_signer();
+        let a = create_accepted_for(&mut c, "pack-2", COMMIT);
+        let b = create_accepted_for(&mut c, "pack-2", COMMIT);
+        let first = body_of("bare findings array");
+        let second = with_id(&first, "2");
+        assert_ne!(first, second);
+        as_caller(seller(), 20);
+        submit_on(
+            &mut c,
+            a,
+            &signed_for(&first, &pin_of("pack-2"), pins::REVIEW_MODEL),
+        );
+        submit_on(
+            &mut c,
+            b,
+            &signed_for(&second, &pin_of("pack-2"), pins::REVIEW_MODEL),
+        );
+        assert!(c.get_job(U64(a)).unwrap().review.is_some());
+        assert!(c.get_job(U64(b)).unwrap().review.is_some());
+        // The first one replayed on a third job is still refused.
+        let d = create_accepted_for(&mut c, "pack-2", COMMIT);
+        as_caller(seller(), 20);
+        let err = try_call(|| {
+            submit_on(
+                &mut c,
+                d,
+                &signed_for(&first, &pin_of("pack-2"), pins::REVIEW_MODEL),
+            )
+        })
+        .unwrap_err();
+        assert!(err.contains("already used for a job"), "{err}");
+    }
+
+    #[test]
+    fn reveal_rejects_a_valid_key_for_another_pack_then_timeout_pays_seller() {
+        // The job is for pack-1 and the seller reviewed pack-1; the buyer
+        // committed the (valid) sample-0 key. Buyer's fault, as with any bad key.
+        let (key, salt, commit) = commit_vector();
+        let v = signed_for(
+            &body_of("bare findings array"),
+            &pin_of("pack-1"),
+            pins::REVIEW_MODEL,
+        );
+        let mut c = fresh_with_test_signer();
+        let id = create_accepted_for(&mut c, "pack-1", &commit);
+        as_caller(seller(), 20);
+        submit_on(&mut c, id, &v);
+        let err = reveal_as(&mut c, buyer(), 30, &key, &salt, &v.body)
+            .err()
+            .unwrap();
+        assert!(
+            err.contains("the committed key is for sample-0 but this job is for pack-1"),
+            "{err}"
+        );
+        assert!(transfers().is_empty(), "nothing moved");
+        assert!(c.get_job(U64(id)).is_some(), "job stays live");
+        assert!(!c.records.contains_key(&seller()));
+        assert!(is_promise(
+            &timeout_as(&mut c, REVEAL_WINDOW_NS + 1).unwrap()
+        ));
+        assert_eq!(transfers(), vec![(seller(), mnear(30).as_yoctonear())]);
+        assert_eq!(payout_callback_kind().as_deref(), Some("timeout"));
     }
 
     #[test]

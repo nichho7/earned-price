@@ -1,8 +1,11 @@
 // The TEE review request (S-005 rules, m001-ui-contract section 7). Pure functions, no I/O, so the
 // seller (T-027), the calibration script (scripts/measure-packs.mjs) and the tests build the exact
 // same bytes. Change PROMPT_VERSION whenever the prompt text or request shape changes: calibration
-// results are only valid for the version they were measured with.
-import { CATEGORIES, MAX_FINDINGS } from "../grader/grade.js";
+// results are only valid for the version they were measured with. Any change to the request bytes
+// also changes each pack's request_sha256, which the escrow contract pins (T-048): regenerate
+// test-vectors/review-pins.json (node scripts/freeze-packs.mjs), update contract/src/pins.rs to
+// match, and redeploy, or every honest review is rejected on-chain.
+import { CATEGORIES, MAX_FINDINGS, sha256Hex } from "../grader/grade.js";
 
 export const PROMPT_VERSION = 1;
 export const REVIEW_MODEL = "deepseek-ai/DeepSeek-V4.1-Flash-1017";
@@ -161,4 +164,13 @@ export function buildReviewRequest(files, model = REVIEW_MODEL) {
     chat_template_kwargs: { thinking: false },
     stream: false,
   });
+}
+
+/**
+ * sha256 (hex) of the exact review request for a loaded pack ({ reviewFiles }, see packs/packs.js
+ * loadPack). This is the request_sha256 the TEE signs and the one the escrow contract pins for that
+ * pack (T-048, `review_pins` view): submit_review rejects any other request.
+ */
+export function requestSha256(pack, model = REVIEW_MODEL) {
+  return sha256Hex(buildReviewRequest(pack.reviewFiles, model));
 }

@@ -7,8 +7,11 @@
 //! deploy.sh ships (default features) into target/near/sandbox/, so it never
 //! touches the deployable wasm file. Reviews are signed by a throwaway test key
 //! the test allowlists at init; timeouts (block time) are covered by unit tests.
+//! Jobs use the real pack-1 answer key and its pinned review request (T-048),
+//! so this also proves the shipped wasm rejects any other request.
 #![cfg(feature = "sandbox-test")]
 
+use earned_price::{grade, pins};
 use near_sdk::env;
 use near_workspaces::network::Sandbox;
 use near_workspaces::result::ExecutionFinalResult;
@@ -29,7 +32,9 @@ const MILLI: u128 = 1_000_000_000_000_000_000_000;
 const REVEAL_GAS_CEILING: u64 = 50_000_000_000_000;
 
 const COMMIT_JSON: &str = include_str!("../../test-vectors/commit.json");
-const EXTRACT: &str = include_str!("../../test/fixtures/review-extract.json");
+const PINS_JSON: &str = include_str!("../../test-vectors/review-pins.json");
+const PACK1_KEY: &str = include_str!("../../packs/pack-1/answer-key.json");
+const PACK: &str = "pack-1";
 
 fn build_wasm() -> Vec<u8> {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -54,23 +59,40 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// (canonical pack-1 key, salt hex, commit hex): the real pack-1 answer key
+/// sealed with the commit.json salt, commit = sha256(u32_be(len K) || K || salt).
 fn commit_vector() -> (String, String, String) {
     let v: Value = serde_json::from_str(COMMIT_JSON).unwrap();
-    let g = |k: &str| v[k].as_str().unwrap().to_string();
-    (g("key_canonical"), g("salt_hex"), g("commit_hex"))
+    let salt = v["salt_hex"].as_str().unwrap().to_string();
+    let key = grade::canonical_json(&near_sdk::serde_json::from_str(PACK1_KEY).unwrap()).unwrap();
+    let mut buf = (key.len() as u32).to_be_bytes().to_vec();
+    buf.extend_from_slice(key.as_bytes());
+    buf.extend_from_slice(
+        &(0..salt.len() / 2)
+            .map(|i| u8::from_str_radix(&salt[2 * i..2 * i + 2], 16).unwrap())
+            .collect::<Vec<_>>(),
+    );
+    let commit = hex(&env::sha256(&buf));
+    (key, salt, commit)
 }
 
-fn body_of(prefix: &str) -> String {
-    let x: Value = serde_json::from_str(EXTRACT).unwrap();
-    x["cases"]
-        .as_array()
-        .unwrap()
+/// A TEE-shaped response body whose findings hit the first `hits` pack-1 bugs
+/// (5 = PASS, fewer than 4 = FAIL). `id` is the completion id: every real TEE
+/// call returns its own, which is what the replay guard keys on.
+fn pack1_body(hits: usize, id: &str) -> String {
+    let key: Value = serde_json::from_str(PACK1_KEY).unwrap();
+    let findings: Vec<Value> = key["bugs"].as_array().unwrap()[..hits]
         .iter()
-        .find(|c| c["name"].as_str().unwrap().starts_with(prefix))
-        .unwrap()["response_body"]
-        .as_str()
-        .unwrap()
-        .to_string()
+        .map(|b| json!({ "file": b["file"], "line": b["line_start"], "category": b["category"] }))
+        .collect();
+    let content = serde_json::to_string(&json!({ "findings": findings })).unwrap();
+    serde_json::to_string(&json!({
+        "id": format!("chatcmpl-{id}"),
+        "object": "chat.completion",
+        "choices": [{ "index": 0, "message": { "role": "assistant", "content": content }, "finish_reason": "stop" }],
+        "model": pins::REVIEW_MODEL,
+    }))
+    .unwrap()
 }
 
 fn test_key() -> secp256k1::SecretKey {
@@ -85,11 +107,14 @@ fn test_addr() -> String {
     )
 }
 
-/// submit_review args for `body`, signed by the test key; `tag` makes the
-/// request hash unique.
-fn review_args(job_id: &str, body: &str, tag: &str) -> Value {
-    let model = "test/model";
-    let req = hex(&env::sha256(tag.as_bytes()));
+/// submit_review args for `body` over pack-1's pinned request, signed by the test key.
+fn review_args(job_id: &str, body: &str) -> Value {
+    review_args_for(job_id, body, pins::pinned_request(PACK).unwrap())
+}
+
+/// submit_review args for `body` claiming request `req`, signed by the test key.
+fn review_args_for(job_id: &str, body: &str, req: &str) -> Value {
+    let model = pins::REVIEW_MODEL;
     let resp = hex(&env::sha256(body.as_bytes()));
     let text = format!("{model}:{req}:{resp}");
     let mut msg = format!("\x19Ethereum Signed Message:\n{}", text.len()).into_bytes();
@@ -157,7 +182,7 @@ async fn create(e: &Env, seller: &str, deposit: NearToken) -> ExecutionFinalResu
     let (_, _, commit) = commit_vector();
     e.buyer
         .call(e.c.id(), "create")
-        .args_json(json!({ "seller": seller, "commit_hash": commit }))
+        .args_json(json!({ "seller": seller, "commit_hash": commit, "pack_id": PACK }))
         .deposit(deposit)
         .max_gas()
         .transact()
@@ -175,10 +200,10 @@ async fn call(from: &Account, e: &Env, method: &str, args: Value) -> ExecutionFi
 }
 
 /// Accept + submit a test-signed review over `body` as `seller`.
-async fn accept_and_review(e: &Env, seller: &Account, job: &str, body: &str, tag: &str) {
+async fn accept_and_review(e: &Env, seller: &Account, job: &str, body: &str) {
     let r = call(seller, e, "accept", json!({ "job_id": job })).await;
     assert!(r.is_success(), "{r:?}");
-    let r = call(seller, e, "submit_review", review_args(job, body, tag)).await;
+    let r = call(seller, e, "submit_review", review_args(job, body)).await;
     assert!(r.is_success(), "{r:?}");
 }
 
@@ -216,7 +241,7 @@ async fn job_is_gone(e: &Env, job: &str) -> bool {
 /// The pass findings, padded with reasoning text to just under the
 /// MAX_RESPONSE_LEN cap (worst-case hashing and parsing gas).
 fn max_pass_body() -> String {
-    let small: Value = serde_json::from_str(&body_of("bare findings array")).unwrap();
+    let small: Value = serde_json::from_str(&pack1_body(5, "sbx-0")).unwrap();
     let mut b = small.clone();
     b["choices"][0]["message"]["reasoning_content"] = json!("");
     let base = serde_json::to_string(&b).unwrap().len();
@@ -252,7 +277,7 @@ async fn balances_follow_the_escrow_rules() {
     // 3. PASS: accept, review (largest allowed response), reveal. The seller
     // receives exactly the quote and the pass counts (quote 0.030 -> 0.040).
     let big = max_pass_body();
-    accept_and_review(&e, &e.seller, &job0, &big, "sbx-0").await;
+    accept_and_review(&e, &e.seller, &job0, &big).await;
     let s0 = balance(&e.w, &e.seller).await;
     let r = reveal(&e, &job0, &big).await;
     assert!(r.is_success(), "{r:?}");
@@ -280,17 +305,11 @@ async fn balances_follow_the_escrow_rules() {
     )
     .await;
     let job1: String = r.json().unwrap();
-    accept_and_review(
-        &e,
-        &e.seller,
-        &job1,
-        &body_of("bare array with whitespace"),
-        "sbx-1",
-    )
-    .await;
+    let fail_body = pack1_body(3, "sbx-1");
+    accept_and_review(&e, &e.seller, &job1, &fail_body).await;
     let s1 = balance(&e.w, &e.seller).await;
     let c0 = balance(&e.w, e.c.as_account()).await;
-    let r = reveal(&e, &job1, &body_of("bare array with whitespace")).await;
+    let r = reveal(&e, &job1, &fail_body).await;
     assert!(r.is_success(), "{r:?}");
     assert!(r
         .logs()
@@ -342,11 +361,12 @@ async fn balances_follow_the_escrow_rules() {
     let b3 = balance(&e.w, &e.buyer).await;
     let r = create(&e, &gone_id, NearToken::from_millinear(30)).await;
     let job2: String = r.json().unwrap();
-    accept_and_review(&e, &gone, &job2, &body_of("bare findings array"), "sbx-2").await;
+    let pass2 = pack1_body(5, "sbx-2");
+    accept_and_review(&e, &gone, &job2, &pass2).await;
     let r = gone.delete_account(root.id()).await.unwrap();
     assert!(r.is_success(), "{r:?}");
     let c2 = balance(&e.w, e.c.as_account()).await;
-    let r = reveal(&e, &job2, &body_of("bare findings array")).await;
+    let r = reveal(&e, &job2, &pass2).await;
     assert!(
         r.logs()
             .iter()
@@ -377,15 +397,63 @@ async fn balances_follow_the_escrow_rules() {
     let job3: String = r.json().unwrap();
     let r = call(&e.seller, &e, "accept", json!({ "job_id": job3 })).await;
     assert!(r.is_success());
+    let r = call(&e.seller, &e, "submit_review", review_args(&job3, &big)).await;
+    let failure = format!("{:?}", r.into_result().unwrap_err());
+    assert!(failure.contains("already used for a job"), "{failure}");
+
+    // 6b. T-048 request pin, on the same job: a correctly signed review of any
+    // other request is refused (the key pasted into the prompt, prompt drift,
+    // another model in the body, another pack's request); then the honest
+    // pinned request for pack-1 lands on it.
+    let v: Value = serde_json::from_str(PINS_JSON).unwrap();
+    let mut wrong: Vec<String> = v["rejected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["request_sha256"].as_str().unwrap().to_string())
+        .collect();
+    wrong.push(pins::pinned_request("pack-2").unwrap().to_string());
+    assert_eq!(wrong.len(), 4);
+    let fresh_body = pack1_body(5, "sbx-3");
+    for req in &wrong {
+        let r = call(
+            &e.seller,
+            &e,
+            "submit_review",
+            review_args_for(&job3, &fresh_body, req),
+        )
+        .await;
+        let failure = format!("{:?}", r.into_result().unwrap_err());
+        assert!(
+            failure
+                .contains("request_sha256 is not the pinned review request for pack-1 (prompt v1)"),
+            "{failure}"
+        );
+    }
     let r = call(
         &e.seller,
         &e,
         "submit_review",
-        review_args(&job3, &big, "sbx-0"),
+        review_args(&job3, &fresh_body),
     )
     .await;
+    assert!(r.is_success(), "{r:?}");
+
+    // 6c. Only official packs: the unit-test-only sample pin is not in the wasm.
+    let r = e
+        .buyer
+        .call(e.c.id(), "create")
+        .args_json(json!({ "seller": e.seller.id(), "commit_hash": commit_vector().2, "pack_id": "sample-0" }))
+        .deposit(NearToken::from_millinear(35))
+        .max_gas()
+        .transact()
+        .await
+        .unwrap();
     let failure = format!("{:?}", r.into_result().unwrap_err());
-    assert!(failure.contains("already used for a job"), "{failure}");
+    assert!(failure.contains("unknown pack_id"), "{failure}");
+    let pinned: Value = e.c.view("review_pins").await.unwrap().json().unwrap();
+    assert_eq!(pinned["packs"], v["packs"]);
+    assert_eq!(pinned["prompt_version"], v["prompt_version"]);
 
     // 7. Decline: buyer refunded in the same call, contract storage unchanged.
     let storage0 = e.w.view_account(e.c.id()).await.unwrap().storage_usage;
