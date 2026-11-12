@@ -1,0 +1,393 @@
+{
+  "schema": "earned-lab-events",
+  "version": 1,
+  "sequence": "pass",
+  "mode": "recorded",
+  "network": "testnet",
+  "recorded": true,
+  "placeholder": false,
+  "contract": "earned-price.testnet",
+  "contract_deployed": true,
+  "seller": "seller.earned-price.testnet",
+  "buyer": "earned-price-buyer-09552fb0.testnet",
+  "pack_id": "pack-2",
+  "clock_base_ns": "1794489854359767181",
+  "buyer_proof": {
+    "account": "earned-price-buyer-09552fb0.testnet",
+    "create_account_tx": "CbXuiUougakPpWtFJPCaXxo4r7UV5JB6YgQWur5UY1h9",
+    "date": "2026-11-12",
+    "recorded": true,
+    "note": "Testnet account created by `earned init` in the T-064 live run (recorded/live-run-2026-11-12.log, step 1)."
+  },
+  "notes": [
+    "Recorded by scripts/record-site-run.mjs from recorded/pack-2.json (T-064 live run) and testnet RPC. Every tx hash, block, amount, grade and record is real.",
+    "t_ms: tx_submitted = the block that included the tx; tx_confirmed and its derived events = the block of the tx's last receipt; quotes = get_record read at the blocks named in data.block_height."
+  ],
+  "events": [
+    {
+      "seq": 0,
+      "type": "quote",
+      "t_ms": 0,
+      "at": "2026-11-12T13:24:14.359Z",
+      "job_id": null,
+      "source": "view",
+      "recorded": true,
+      "placeholder": false,
+      "data": {
+        "phase": "before",
+        "block_height": 277368592,
+        "record": {
+          "passes": 0,
+          "fails": 0,
+          "unique_buyers": 0,
+          "jobs": 0
+        },
+        "quote_mnear": 30,
+        "formula": "0.030 + 0.010×0 − 0.005×0 = 0.030 NEAR"
+      }
+    },
+    {
+      "seq": 1,
+      "type": "tx_submitted",
+      "t_ms": 524,
+      "at": "2026-11-12T13:24:14.883Z",
+      "job_id": null,
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "CUuEWusixATkE8yybm9CAm22tt6QDAsHxWf9oQEExksm",
+      "data": {
+        "action": "create",
+        "actor": "buyer",
+        "signer": "earned-price-buyer-09552fb0.testnet",
+        "deposit_mnear": 30,
+        "hold_deadline_ns": null
+      }
+    },
+    {
+      "seq": 2,
+      "type": "tx_confirmed",
+      "t_ms": 1707,
+      "at": "2026-11-12T13:24:16.066Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "CUuEWusixATkE8yybm9CAm22tt6QDAsHxWf9oQEExksm",
+      "data": {
+        "action": "create",
+        "status": "success",
+        "error": null,
+        "block_height": 277368595,
+        "block_timestamp_ns": "1794489856066800093",
+        "chain_events": [
+          "create"
+        ],
+        "price_mnear": 30,
+        "excess_refunded_mnear": 0,
+        "commit_hash": "df91286d933bda7391db2129b2e57fdd1ae8566587ffcbac5c45476c975b3d3f",
+        "created_at_ns": "1794489855432987234",
+        "accept_by_ns": "1794489975432987234",
+        "review_by_ns": "1794490275432987234",
+        "reveal_deadline_ns": "1794490575432987234"
+      }
+    },
+    {
+      "seq": 3,
+      "type": "tx_submitted",
+      "t_ms": 6000,
+      "at": "2026-11-12T13:24:20.360Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "6TvuZ7Z52NjE8xEDBvKuJm6dEVrpQmvWyj6HqfXARKVN",
+      "data": {
+        "action": "accept",
+        "actor": "seller",
+        "signer": "seller.earned-price.testnet",
+        "deposit_mnear": 0,
+        "hold_deadline_ns": "1794489975432987234"
+      }
+    },
+    {
+      "seq": 4,
+      "type": "tx_confirmed",
+      "t_ms": 7082,
+      "at": "2026-11-12T13:24:21.442Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "6TvuZ7Z52NjE8xEDBvKuJm6dEVrpQmvWyj6HqfXARKVN",
+      "data": {
+        "action": "accept",
+        "status": "success",
+        "error": null,
+        "block_height": 277368604,
+        "block_timestamp_ns": "1794489861442459754",
+        "chain_events": [
+          "accept"
+        ]
+      }
+    },
+    {
+      "seq": 5,
+      "type": "accepted",
+      "t_ms": 7082,
+      "at": "2026-11-12T13:24:21.442Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "6TvuZ7Z52NjE8xEDBvKuJm6dEVrpQmvWyj6HqfXARKVN",
+      "data": {
+        "seller": "seller.earned-price.testnet",
+        "accepted_at_ns": "1794489860965883335"
+      }
+    },
+    {
+      "seq": 6,
+      "type": "tx_submitted",
+      "t_ms": 20712,
+      "at": "2026-11-12T13:24:35.071Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "DXxtYrWFMzogDobRSyKLNS3s6PVYThjRA8TQpyB1YPsu",
+      "data": {
+        "action": "submit_review",
+        "actor": "seller",
+        "signer": "seller.earned-price.testnet",
+        "deposit_mnear": 0,
+        "hold_deadline_ns": "1794490275432987234"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "tx_confirmed",
+      "t_ms": 21614,
+      "at": "2026-11-12T13:24:35.974Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "DXxtYrWFMzogDobRSyKLNS3s6PVYThjRA8TQpyB1YPsu",
+      "data": {
+        "action": "submit_review",
+        "status": "success",
+        "error": null,
+        "block_height": 277368632,
+        "block_timestamp_ns": "1794489875974169516",
+        "chain_events": [
+          "submit_review"
+        ]
+      }
+    },
+    {
+      "seq": 8,
+      "type": "attested",
+      "t_ms": 21614,
+      "at": "2026-11-12T13:24:35.974Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "DXxtYrWFMzogDobRSyKLNS3s6PVYThjRA8TQpyB1YPsu",
+      "data": {
+        "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+        "signing_address": "0xfe0071895500a9755c18044948ab4f4e1a7f337e",
+        "request_sha256": "13218ed9b768fc0d1143be87064e4be062411f4099dd46e26df0e2501be62337",
+        "response_sha256": "7ca8e6d809d73c3c25584f47ea239397f8941e82c6d2faa616ffc03d1ba3c82a",
+        "signed_text": "deepseek-ai/DeepSeek-V4.1-Flash-1017:13218ed9b768fc0d1143be87064e4be062411f4099dd46e26df0e2501be62337:7ca8e6d809d73c3c25584f47ea239397f8941e82c6d2faa616ffc03d1ba3c82a",
+        "signature": "0x95294b759daf14e4a8b04ad938759f06352776c4031e0bb55f606e4b0b5fe79d13d685c70686e786fccfc994cd06bd74d6f8757860b659e9646d4a330db4a9d41b",
+        "findings_count": 6
+      }
+    },
+    {
+      "seq": 9,
+      "type": "tx_submitted",
+      "t_ms": 25656,
+      "at": "2026-11-12T13:24:40.016Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB",
+      "data": {
+        "action": "reveal",
+        "actor": "buyer",
+        "signer": "earned-price-buyer-09552fb0.testnet",
+        "deposit_mnear": 0,
+        "hold_deadline_ns": "1794490575432987234"
+      }
+    },
+    {
+      "seq": 10,
+      "type": "tx_confirmed",
+      "t_ms": 27773,
+      "at": "2026-11-12T13:24:42.133Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB",
+      "data": {
+        "action": "reveal",
+        "status": "success",
+        "error": null,
+        "block_height": 277368643,
+        "block_timestamp_ns": "1794489882133064468",
+        "chain_events": [
+          "reveal",
+          "payout"
+        ]
+      }
+    },
+    {
+      "seq": 11,
+      "type": "check_graded",
+      "t_ms": 27773,
+      "at": "2026-11-12T13:24:42.133Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB",
+      "data": {
+        "index": 1,
+        "of": 5,
+        "bug_id": "B1",
+        "title": "File never closed in load_catalog",
+        "hit": true,
+        "found_so_far": 1
+      }
+    },
+    {
+      "seq": 12,
+      "type": "check_graded",
+      "t_ms": 27773,
+      "at": "2026-11-12T13:24:42.133Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB",
+      "data": {
+        "index": 2,
+        "of": 5,
+        "bug_id": "B2",
+        "title": "Swallowed error in save_snapshot",
+        "hit": true,
+        "found_so_far": 2
+      }
+    },
+    {
+      "seq": 13,
+      "type": "check_graded",
+      "t_ms": 27773,
+      "at": "2026-11-12T13:24:42.133Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB",
+      "data": {
+        "index": 3,
+        "of": 5,
+        "bug_id": "B3",
+        "title": "Missing stock check in write_off",
+        "hit": true,
+        "found_so_far": 3
+      }
+    },
+    {
+      "seq": 14,
+      "type": "check_graded",
+      "t_ms": 27773,
+      "at": "2026-11-12T13:24:42.133Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB",
+      "data": {
+        "index": 4,
+        "of": 5,
+        "bug_id": "B4",
+        "title": "Off-by-one in page",
+        "hit": true,
+        "found_so_far": 4
+      }
+    },
+    {
+      "seq": 15,
+      "type": "check_graded",
+      "t_ms": 27773,
+      "at": "2026-11-12T13:24:42.133Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB",
+      "data": {
+        "index": 5,
+        "of": 5,
+        "bug_id": "B5",
+        "title": "Inverted comparison in is_expired",
+        "hit": true,
+        "found_so_far": 5
+      }
+    },
+    {
+      "seq": 16,
+      "type": "settled",
+      "t_ms": 27773,
+      "at": "2026-11-12T13:24:42.133Z",
+      "job_id": "1",
+      "source": "testnet",
+      "recorded": true,
+      "placeholder": false,
+      "tx_hash": "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB",
+      "data": {
+        "outcome": "paid_seller",
+        "amount_mnear": 30,
+        "to": "seller.earned-price.testnet",
+        "reason": "settle",
+        "record_change": "pass",
+        "grade": {
+          "found": 5,
+          "total": 5,
+          "pass_min": 4,
+          "passed": true,
+          "error": null
+        }
+      }
+    },
+    {
+      "seq": 17,
+      "type": "quote",
+      "t_ms": 28350,
+      "at": "2026-11-12T13:24:42.710Z",
+      "job_id": null,
+      "source": "view",
+      "recorded": true,
+      "placeholder": false,
+      "data": {
+        "phase": "after",
+        "block_height": 277368644,
+        "record": {
+          "passes": 1,
+          "fails": 0,
+          "unique_buyers": 1,
+          "jobs": 1
+        },
+        "quote_mnear": 40,
+        "formula": "0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR",
+        "prev_quote_mnear": 30,
+        "delta_mnear": 10
+      }
+    }
+  ]
+}
