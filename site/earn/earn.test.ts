@@ -49,6 +49,11 @@ test("recorded run: every tx hash matches the T-064 receipts byte for byte", () 
       const hashes = new Set(run.events.filter((e) => "tx_hash" in e && (e as { data: { action?: string } }).data.action === action).map((e) => (e as { tx_hash: string }).tx_hash));
       assert.deepEqual([...hashes], [rc.txs[action]], `${file} ${action}`);
     }
+    // Derived events carry their tx's hash too: the SETTLE TX and register links come from these (review N-2 / R-1).
+    for (const [type, action] of Object.entries({ accepted: "accept", attested: "submit_review", check_graded: "reveal", settled: "reveal" })) {
+      const hashes = new Set(run.events.filter((e) => e.type === type).map((e) => (e as { tx_hash: string }).tx_hash));
+      assert.deepEqual([...hashes], [rc.txs[action]], `${file} ${type}`);
+    }
     const grade = run.events.find((e) => e.type === "settled")!;
     assert.equal((grade as { data: { grade: { found: number } } }).data.grade.found, rc.grade.found);
     assert.equal(run.events.find((e) => e.type === "tx_confirmed")!.job_id, rc.job_id);
