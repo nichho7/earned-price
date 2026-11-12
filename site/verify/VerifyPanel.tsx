@@ -8,14 +8,15 @@
 import { Fragment, useLayoutEffect, useRef, useState, type ChangeEvent } from "react";
 import pack2 from "../../recorded/pack-2.json";
 import {
-  CHECKS, NOT_CHECKED_OFFLINE, RECORDED_NAME, ReceiptError, cliLine, loadFile, parseReceiptText, receiptJson, trustSummary, verifyView,
+  CHECKS, NOT_CHECKED_OFFLINE, RECORDED_NAME, ReceiptError, cliLine, fileName, loadFile, parseReceiptText, receiptJson, trustSummary, verifyView,
   type Loaded, type View,
 } from "./verify-model.ts";
 import { Tick, Cross, Dash } from "./icons.tsx";
 import s from "./verify.module.css";
 
-type Ok = Extract<Loaded, { ok: true }>;
-type Source = { kind: "recorded" } | { kind: "file"; loaded: Ok };
+// A picked file is the current source even when it was refused (security M-1): Verify then re-shows the
+// refusal, never the previous receipt's verdict.
+type Source = { kind: "recorded" } | { kind: "file"; loaded: Loaded; name: string };
 
 // The recorded receipt, re-serialised with receiptJson: byte for byte recorded/pack-2.json (unit test), so the
 // size and sha256 the page shows match `shasum -a 256 recorded/pack-2.json`.
@@ -67,8 +68,22 @@ export function VerifyPanel() {
 
   useLayoutEffect(() => setMounted(true), []);
 
+  // Designer QA B2: on a phone the sheet sits below the controls, so a run would happen off screen. Only a run the
+  // reader starts (Verify, or the Tamper flip) brings the sheet up, before the lines print; never on load, never
+  // a smooth scroll under Reduce Motion, and at desktop widths the sheet is already beside the controls.
+  // A result scrolls from the layout effect, once the sheet has its final layout: scrolling before the commit let
+  // CSS scroll anchoring push the page ~1000 px past the sheet when the result rows appeared (measured, Chromium).
+  function reveal() {
+    const el = shk.current;
+    const r = el?.getBoundingClientRect();
+    if (!el || !r || r.top <= innerHeight * 0.6) return;
+    const rm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ block: "start", behavior: rm ? "auto" : "smooth" });
+  }
+
   function run(t: boolean, l: Loaded) {
     if (!l.ok) {
+      reveal();
       setRes(null);
       setErr(l.error);
       return;
@@ -78,6 +93,7 @@ export function VerifyPanel() {
       setErr(null);
       setRes({ id: ++runs.current, view });
     } catch (e) {
+      reveal();
       setRes(null);
       setErr(e instanceof ReceiptError ? e.message : "This receipt could not be checked.");
     }
@@ -95,12 +111,8 @@ export function VerifyPanel() {
     if (!f) return;
     const l = await loadFile(f);
     setRes(null);
-    if (!l.ok) {
-      setErr(l.error);
-      return;
-    }
-    setErr(null);
-    setSrc({ kind: "file", loaded: l });
+    setErr(l.ok ? null : l.error);
+    setSrc({ kind: "file", loaded: l, name: fileName(f.name) });
   }
 
   function backToRecorded() {
@@ -133,6 +145,7 @@ export function VerifyPanel() {
     anims.current = [];
     const el = root.current;
     if (!res || !el) return;
+    reveal(); // res is only ever set by run(), a run the reader started: never on load
     const rm = matchMedia("(prefers-reduced-motion: reduce)").matches;
     const css = getComputedStyle(document.documentElement);
     const tok = (n: string, d: string) => css.getPropertyValue(n).trim() || d;
@@ -182,8 +195,8 @@ export function VerifyPanel() {
           <div className={s.src} data-source={src.kind}>
             <small>RECEIPT</small>
             <p className={s.fname}>
-              <b data-file-name="">{loaded.ok ? loaded.name : "receipt.json"}</b>
-              {src.kind === "recorded" ? " · job 1 of the recorded testnet run, 12 Nov 2026" : " · your file"}
+              <b data-file-name="">{src.kind === "file" ? src.name : RECORDED_NAME}</b>
+              {src.kind === "recorded" ? " · job 1 of the recorded testnet run, 12 Nov 2026" : loaded.ok ? " · your file" : " · not a receipt"}
             </p>
             {loaded.ok && (
               <p className={s.meta}>
@@ -320,9 +333,14 @@ export function VerifyPanel() {
                     </div>
                   ) : err ? (
                     <div data-verdict-body="" data-error="">
-                      <small>CAN&apos;T CHECK THIS FILE</small>
+                      <small>
+                        CAN&apos;T CHECK · <span data-error-name="">{src.kind === "file" ? src.name : RECORDED_NAME}</span>
+                      </small>
                       <p className={s.word}>Not checked.</p>
                       <p className={s.line}>{err}</p>
+                      {src.kind === "file" && (
+                        <p className={s.hint}>Nothing was checked. To check the recorded receipt, press Use the recorded receipt.</p>
+                      )}
                     </div>
                   ) : (
                     <p className={s.idle}>{mounted ? "Press Verify receipt to run the four checks." : "Not run yet."}</p>
@@ -333,8 +351,9 @@ export function VerifyPanel() {
                   <div className={s.chain} data-chain="">
                     <small>NOT VERIFIED OFFLINE · chain facts the receipt claims</small>
                     <dl>
-                      {v.chain.map((r) => (
-                        <div key={r.label}>
+                      {v.chain.map((r, i) => (
+                        // index keys: labels come from the receipt's tx names and can repeat (code review O-1)
+                        <div key={i}>
                           <dt>{r.label}</dt>
                           <dd>
                             {r.href ? (

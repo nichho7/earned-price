@@ -18,7 +18,10 @@ export const RECORDED_NAME = "recorded/pack-2.json";
 export const CLI = `node cli/earned.js verify ${RECORDED_NAME}`;
 const EXPLORER_TX = "https://testnet.nearblocks.io/txns/";
 const TX_HASH = /^[1-9A-HJ-NP-Za-km-z]{43,44}$/; // base58 NEAR tx hash (same grammar as site/earn/earn-core.js)
-const CUT = 96;
+const CUT = 96; // a chain claim
+const NAME_CUT = 48; // a file name (Designer QA B3)
+const DETAIL_CUT = 240; // a check's detail line (security L-1: a 7 MB tee.model must not become a 7 MB row)
+const LABEL_CUT = 24; // a tx key in the chain rows
 
 export type Loaded =
   | { ok: true; receipt: Receipt; name: string; bytes: number; sha256: string }
@@ -43,7 +46,16 @@ export interface View {
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
-const cut = (s: string) => (s.length > CUT ? `${s.slice(0, CUT)}…` : s);
+/** At most `n` characters, then an ellipsis (whole code points, so an emoji is never split in half). */
+function cut(s: string, n = CUT): string {
+  const cps = [...s.slice(0, n * 2 + 2)];
+  return cps.length > n ? `${cps.slice(0, n).join("")}…` : s;
+}
+/**
+ * Receipt-derived text made safe to show: printable, then cut to `n` characters. printable() works one
+ * character at a time, so only the head that can still be shown is escaped (a 7 MB string costs nothing).
+ */
+export const shown = (s: string, n = CUT) => cut(printable(s.slice(0, n * 2 + 2)), n);
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 const tooBig = (n: number): Loaded => ({
   ok: false,
@@ -51,7 +63,7 @@ const tooBig = (n: number): Loaded => ({
 });
 
 /** A receipt file's name, made safe to show. */
-const fileName = (name: string) => cut(printable(name || "receipt.json"));
+export const fileName = (name: string) => shown(name || "receipt.json", NAME_CUT);
 
 /** Text of a receipt file -> a version 1 receipt, or the reason it isn't one. Never throws. */
 export function parseReceiptText(text: string, name: string): Loaded {
@@ -63,7 +75,7 @@ export function parseReceiptText(text: string, name: string): Loaded {
   try {
     data = JSON.parse(text);
   } catch {
-    return { ok: false, error: "This file is not JSON. A receipt is the JSON file `earned hire` writes after a job settles." };
+    return { ok: false, error: "This file is not JSON. A receipt is the JSON file earned hire writes after a job settles." };
   }
   if (!isObj(data) || data.version !== 1) {
     return { ok: false, error: "This is not an Earned Price receipt (version 1 expected)." };
@@ -100,7 +112,7 @@ export function trustSummary() {
 
 /** A receipt claim made safe to show: strings are printable and cut, anything else is named, never coerced. */
 function claim(v: unknown): string {
-  if (typeof v === "string") return v === "" ? "(empty)" : cut(printable(v));
+  if (typeof v === "string") return v === "" ? "(empty)" : shown(v);
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
   return v === undefined ? "(missing)" : "(not a string)";
 }
@@ -121,7 +133,7 @@ export function chainRows(r: Record<string, unknown>): ChainRow[] {
   if (isObj(r.txs)) {
     for (const [k, h] of Object.entries(r.txs).slice(0, 8)) {
       const link = testnet && typeof h === "string" && TX_HASH.test(h);
-      rows.push({ label: `tx ${cut(printable(k)).slice(0, 24)}`, value: claim(h), href: link ? EXPLORER_TX + encodeURIComponent(h) : null });
+      rows.push({ label: `tx ${shown(k, LABEL_CUT)}`, value: claim(h), href: link ? EXPLORER_TX + encodeURIComponent(h) : null });
     }
   }
   return rows;
@@ -171,7 +183,7 @@ export function verifyView(receipt: Receipt, tamper: boolean): View {
     stamp: kind === "pass" ? "AUTHENTIC · OFFLINE" : kind === "unofficial" ? "NOT OFFICIAL" : edit ? "TAMPERED" : "NOT AUTHENTIC",
     // the CLI's own lines: the verdict when all four pass, else one FAIL line per failed check
     lines: allPass ? [printable(v.verdict)] : v.checks.filter((c) => !c.ok).map((c) => `FAIL: check ${c.n} ${c.title}`),
-    checks: v.checks.map((c) => ({ n: c.n, title: c.title, ok: c.ok, detail: printable(c.detail) })),
+    checks: v.checks.map((c) => ({ n: c.n, title: c.title, ok: c.ok, detail: shown(c.detail, DETAIL_CUT) })),
     scope: scope ? SCOPE.map(([k, label]) => ({ label, ok: scope[k] === true })) : [],
     proves: [
       { label: "genuine NEAR AI TEE review", ok: v.proves.review_authentic },

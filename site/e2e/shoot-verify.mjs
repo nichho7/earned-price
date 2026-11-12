@@ -1,5 +1,6 @@
 // [CTO] T-039 · /verify screenshots for the Designer's visual QA: each state at 390 and 1280, Chromium + WebKit,
-// plus the shake mid-frame, reduced motion and JS off.
+// plus the shake mid-frame, reduced motion and JS off. Fix round 1: 05b (Verify pressed on the refused file stays
+// refused, security M-1) and, at 390, 09 = the viewport only, just after tapping Verify with Tamper on (Designer B2).
 // Usage: node site/e2e/shoot-verify.mjs <outDir>   (a `next start` server must be running on SITE_PORT, default 3100)
 import { chromium, webkit } from "@playwright/test";
 import { mkdirSync, readFileSync } from "node:fs";
@@ -37,6 +38,8 @@ for (const [engineName, engine] of [["chromium", chromium], ["webkit", webkit]])
     await shot(page, "04-tampered");
     await page.locator("[data-act=file]").setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("hello") });
     await shot(page, "05-error");
+    await page.click("[data-act=verify]"); // security M-1: still the refused file, never the previous verdict
+    await shot(page, "05b-error-verify-again");
     await page.locator("[data-act=file]").setInputFiles({ name: "pack-3.json", mimeType: "application/json", buffer: readFileSync("recorded/pack-3.json") });
     await page.click("[data-act=tamper]"); // tamper off
     await page.click("[data-act=verify]");
@@ -53,6 +56,21 @@ for (const [engineName, engine] of [["chromium", chromium], ["webkit", webkit]])
     await finish(p2);
     await shot(p2, "07-reduced-motion-tampered");
     await rm.close();
+
+    if (width === 390) {
+      const vp390 = await browser.newContext({ viewport: vp, deviceScaleFactor: dsf, reducedMotion: "no-preference" });
+      const p4 = await vp390.newPage();
+      await p4.goto(base);
+      await p4.waitForSelector("[data-vf-mounted]");
+      await p4.evaluate(() => document.fonts.ready);
+      await p4.click("[data-act=tamper]");
+      await p4.click("[data-act=verify]");
+      await p4.waitForTimeout(900); // the smooth scroll settles
+      await finish(p4);
+      await p4.screenshot({ path: tag("09-user-run-viewport") });
+      console.log(tag("09-user-run-viewport"));
+      await vp390.close();
+    }
 
     const nojs = await browser.newContext({ viewport: vp, deviceScaleFactor: dsf, javaScriptEnabled: false });
     const p3 = await nojs.newPage();

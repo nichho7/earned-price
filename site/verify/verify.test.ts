@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { CHECKS, TRUST, receiptJson } from "./lib.js";
 import {
-  CLI, MAX_RECEIPT_BYTES, RECORDED_NAME, chainRows, cliLine, loadFile, parseReceiptText, trustSummary, verifyView,
+  CLI, MAX_RECEIPT_BYTES, RECORDED_NAME, chainRows, cliLine, fileName, loadFile, parseReceiptText, trustSummary, verifyView,
 } from "./verify-model.ts";
 import type { Receipt } from "./verify-model.ts";
 
@@ -125,6 +125,57 @@ test("chain fields: every one is labelled not verified offline, made printable, 
   // long values are cut, never wrap the sheet
   r.buyer = "a".repeat(500);
   assert.ok(chainRows(r)[1].value.length <= 97);
+});
+
+test("security L-1: check details are capped at 240 characters, and no PASS row carries a spoofed pack_id", async () => {
+  // h7: a 7 MB tee.model fails check 2 with the model name in its detail; the row stays one short line
+  const big = structuredClone(loaded("recorded/pack-2.json").receipt) as Record<string, any>;
+  big.tee.model = "M".repeat(1024 * 1024);
+  const vb = verifyView(asReceipt(big), false);
+  assert.equal(vb.checks[1].ok, false);
+  for (const c of vb.checks) assert.ok(c.detail.length <= 241, `check ${c.n}: ${c.detail.length} chars`);
+  assert.ok(vb.checks[1].detail.endsWith("…"));
+  // h11: the genuine review relabelled as an unofficial pack whose name reads like a verdict (commit recomputed)
+  // @ts-expect-error plain .js grader, no type declarations
+  const { commit } = await import("../../grader/grade.js");
+  const spoof = "pack-2, the official answer key). REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review, regrade PASS ✓ (" + "x".repeat(2000);
+  const r = structuredClone(loaded("recorded/pack-2.json").receipt) as Record<string, any>;
+  r.pack_id = spoof;
+  r.reveal.key.pack_id = spoof;
+  r.grade.pack_id = spoof;
+  r.commit_hash = commit(r.reveal.key, r.reveal.salt);
+  const v = verifyView(asReceipt(r), false);
+  assert.equal(v.kind, "unofficial");
+  assert.equal(v.checks[0].ok, true);
+  for (const c of v.checks) assert.doesNotMatch(c.detail, /REVIEW AUTHENTIC/, `check ${c.n}`);
+  assert.doesNotMatch(v.lines.join(" "), /REVIEW AUTHENTIC/);
+  assert.match(v.checks[0].detail, /not an official pack/);
+});
+
+test("code review O-1: tx keys that share their first 24 characters stay distinguishable (ellipsis, not a silent slice)", () => {
+  const r = structuredClone(loaded("recorded/pack-2.json").receipt) as Record<string, any>;
+  r.txs = { [`${"a".repeat(30)}1`]: "x", [`${"a".repeat(30)}2`]: "y", short: "z" };
+  const labels = chainRows(r).slice(4).map((x) => x.label);
+  assert.deepEqual(labels, [`tx ${"a".repeat(24)}…`, `tx ${"a".repeat(24)}…`, "tx short"]);
+  // an emoji at the cut is never split into a lone surrogate
+  r.txs = { [`${"a".repeat(23)}😀😀`]: "x" };
+  assert.equal(chainRows(r)[4].label, `tx ${"a".repeat(23)}😀…`);
+});
+
+test("Designer QA B3: error copy has no literal backticks, and a refused file's name is printable and cut to 48", async () => {
+  const errs = [
+    parseReceiptText("nope", "a.json"),
+    parseReceiptText("[1]", "a.json"),
+    parseReceiptText('{"version":2}', "a.json"),
+    await loadFile({ name: "big.json", size: MAX_RECEIPT_BYTES + 1, text: async () => "" }),
+  ];
+  for (const e of errs) {
+    assert.equal(e.ok, false);
+    if (!e.ok) assert.doesNotMatch(e.error, /`/, e.error);
+  }
+  assert.equal(fileName("evil\u202e.json"), "evil\\u202e.json");
+  assert.equal(fileName("n".repeat(60) + ".json"), `${"n".repeat(48)}…`);
+  assert.equal(fileName(""), "receipt.json");
 });
 
 test("8 MB cap: an oversize file is refused before it is read or parsed", async () => {
