@@ -1,0 +1,36 @@
+{
+  "_doc": "Escrow request pins (T-048, A-016 = B). For each official pack, request_sha256 = sha256 of seller/review-prompt.js buildReviewRequest(pack) (UTF-8), the exact body the NEAR AI TEE signs. contract/src/pins.rs must hold the same prompt_version, model and pins (Rust test), and npm test recomputes this file from the packs. `rejected` are near-miss requests for pack-1 the contract must refuse. Regenerate on purpose with: node scripts/freeze-packs.mjs",
+  "prompt_version": 1,
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+  "packs": [
+    {
+      "pack_id": "pack-1",
+      "request_sha256": "8e5a2b38d429088e02e258f0565b5aa36de73b4e01c265c0f831bfba790308d0"
+    },
+    {
+      "pack_id": "pack-2",
+      "request_sha256": "13218ed9b768fc0d1143be87064e4be062411f4099dd46e26df0e2501be62337"
+    },
+    {
+      "pack_id": "pack-3",
+      "request_sha256": "c88a5bb858cdde9bab1cccb81007eb6324891c7d59e2e501c07db0a643c51166"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "answer key pasted into the prompt",
+      "pack_id": "pack-1",
+      "request_sha256": "e778272f9a9eedc12fbb74c5983fd0c3854423bf969c48b9c1635985ebf31828"
+    },
+    {
+      "name": "different prompt text (prompt version drift)",
+      "pack_id": "pack-1",
+      "request_sha256": "15379b141d39d882021b8ec15e171981f61ef0d0315d16dfc5560d83b8cf095e"
+    },
+    {
+      "name": "official prompt, another model",
+      "pack_id": "pack-1",
+      "request_sha256": "b2892ceb1b9d4d1b3848d99b764a4ae6070adee83f22f98c7dbc5f5060d2dd0f"
+    }
+  ]
+}

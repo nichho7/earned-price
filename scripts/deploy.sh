@@ -5,7 +5,8 @@
 #   scripts/deploy.sh               build, deploy (first deploy calls
 #                                   new(owner, signers) from contract/tee-signers.json),
 #                                   check the on-chain code hash, then smoke-call
-#                                   name/owner/signers/quote/get_record/create/get_job
+#                                   name/owner/signers/quote/get_record/review_pins/
+#                                   create/get_job
 #
 # Options:
 #   --network <name>     only "testnet" is accepted (anything else is refused)
@@ -173,12 +174,15 @@ elif [ "$CODE_HASH" = "$NO_CODE" ]; then
 else
   # Different code is live. Replacing it keeps the old state: a changed
   # EarnedPrice/Job Borsh layout would brick it and strand open-job NEAR.
+  # New review pins (contract/src/pins.rs) go to a fresh account, never over
+  # live jobs: their honest reviews of the old request would be refused (T-048 L-2).
   [ "$REDEPLOY" = 1 ] || die "different code is live on $ACCOUNT ($CODE_HASH -> $NEW_HASH). Redeploying keeps the old state (no init call); if the state layout changed, add a migration first. Rerun with --redeploy to replace it" 7
   say "redeploy: $CODE_HASH -> $NEW_HASH (--redeploy given; old state is kept)"
 fi
 
 SMOKE_SELLER="smoke-seller.$ACCOUNT" # a name only we can ever create, so no stranger can be paid
 COMMIT_HEX="$(node -e "process.stdout.write(require('./test-vectors/commit.json').commit_hex)")"
+SMOKE_PACK="pack-1" # create only takes an official pack (T-048); the smoke job is never reviewed
 
 if [ "$INIT" = 1 ]; then
   INIT_CALL=(with-init-call new json-args "$INIT_ARGS" prepaid-gas '30 Tgas' attached-deposit '0 NEAR')
@@ -191,7 +195,7 @@ if [ "$DRY_RUN" = 1 ]; then
     say "dry run: would run: near contract deploy $ACCOUNT use-file \"$WASM\" ${INIT_CALL[*]} network-config testnet sign-with-$SIGNER send"
     say "dry run: would then check the on-chain code_hash is $NEW_HASH"
   fi
-  [ "$SMOKE" = 0 ] || say "dry run: would smoke-call name, owner, signers, quote($SMOKE_SELLER), get_record($SMOKE_SELLER), create(deposit = quote, commit $COMMIT_HEX), get_job"
+  [ "$SMOKE" = 0 ] || say "dry run: would smoke-call name, owner, signers, quote($SMOKE_SELLER), get_record($SMOKE_SELLER), review_pins, create(deposit = quote, commit $COMMIT_HEX, $SMOKE_PACK), get_job"
   say "dry run OK: nothing signed, nothing sent"
   exit 0
 fi
@@ -221,7 +225,7 @@ if [ "$DEPLOY" = 1 ]; then
 fi
 [ "$SMOKE" = 1 ] || exit 0
 
-# ---- smoke test: name, owner, signers, quote, get_record, create, get_job -----
+# ---- smoke test: name, owner, signers, quote, get_record, review_pins, create, get_job -----
 expect() { [ "$2" = "$3" ] || { printf '[deploy] SMOKE FAIL %s: got %s, want %s\n' "$1" "$2" "$3" >&2; exit 5; }; }
 expect "name" "$(retry view call "$ACCOUNT" name '{}')" '"Earned Price"'
 expect "owner" "$(retry view call "$ACCOUNT" owner '{}')" "\"$ACCOUNT\""
@@ -235,13 +239,33 @@ QUOTE="$(node -e "process.stdout.write(JSON.parse(process.argv[1]))" "$QUOTE_JSO
 say "quote($SMOKE_SELLER) = $QUOTE yocto (0.030 NEAR)"
 expect "get_record(unknown seller)" "$(retry view call "$ACCOUNT" get_record "$(json seller "$SMOKE_SELLER")")" \
   '{"passes":0,"fails":0,"unique_buyers":0,"jobs":0}'
+# T-048: the live code must pin exactly the review requests this repo builds.
+# A missing view (pre-T-048 code) or an RPC error is a smoke failure (exit 5).
+LIVE_PINS="$(retry view call "$ACCOUNT" review_pins '{}')" \
+  || { printf '[deploy] SMOKE FAIL review_pins: view missing or unreadable (pre-T-048 code?)\n' >&2; exit 5; }
+node -e '
+  let live;
+  try { live = JSON.parse(process.argv[1]); } catch {
+    console.error("[deploy] SMOKE FAIL review_pins: view missing or unreadable (pre-T-048 code?)");
+    process.exit(5);
+  }
+  const want = require("./test-vectors/review-pins.json");
+  // Packs compared field by field, so key order inside an entry does not matter.
+  const norm = (k, v) => (k === "packs" && Array.isArray(v) ? v.map((p) => [p?.pack_id, p?.request_sha256]) : v);
+  for (const k of ["prompt_version", "model", "packs"]) {
+    if (JSON.stringify(norm(k, live?.[k])) !== JSON.stringify(norm(k, want[k]))) {
+      console.error(`[deploy] SMOKE FAIL review_pins.${k}: got ${JSON.stringify(live?.[k])}, want ${JSON.stringify(want[k])} (test-vectors/review-pins.json)`);
+      process.exit(5);
+    }
+  }' "$LIVE_PINS"
+say "review_pins match test-vectors/review-pins.json"
 
 # Leaves one open smoke job holding 0.030 NEAR; nobody accepts it, so anyone can
 # call timeout(job_id) after accept_by (2 min) to refund it to the contract account.
 # The marker is written BEFORE sending, so even a crash mid-send blocks a blind rerun.
 printf 'create sent %s to %s, deposit %s yocto\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ACCOUNT" "$QUOTE" > "$UNCONFIRMED"
 JOB_OUT="$(near contract call-function as-transaction "$ACCOUNT" create \
-  json-args "$(json seller "$SMOKE_SELLER" commit_hash "$COMMIT_HEX")" \
+  json-args "$(json seller "$SMOKE_SELLER" commit_hash "$COMMIT_HEX" pack_id "$SMOKE_PACK")" \
   prepaid-gas '30 Tgas' attached-deposit "$QUOTE yoctoNEAR" \
   sign-as "$ACCOUNT" network-config testnet "sign-with-$SIGNER" send </dev/null)" \
   || fail "create tx failed or its result is unknown. It may have been sent: check $ACCOUNT on https://testnet.nearblocks.io, then delete $UNCONFIRMED before rerunning" 5
@@ -254,10 +278,10 @@ say "create -> job $JOB_ID"
 
 JOB="$(retry view call "$ACCOUNT" get_job "$(json id "$JOB_ID")")"
 node -e '
-  const [job, id, buyer, seller, price, commit] = process.argv.slice(1);
+  const [job, id, buyer, seller, price, commit, pack_id] = process.argv.slice(1);
   const j = JSON.parse(job);
-  const want = { id, buyer, seller, price, commit_hash: commit, status: "open" };
+  const want = { id, buyer, seller, price, commit_hash: commit, pack_id, status: "open" };
   for (const [k, v] of Object.entries(want)) {
     if (j?.[k] !== v) { console.error(`[deploy] SMOKE FAIL get_job.${k}: got ${j?.[k]}, want ${v}`); process.exit(5); }
-  }' "$JOB" "$JOB_ID" "$ACCOUNT" "$SMOKE_SELLER" "$QUOTE" "$COMMIT_HEX"
-say "smoke OK: name, owner, signers, quote, get_record, create (job $JOB_ID locked $QUOTE yocto), get_job"
+  }' "$JOB" "$JOB_ID" "$ACCOUNT" "$SMOKE_SELLER" "$QUOTE" "$COMMIT_HEX" "$SMOKE_PACK"
+say "smoke OK: name, owner, signers, quote, get_record, review_pins, create (job $JOB_ID locked $QUOTE yocto), get_job"

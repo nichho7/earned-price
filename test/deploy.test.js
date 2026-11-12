@@ -12,6 +12,8 @@ import { wasmInfo, base58 } from "../scripts/wasm-info.mjs";
 
 const repo = new URL("..", import.meta.url).pathname;
 const vector = JSON.parse(readFileSync(join(repo, "test-vectors/commit.json"), "utf8"));
+const PINS = JSON.parse(readFileSync(join(repo, "test-vectors/review-pins.json"), "utf8"));
+const LIVE_PINS = { prompt_version: PINS.prompt_version, model: PINS.model, packs: PINS.packs };
 const QUOTE = "30000000000000000000000";
 const SELLER = "smoke-seller.earned-price.testnet";
 const NO_CODE = "11111111111111111111111111111111";
@@ -34,6 +36,9 @@ function fakeRpc(state) {
           : { error: { name: "HANDLER_ERROR", cause: { name: "UNKNOWN_ACCOUNT" } } };
       } else if (state.failOnce?.delete(params.method_name)) {
         out = { error: { name: "HANDLER_ERROR", cause: { name: "NO_CONTRACT_CODE" } } };
+      } else if (state.views[params.method_name] === undefined) {
+        // What NEAR RPC answers for a method the live code doesn't export.
+        out = { error: { name: "HANDLER_ERROR", cause: { name: "CONTRACT_EXECUTION_ERROR", info: { vm_error: "MethodResolveError(MethodNotFound)" } } } };
       } else {
         const v = state.views[params.method_name];
         out = { result: { result: [...Buffer.from(JSON.stringify(v))] } };
@@ -77,7 +82,7 @@ const WASM = wasmInfo(fixtureWasm(CONTRACT_EXPORTS));
 function sandbox(namesPatch = {}, { exports = CONTRACT_EXPORTS, nearVersion = "near-cli-rs 0.31.1", createOut = '"7"', cargo = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "earned-deploy-"));
   for (const d of ["scripts", "contract", "test-vectors", "bin"]) mkdirSync(join(dir, d));
-  for (const f of ["scripts/deploy.sh", "scripts/testnet-view.mjs", "scripts/wasm-info.mjs", "test-vectors/commit.json", "contract/tee-signers.json"]) {
+  for (const f of ["scripts/deploy.sh", "scripts/testnet-view.mjs", "scripts/wasm-info.mjs", "test-vectors/commit.json", "test-vectors/review-pins.json", "contract/tee-signers.json"]) {
     copyFileSync(join(repo, f), join(dir, f));
   }
   chmodSync(join(dir, "scripts/deploy.sh"), 0o755);
@@ -144,12 +149,13 @@ const goodJob = () => ({
   seller: SELLER,
   price: QUOTE,
   commit_hash: vector.commit_hex,
+  pack_id: "pack-1",
   reveal_deadline_ns: "1",
   status: "open",
 });
 
 async function withRpc(state, fn) {
-  const full = { calls: [], accountReads: 0, views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, get_job: goodJob() }, ...state };
+  const full = { calls: [], accountReads: 0, views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, review_pins: LIVE_PINS, get_job: goodJob() }, ...state };
   const server = await fakeRpc(full);
   try {
     return await fn(server.address().port, full);
@@ -226,7 +232,7 @@ test("deploy.sh refuses a first deploy the balance cannot cover (exit 4)", async
   });
 });
 
-test("deploy.sh first deploy calls new(owner, signers), checks the on-chain code_hash, then smoke-calls name, owner, signers, quote, get_record, create, get_job", async () => {
+test("deploy.sh first deploy calls new(owner, signers), checks the on-chain code_hash, then smoke-calls name, owner, signers, quote, get_record, review_pins, create, get_job", async () => {
   await withRpc(fresh(), async (port, rpc) => {
     const box = sandbox();
     const r = await run(box, [], { rpcPort: port });
@@ -234,11 +240,12 @@ test("deploy.sh first deploy calls new(owner, signers), checks the on-chain code
     const near = box.calls().filter((c) => c.startsWith("near"));
     assert.deepEqual(near, [
       `near contract deploy earned-price.testnet use-file target/near/earned_price.wasm with-init-call new json-args ${INIT_ARGS} prepaid-gas 30 Tgas attached-deposit 0 NEAR network-config testnet sign-with-keychain send`,
-      `near contract call-function as-transaction earned-price.testnet create json-args {"seller":"${SELLER}","commit_hash":"${vector.commit_hex}"} prepaid-gas 30 Tgas attached-deposit ${QUOTE} yoctoNEAR sign-as earned-price.testnet network-config testnet sign-with-keychain send`,
+      `near contract call-function as-transaction earned-price.testnet create json-args {"seller":"${SELLER}","commit_hash":"${vector.commit_hex}","pack_id":"pack-1"} prepaid-gas 30 Tgas attached-deposit ${QUOTE} yoctoNEAR sign-as earned-price.testnet network-config testnet sign-with-keychain send`,
     ]);
-    assert.deepEqual(rpc.calls, ["view_account", "view_account", "name", "owner", "signers", "quote", "get_record", "get_job"]);
+    assert.deepEqual(rpc.calls, ["view_account", "view_account", "name", "owner", "signers", "quote", "get_record", "review_pins", "get_job"]);
     assert.match(r.stdout, new RegExp(`deployed: on-chain code_hash ${WASM.code_hash} = base58\\(sha256 ${WASM.sha256}\\)`));
-    assert.match(r.stdout, /smoke OK: name, owner, signers, quote, get_record, create \(job 7/);
+    assert.match(r.stdout, /review_pins match test-vectors\/review-pins.json/);
+    assert.match(r.stdout, /smoke OK: name, owner, signers, quote, get_record, review_pins, create \(job 7/);
     assert.ok(!existsSync(join(box.dir, "target/near/smoke-unconfirmed.txt")), "marker cleared once the job id is known");
   });
 });
@@ -264,9 +271,14 @@ for (const [label, views, msg] of [
   ["the wrong owner", { owner: "mallory.testnet" }, /SMOKE FAIL owner/],
   ["a first deploy whose signers differ from tee-signers.json", { signers: [] }, /SMOKE FAIL signers/],
   ["a job with pre-T-022 status casing", { get_job: { ...goodJob(), status: "Open" } }, /SMOKE FAIL get_job.status/],
+  ["a job without its pack (pre-T-048 code)", { get_job: { ...goodJob(), pack_id: undefined } }, /SMOKE FAIL get_job.pack_id/],
+  ["live code with other request pins", { review_pins: { ...LIVE_PINS, packs: LIVE_PINS.packs.map((p, i) => (i ? p : { ...p, request_sha256: "0".repeat(64) })) } }, /SMOKE FAIL review_pins.packs/],
+  ["live code built for another prompt version", { review_pins: { ...LIVE_PINS, prompt_version: 2 } }, /SMOKE FAIL review_pins.prompt_version/],
+  ["pre-T-048 code with no review_pins view (MethodNotFound)", { review_pins: undefined }, /SMOKE FAIL review_pins: view missing or unreadable/],
+  ["a review_pins view that returns null", { review_pins: null }, /SMOKE FAIL review_pins.prompt_version/],
 ]) {
   test(`deploy.sh smoke fails (exit 5) on ${label}`, async () => {
-    const state = { ...fresh(), views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, get_job: goodJob(), ...views } };
+    const state = { ...fresh(), views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, review_pins: LIVE_PINS, get_job: goodJob(), ...views } };
     await withRpc(state, async (port) => {
       const box = sandbox();
       const r = await run(box, [], { rpcPort: port });
@@ -275,6 +287,16 @@ for (const [label, views, msg] of [
     });
   });
 }
+
+test("deploy.sh smoke accepts live review_pins whose pack entries list their keys in another order", async () => {
+  const reordered = { ...LIVE_PINS, packs: LIVE_PINS.packs.map((p) => ({ request_sha256: p.request_sha256, pack_id: p.pack_id })) };
+  const state = { ...fresh(), views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, review_pins: reordered, get_job: goodJob() } };
+  await withRpc(state, async (port) => {
+    const r = await run(sandbox(), [], { rpcPort: port });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /review_pins match test-vectors\/review-pins.json/);
+  });
+});
 
 // ---- fix 1: pinned hash ------------------------------------------------------
 test("wasm-info: base58 matches NEAR's empty code_hash and a known vector", () => {
@@ -501,7 +523,7 @@ test("testnet-view refuses non-testnet accounts and RPCs", async () => {
 // ---- T-023: init call (A-012 owner + signer allowlist) -----------------------
 test("deploy.sh --redeploy keeps state (no init call); differing live signers are only noted", async () => {
   const old = "OLDhashOLDhashOLDhashOLDhashOLDh";
-  const views = { name: "Earned Price", owner: "earned-price.testnet", signers: [...SIGNERS, "0x" + "ab".repeat(20)], quote: QUOTE, get_record: EMPTY_RECORD, get_job: goodJob() };
+  const views = { name: "Earned Price", owner: "earned-price.testnet", signers: [...SIGNERS, "0x" + "ab".repeat(20)], quote: QUOTE, get_record: EMPTY_RECORD, review_pins: LIVE_PINS, get_job: goodJob() };
   await withRpc({ accounts: [{ ...funded, code_hash: old }, deployed], views }, async (port) => {
     const box = sandbox();
     const r = await run(box, ["--redeploy"], { rpcPort: port });
