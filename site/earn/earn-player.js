@@ -3,6 +3,9 @@
 // (review H-1, Designer M-025 §6), the observer is disconnected on destroy (L-1), push() drops events
 // whose seq the run already has (L-2), the live region reads text only (L-3), and the takeover layer has
 // no animation of its own: the waves are hidden at rest by CSS, so the peak animation count drops by one (M-5).
+// Fixed skeleton (build spec 8.1, B5 CLS <= 0.02): in RECORDED mode every slot is locked at mount to the
+// height of its tallest step, measured in one synchronous pass while the stage is still hidden, and
+// re-measured when the stage width changes or the fonts finish loading.
 // mountEarnStage(el, opts) mounts on server-rendered markup (or renders it),
 // then plays the story step by step:
 //   RECORDED: real events, real order, real values. A wait longer than the cap
@@ -86,6 +89,26 @@ export function mountEarnStage(host, opts = {}) {
     if (res) res.dataset.on = flags.residue ? '1' : '0';
     Object.assign(root.dataset, { stageState: flags.state, outcome: flags.outcome, seq: flags.seq, run: String(flags.run), rail: String(flags.rail) });
     return { changed, flags, closerOn: flags.closer && !wasCloser, residueOn: flags.residue && !wasRes };
+  }
+
+  /* ---------- fixed skeleton: lock each slot to its tallest step (RECORDED) --- */
+  const LOCKED = ['kick', 'chips', 'mv', 'lede', 'note', 'ldg', 'cap', 'rec', 'reg', 'rtop', 'proc', 'tee', 'dots', 'rows', 'onetx', 'sum', 'q', 'tx'];
+  let lockedWidth = -1;
+  function lockHeights() {
+    if (live || !story.steps.length) return;
+    const w = root.getBoundingClientRect().width;
+    if (w === lockedWidth) return;
+    lockedWidth = w;
+    // .ep-top too: a longer kicker can wrap the kicker + chip row onto a second line at 390 px
+    const els = [root.querySelector('.ep-top'), ...LOCKED.map(n => root.querySelector(`[data-slot="${n}"]`))].filter(Boolean);
+    els.forEach(el => { el.style.minHeight = ''; });
+    const max = els.map(() => 0);
+    for (let i = 0; i < story.steps.length; i++) {
+      patch(C.storyStateAt(story, i));
+      els.forEach((el, j) => { max[j] = Math.max(max[j], el.offsetHeight); });
+    }
+    els.forEach((el, j) => { el.style.minHeight = `${max[j]}px`; });
+    patch(C.storyStateAt(story, Math.max(k, 0))); // back to the step on screen
   }
 
   /* ---------- beats ------------------------------------------------------- */
@@ -293,7 +316,7 @@ export function mountEarnStage(host, opts = {}) {
       liveAnchor = performance.now() - list[list.length - 1].t_ms;
       pump();
     },
-    destroy() { destroyed = true; token++; cancelAll(); clearInterval(ticker); if (io) { io.disconnect(); io = null; } if (mq && mq.removeEventListener) mq.removeEventListener('change', onMq); root.removeEventListener('click', onClick); },
+    destroy() { destroyed = true; token++; cancelAll(); clearInterval(ticker); if (io) { io.disconnect(); io = null; } if (ro) ro.disconnect(); if (mq && mq.removeEventListener) mq.removeEventListener('change', onMq); root.removeEventListener('click', onClick); },
   };
   function onMq(e) { if (o.motion === 'auto') setMotion(e.matches ? 'reduced' : 'full'); }
   function onClick(e) {
@@ -308,6 +331,11 @@ export function mountEarnStage(host, opts = {}) {
   root.addEventListener('click', onClick);
   const ctl = $('.ep-ctl'); if (ctl) ctl.hidden = false;
   setMotion(motion);
+  k = 0;
+  lockHeights();
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { if (!destroyed) lockHeights(); }) : null;
+  if (ro) ro.observe(root);
+  if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (!destroyed) { lockedWidth = -1; lockHeights(); } });
   if (live) { show(Math.max(0, nextUnplayed()), false); ticker = setInterval(liveTick, 1000); if (story.steps.length) pump(); }
   else if (o.autoplay === false) show(C.finalIndex(story), false);
   else {
@@ -323,7 +351,7 @@ export function mountEarnStage(host, opts = {}) {
         const full = e.intersectionRatio >= .99;
         const fills = !!e.rootBounds && e.intersectionRect.height >= .5 * e.rootBounds.height;
         if (e.isIntersecting && (full || fills)) { io.disconnect(); io = null; start(); }
-      }, { rootMargin: '0px 0px -33% 0px', threshold: [0, .5, 1] });
+      }, { rootMargin: '0px 0px -33% 0px', threshold: [0, .5, .99, 1] }); // .99: a scroll that lands a fraction short of 1 still fires
       io.observe(target);
     } else start();
   }

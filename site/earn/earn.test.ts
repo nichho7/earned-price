@@ -247,3 +247,13 @@ test("ship build (VERCEL=1 or EARNED_SHIP=1): placeholder fixtures throw, even w
   assert.throws(() => finalModel(runs, { EARNED_SHIP: "1" }), /placeholder run data in a ship build/);
   assert.throws(() => finalModel(runs.map((f) => ({ ...f, placeholder: false, recorded: true })), { VERCEL: "1" }), /placeholder run data/);
 });
+
+test("R7 fall frame: a real fail shows Refunded and the REFUNDED stamp, never EARNED, a postmark or an odometer rise", () => {
+  const fail = { ...fixture("fail"), mode: "recorded", network: "testnet" } as LabFixture;
+  const html = finalHTML([fail]);
+  assert.match(html, /data-stage-state="refunded"/);
+  assert.match(html, /<span class="h-b" data-slot="hd">Refunded\.<\/span>/);
+  assert.match(html, /class="stamp sR">REFUNDED</);
+  assert.doesNotMatch(html, /data-postmark=|Earned\.|class="flip up"/);
+  assert.match(html, /class="flip dn"/);
+});
