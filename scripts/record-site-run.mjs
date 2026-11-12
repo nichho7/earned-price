@@ -40,10 +40,18 @@ const mnear = (yocto) => {
 const iso = (ns) => new Date(Number(BigInt(ns) / 1000000n)).toISOString();
 const formula = (r, q) => `0.030 + 0.010×${r.unique_buyers} − 0.005×${r.fails} = ${(q / 1000).toFixed(3)} NEAR`;
 
-async function quoteEvent(contract, seller, height, phase, prev) {
-  const b = await block(height);
-  const rec = await viewAt(contract, "get_record", { seller }, height);
-  const quoteYocto = await viewAt(contract, "quote", { seller }, height);
+/** The nearest block that exists, walking from `height` in `dir` (NEAR can skip heights; code review O-5). */
+async function nearestBlock(height, dir) {
+  for (let h = height, i = 0; i < 20; h += dir, i++) {
+    try { return await block(h); } catch (e) { if (!/UNKNOWN_BLOCK|DB Not Found|not found/i.test(String(e?.message))) throw e; }
+  }
+  throw new Error(`no block within 20 heights of ${height} (dir ${dir})`);
+}
+
+async function quoteEvent(contract, seller, height, phase, prev, dir) {
+  const b = await nearestBlock(height, dir);
+  const rec = await viewAt(contract, "get_record", { seller }, b.height);
+  const quoteYocto = await viewAt(contract, "quote", { seller }, b.height);
   const q = mnear(quoteYocto);
   const record = { passes: rec.passes, fails: rec.fails, unique_buyers: rec.unique_buyers, jobs: rec.jobs };
   const data = { phase, block_height: b.height, record, quote_mnear: q, formula: formula(record, q) };
@@ -84,8 +92,8 @@ async function recordJob(job) {
   if (!payout && !refund) throw new Error("reveal: no payout or refund event");
   if (reveal.found !== rc.grade.found || reveal.passed !== rc.grade.passed) throw new Error("reveal grade disagrees with the receipt");
 
-  const before = await quoteEvent(contract, seller, tx.create.incl.height - 1, "before");
-  const after = await quoteEvent(contract, seller, tx.reveal.final.height + 1, "after", before.ev.data.quote_mnear);
+  const before = await quoteEvent(contract, seller, tx.create.incl.height - 1, "before", undefined, -1);
+  const after = await quoteEvent(contract, seller, tx.reveal.final.height + 1, "after", before.ev.data.quote_mnear, +1);
   const base = BigInt(before.b.timestamp_ns);
   const tms = (b) => Number((BigInt(b.timestamp_ns) - base) / 1000000n);
   const at = (b) => iso(b.timestamp_ns);
@@ -134,6 +142,8 @@ async function recordJob(job) {
   push(after.b, null, after.ev);
   events.forEach((e, i) => { e.seq = i; });
 
+  // The player's groups and "+N s" gaps assume time never runs backwards (code review O-5).
+  events.forEach((e, i) => { if (i && e.t_ms < events[i - 1].t_ms) throw new Error(`${job.file}: t_ms goes backwards at seq ${e.seq}`); });
   // One push per observed tx outcome: two different moments must never share a t_ms.
   const moments = new Map();
   for (const e of events) {
