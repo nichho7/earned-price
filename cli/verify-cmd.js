@@ -9,6 +9,14 @@ import { ReceiptError, printable, tamperReceipt, verifyReceipt } from "../verify
 
 const USAGE = "usage: earned verify <receipt.json> [--tamper] [--json]";
 
+/**
+ * JSON text made safe to print (T-029 security N-1). JSON.stringify escapes C0 controls but leaves
+ * DEL, C1 controls, line separators and bidi overrides raw. Those can only sit inside JSON strings,
+ * so escaping them as \uXXXX keeps the text valid JSON with the same value.
+ */
+export const printableJson = (text) =>
+  text.replace(/[\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
 /** argv after "verify" -> { path, tamper, json }. */
 export function parseVerifyArgs(argv) {
   const opts = { path: undefined, tamper: false, json: false };
@@ -30,7 +38,7 @@ export async function runVerify({ path, tamper, json, out: write = (l) => consol
   if (tamper) ({ receipt, edit } = tamperReceipt(receipt));
   const v = verifyReceipt(receipt);
   if (json) {
-    write(JSON.stringify(edit ? { ...v, tampered: edit } : v, null, 2)); // JSON.stringify escapes control characters
+    write(printableJson(JSON.stringify(edit ? { ...v, tampered: edit } : v, null, 2)));
     return v;
   }
   out(`Verifying ${path}: job ${receipt.job_id}, ${receipt.pack_id}, ${receipt.network} (offline, no key)`);

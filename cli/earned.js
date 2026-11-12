@@ -43,6 +43,18 @@ if (cmd === "names") {
     console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "pick failed; check `earned pick` usage and retry"}`);
     process.exitCode = 1;
   }
+} else if (cmd === "hire") {
+  const { parseHireArgs, runHire, defaultHireDeps } = await import("./hire.js");
+  try {
+    const opts = parseHireArgs(args.slice(1)); // usage errors before any network or file access
+    const deps = await defaultHireDeps(process.env, opts);
+    const r = await runHire(deps);
+    process.exitCode = r.pass ? 0 : 1;
+  } catch (err) {
+    // Errors never carry a private key (hire redacts the buyer key; the seller module its own keys).
+    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "hire failed; run `earned hire` again (it resumes from .earned/job.json)"}`);
+    process.exitCode = 1;
+  }
 } else if (cmd === "verify") {
   const { parseVerifyArgs, runVerify } = await import("./verify-cmd.js");
   try {
@@ -57,6 +69,7 @@ if (cmd === "names") {
   console.log(`usage: ${CLI_BIN} init     create or reuse a throwaway testnet buyer (0.2 NEAR cap)`);
   console.log(`       ${CLI_BIN} quote <seller.testnet> [--offer 0.02]   seller's quote from its on-chain record`);
   console.log(`       ${CLI_BIN} pick <1|2|3> [--offer 0.02] [--seller s.testnet --yes]   seal the pack's key, haggle, lock the price in escrow`);
+  console.log(`       ${CLI_BIN} hire [--local-seller]   the seller reviews in the TEE, you reveal, the escrow settles; writes the receipt`);
   console.log(`       ${CLI_BIN} verify <receipt.json> [--tamper] [--json]   four offline checks of a receipt (no key, no network)`);
   console.log(`       ${CLI_BIN} names    print the naming set`);
   if (cmd && cmd !== "help" && cmd !== "--help") process.exitCode = 1;

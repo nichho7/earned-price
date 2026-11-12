@@ -1,0 +1,634 @@
+// `earned hire` (S-022 / T-031): finish the job `earned pick` opened. The seller accepts and puts a
+// signed TEE review on-chain, the buyer reveals the sealed key (300 Tgas), the escrow regrades and
+// settles (pass: seller paid) or refunds (fail). Prints the per-bug grade, the settle tx, the next
+// quote from get_record and, for a live review, writes and verifies the receipt.
+//
+// Rules (m001-ui-contract section 8, T-029 reviews):
+// - Every decision is read from get_job: the stage and its deadline (accept_by / review_by /
+//   reveal_deadline) are printed while waiting. The final outcome comes only from the closing tx's
+//   EVENT_JSON (reveal or timeout), never from get_job (the job is deleted at close; A-013).
+// - The key is revealed only when a signed review is on-chain AND the review body this CLI holds
+//   hashes to the response_sha256 the escrow stored for this job. Otherwise nothing is sent.
+// - A receipt is built only for a live review whose submit_review landed (the on-chain hash check
+//   above), only after the reveal tx landed (txs.reveal), under <state>/receipts/job-<id>.json with
+//   the id validated as /^\d{1,20}$/. The full review result goes next to it (job-<id>.review.json).
+//   A replay never builds one: it shows a recorded run labelled RECORDED.
+// - "SEE: step 3 PASS" needs the escrow's own pass (reveal event + payout), our regrade's explicit
+//   passed flag, and verifyReceipt ok. verify ok means AUTHENTIC, never PASSED (T-029 N-2).
+// - .earned/job.json ends with status exactly "closed" after settle, refund or timeout.
+// Network access and the seller are injected, so tests never touch testnet or NEAR AI.
+import { closeSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { CONTRACT_ACCOUNT, NETWORK } from "./names.js";
+import { RPC_RETRIES, RPC_URLS, assertTestnet, assertTestnetRpc, loadState, redact, saveState, stateDir } from "./init.js";
+import { formatNear } from "./spend-cap.js";
+import { YOCTO_PER_MNEAR, fetchQuote, formatMilli, viewFunction } from "./quote.js";
+import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, loadJob, reconcileCreate, releaseSpend, saveJob, sendCreateTx } from "./pick.js";
+import { REVEAL_GAS, TIMEOUT_GAS, TxError, parseTxOutcome } from "./tx.js";
+import { makeLocalSeller } from "./seller-local.js";
+import { readReceipt, writeReceipt } from "./receipt-file.js";
+import { loadPack as loadPackDefault } from "../packs/packs.js";
+import { findingsFromResponse, grade, sha256Hex } from "../grader/grade.js";
+import { buildReceipt, printable, verifyReceipt } from "../verify/receipt.js";
+import { TRUST } from "../verify/trust-anchors.js";
+
+export const RECEIPTS_DIR_NAME = "receipts";
+export const RECORDED_DIR = new URL("../recorded/", import.meta.url).pathname; // past live runs (T-032)
+export const JOB_ID_RE = /^\d{1,20}$/;
+const U64_MAX = 2n ** 64n - 1n;
+export const POLL_MS = 2000; // view lag after a tx: final trails optimistic by a block or two
+export const VIEW_POLLS = 6;
+export const WAIT_POLL_MS = 10_000; // while waiting for a stage deadline
+export const COUNTDOWN_EVERY_MS = 30_000;
+export const DEADLINE_MARGIN_MS = 3000; // our clock vs block time: timeout only after deadline + this
+export const TIMEOUT_TRIES = 4;
+const MAX_REVIEW_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_ROUNDS = 8; // stage changes per run: open -> accepted -> reviewed is 3
+const USAGE = "usage: earned hire [--local-seller]";
+
+export class HireError extends Error {
+  constructor(code, message, extra = {}) {
+    super(message);
+    this.name = "HireError";
+    this.code = code;
+    Object.assign(this, extra);
+  }
+}
+
+/** argv after "hire" -> { localSeller }. */
+export function parseHireArgs(argv) {
+  let localSeller = false;
+  for (const a of argv) {
+    if (a === "--local-seller" && !localSeller) localSeller = true;
+    else throw new HireError("USAGE", USAGE);
+  }
+  return { localSeller };
+}
+
+/** A job id we may put in a path or an arg: 1-20 digits, at most u64::MAX. Returns it as a string. */
+export function assertJobId(id) {
+  const s = typeof id === "string" ? id : "";
+  if (!JOB_ID_RE.test(s) || BigInt(s) > U64_MAX) throw new HireError("BAD_JOB_ID", `refused: job id ${JSON.stringify(id ?? null)} is not a u64 number`);
+  return s;
+}
+
+/** Receipt + review file paths: a fixed folder, names only from a validated job id. */
+export function receiptPaths(dir, jobId) {
+  const id = assertJobId(jobId);
+  const folder = join(dir, RECEIPTS_DIR_NAME);
+  return { folder, receipt: join(folder, `job-${id}.json`), review: join(folder, `job-${id}.review.json`) };
+}
+
+// Atomic write through a random O_EXCL tmp file (a planted file or symlink is refused, never followed).
+function writeJsonAtomic(file, value, mode = 0o644) {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  const fd = openSync(tmp, "wx", mode);
+  try {
+    writeSync(fd, JSON.stringify(value, null, 2) + "\n");
+    fchmodSync(fd, mode);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(tmp, file);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+  return file;
+}
+
+/** The full review result (request + response bodies, signature, attestation): no secret in it. */
+export function saveReviewFile(dir, jobId, review) {
+  return writeJsonAtomic(receiptPaths(dir, jobId).review, review);
+}
+
+/** The saved review result for this job, or null. A symlink, a huge or unreadable file counts as none. */
+export function loadReviewFile(dir, jobId) {
+  const file = receiptPaths(dir, jobId).review;
+  try {
+    const st = lstatSync(file);
+    if (!st.isFile() || st.size > MAX_REVIEW_FILE_BYTES) return null;
+    const r = JSON.parse(readFileSync(file, "utf8"));
+    return r && typeof r === "object" && typeof r.response_body === "string" && r.tee && typeof r.tee === "object" ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+const nsToMs = (ns) => Number(BigInt(ns) / 1_000_000n);
+const lc = (s) => (typeof s === "string" ? s.toLowerCase().replace(/^0x/, "") : null);
+
+/** The live job's current stage and the deadline that ends it (m001 section 8 countdown). */
+export function stageOf(view) {
+  if (view.status === "open") return { key: "open", deadlineNs: view.accept_by_ns, what: "seller must accept or decline", field: "accept_by" };
+  if (view.review == null) return { key: "accepted", deadlineNs: view.review_by_ns, what: "seller's signed review due", field: "review_by" };
+  return { key: "reviewed", deadlineNs: view.reveal_deadline_ns, what: "buyer must reveal the key", field: "reveal_deadline" };
+}
+
+export function fmtLeft(ms) {
+  const s = Math.round(Math.abs(ms) / 1000);
+  const t = s >= 60 ? `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+  return ms >= 0 ? `${t} left` : `passed ${t} ago`;
+}
+
+export function stageLine(view, nowMs) {
+  const s = stageOf(view);
+  const at = nsToMs(s.deadlineNs);
+  return `Stage: ${view.status}${s.key === "reviewed" ? ", review on-chain" : ""}. ${s.what} by ${new Date(at).toISOString()} (${s.field}, ${fmtLeft(at - nowMs)})`;
+}
+
+/**
+ * The outcome of a closing tx (reveal or timeout) from its events, for this job only. Returns
+ * { kind, line, graded, refundYocto, reveal } or null when the tx carries no closing event.
+ */
+export function outcomeOf(events, jobId, buyer) {
+  const ev = (name) => events.find((e) => e.event === name && String(e.data.job_id) === jobId) ?? null;
+  const reveal = ev("reveal");
+  const timeout = ev("timeout");
+  const payout = ev("payout");
+  const failedPayout = ev("payout_failed_refunded");
+  const refund = ev("refund");
+  const refunded = (e) => (e && e.data.buyer === buyer && /^\d+$/.test(String(e.data.amount)) ? String(e.data.amount) : null);
+  if (failedPayout) {
+    return { kind: "payout_failed_refunded", line: "The payout to the seller failed, so you were refunded. The seller's record is unchanged.", graded: false, refundYocto: refunded(failedPayout), reveal };
+  }
+  if (reveal) {
+    if (reveal.data.outcome === "pass" && payout) return { kind: "settled", line: "Passed. The seller was paid from escrow.", graded: true, refundYocto: null, reveal };
+    if (reveal.data.outcome === "fail" && refund) return { kind: "refunded_fail", line: "Failed. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal };
+    return null;
+  }
+  if (timeout) {
+    const reason = timeout.data.reason;
+    if (reason === "not_accepted" && refund) return { kind: "timeout_refund", line: "Timed out: the seller did not accept by accept_by. You were refunded; the seller's record is unchanged.", graded: false, refundYocto: refunded(refund), reveal: null };
+    if (reason === "no_review" && refund) return { kind: "timeout_refund_fail", line: "Timed out: no signed review by review_by. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal: null };
+    if (reason === "no_reveal" && payout) return { kind: "timeout_paid_seller", line: "Timed out: no valid reveal by reveal_deadline, so the signed review paid the seller. The record is unchanged.", graded: false, refundYocto: null, reveal: null };
+  }
+  return null;
+}
+
+/** Per-bug lines: our regrade of the signed findings against the revealed key. */
+export function gradeLines(key, responseBody) {
+  const g = grade(key, findingsFromResponse(responseBody));
+  const lines = [`Grade: ${g.found}/${g.total} found (pass mark ${g.pass_min}) -> ${g.passed ? "PASS" : "FAIL"}${g.error ? ` (${g.error})` : ""}`];
+  const byId = new Map(g.matched.map((m) => [m.bug, m.line]));
+  for (const bug of [...key.bugs].sort((a, b) => (a.id < b.id ? -1 : 1))) {
+    const where = `${bug.file}:${bug.line_start}-${bug.line_end} ${bug.category}`;
+    lines.push(byId.has(bug.id) ? `  ${bug.id} found   (finding at line ${byId.get(bug.id)}; key ${where})` : `  ${bug.id} missed  (key ${where})`);
+  }
+  if (g.false_positives) lines.push(`  ${g.false_positives} other finding(s) matched no bug`);
+  return { g, lines };
+}
+
+/**
+ * Runs hire. deps: { dir? | cwd+env, network, fetch, urls, contractId, sendTx, lookupTx?,
+ * lookupCreate?, makeSeller?, loadPack?, sleep?, now?, trust?, recordedDir?, out }.
+ * sendTx is pick's sendCreateTx contract (onSigned before broadcast, notSent on errors that can't
+ * have landed). makeSeller({ accountId, getJob, say }) returns a seller (cli/seller-local.js) or
+ * null for no live seller. Returns { job, outcome, receiptPath, verify, pass }.
+ */
+export async function runHire(deps) {
+  const network = deps.network ?? NETWORK;
+  assertTestnet(network);
+  const out = deps.out ?? ((line) => console.log(line));
+  const dir = deps.dir ?? stateDir(deps.cwd ?? process.cwd(), deps.env ?? process.env);
+  const buyer = loadState(dir);
+  if (!buyer || buyer.status !== "created") throw new HireError("NO_BUYER", "no testnet buyer yet; run `earned init` first");
+  const release = acquirePickLock(dir, { say: out });
+  try {
+    return await new Hire({ ...deps, out, dir }).run();
+  } finally {
+    release();
+  }
+}
+
+class Hire {
+  constructor(deps) {
+    this.d = deps;
+    this.dir = deps.dir;
+    this.contractId = deps.contractId ?? CONTRACT_ACCOUNT;
+    this.sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.now = deps.now ?? (() => Date.now());
+    this.trust = deps.trust ?? TRUST;
+    this.loadPack = deps.loadPack ?? loadPackDefault;
+    this.recordedDir = deps.recordedDir ?? RECORDED_DIR;
+  }
+
+  say(line) {
+    this.d.out(printable(redact(line, this.state)));
+  }
+
+  save(job) {
+    saveJob(this.dir, job);
+    this.job = job;
+    return job;
+  }
+
+  view(method, args = {}) {
+    return viewFunction({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, method, args });
+  }
+
+  getJob() {
+    return this.view("get_job", { id: this.jobId });
+  }
+
+  /** get_job, read again a few times while it is null: a just-sent tx can be ahead of the view. */
+  async readLiveJob(until = (v) => v !== null) {
+    let v = null;
+    for (let i = 0; i < VIEW_POLLS; i++) {
+      v = await this.getJob();
+      if (until(v)) return v;
+      if (i < VIEW_POLLS - 1) await this.sleep(POLL_MS);
+    }
+    return v;
+  }
+
+  sendTx(methodName, args, gas, onSigned) {
+    return this.d.sendTx({ state: this.state, contractId: this.contractId, methodName, args, depositYocto: 0n, gas, onSigned });
+  }
+
+  async run() {
+    this.state = loadState(this.dir);
+    if (!this.state || this.state.status !== "created") throw new HireError("NO_BUYER", "no testnet buyer yet; run `earned init` first");
+    let job = loadJob(this.dir);
+    if (!job) throw new HireError("NO_JOB", "no job yet; run `earned pick <1|2|3>` first");
+    if (UNRESOLVED_STATUSES.has(job.status) && job.create_tx && this.d.lookupCreate) {
+      ({ prior: job, state: this.state } = await reconcileCreate({ dir: this.dir, prior: job, state: this.state, lookupCreate: this.d.lookupCreate, say: (l) => this.say(l) }));
+    }
+    if (UNRESOLVED_STATUSES.has(job.status)) {
+      throw new HireError("JOB_UNCONFIRMED", `the create for ${job.pack_id} is ${job.status}: its outcome is not known yet. Check ${EXPLORER}/address/${this.state.account_id}, then run \`earned hire\` again.`);
+    }
+    if (REUSABLE_STATUSES.has(job.status)) {
+      throw new HireError("NO_OPEN_JOB", `the last job (${job.job_id ?? "never created"}, ${job.pack_id}) is already ${job.status}; run \`earned pick <1|2|3>\` for a new one`);
+    }
+    this.job = job;
+    this.jobId = assertJobId(job.job_id);
+    this.key = JSON.parse(job.K);
+    const packN = /^pack-([1-3])$/.exec(job.pack_id)?.[1];
+    if (!packN) throw new HireError("JOB_FILE_CORRUPT", `refused: ${job.pack_id} is not an official pack`);
+    this.pack = this.loadPack(packN);
+    this.review = loadReviewFile(this.dir, this.jobId);
+    this.seller = this.d.makeSeller ? this.d.makeSeller({ accountId: job.seller, contractId: this.contractId, getJob: () => this.getJob(), say: (l) => this.say(l) }) : null;
+
+    this.say(`Job ${this.jobId} (${job.pack_id}) on ${this.contractId}: ${formatNear(BigInt(job.price_yocto))} NEAR in escrow, seller ${job.seller}`);
+
+    // A closing tx sent by an earlier run whose result we never saw: look it up first.
+    for (const [status, field, kind] of [["revealing", "reveal_tx", "reveal"], ["timing_out", "timeout_tx", "timeout"]]) {
+      if (job.status !== status || !job[field] || !this.d.lookupTx) continue;
+      const o = await this.d.lookupTx({ txHash: job[field], accountId: this.state.account_id }).catch(() => null);
+      if (!o) continue;
+      const p = parseTxOutcome(o, this.contractId);
+      if (!p.failure) {
+        this.say(`Earlier ${kind} tx ${job[field]} landed`);
+        return this.finish(kind, p, null);
+      }
+      this.say(`Earlier ${kind} tx ${job[field]} was refused: ${p.failure}`);
+      this.save({ ...job, status: kind === "reveal" ? "reviewed" : "accepted" });
+    }
+
+    let sellerTried = false;
+    let replayShown = false;
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      const view = await this.readLiveJob();
+      if (!view) return this.closedUnseen();
+      this.assertSameJob(view);
+      this.say(stageLine(view, this.now()));
+      if (view.status === "accepted" && view.review != null) return this.revealStage(view);
+
+      if (this.seller && !sellerTried) {
+        sellerTried = true;
+        const r = await this.seller.review({
+          jobId: this.jobId,
+          view,
+          pack: this.pack,
+          say: (l) => this.say(l),
+          saveReview: (rv) => {
+            saveReviewFile(this.dir, this.jobId, rv);
+            this.review = rv;
+          },
+        });
+        this.save({ ...this.job, txs: { ...(this.job.txs ?? {}), ...(r.txs ?? {}) } });
+        if (r.mode === "replay") {
+          this.say(`Seller could not review live (${r.reason}): ${r.message}`);
+          this.showRecorded();
+          replayShown = true;
+        } else {
+          if (r.submit !== "landed") this.say(`Seller's submit_review ${r.submit}${r.message ? `: ${r.message}` : ""}`);
+          // Wait for the review to show in get_job (the view trails the tx by a block or two).
+          await this.readLiveJob((v) => v === null || v?.review != null);
+          continue;
+        }
+      } else if (!this.seller && !replayShown) {
+        this.say("No live seller in this run (live reviews need `--local-seller` with the seller and NEAR AI keys).");
+        this.showRecorded();
+        replayShown = true;
+      }
+      // Otherwise the seller already ran (its review may still be landing): wait on the stage.
+      const next = await this.waitForStage(view);
+      if (next.deadline) return this.timeoutStage(next.view);
+      if (next.closed) return this.closedUnseen();
+    }
+    throw new HireError("STUCK", `job ${this.jobId} changed stage too often in one run; run \`earned hire\` again`);
+  }
+
+  assertSameJob(view) {
+    const j = this.job;
+    const same = String(view.id) === this.jobId && view.buyer === this.state.account_id && view.seller === j.seller && view.pack_id === j.pack_id && lc(view.commit_hash) === lc(j.commit_hash);
+    if (!same) throw new HireError("JOB_MISMATCH", `refused: on-chain job ${this.jobId} is not the job in your job file (buyer, seller, pack or commit differ). Nothing was sent.`);
+  }
+
+  /** Polls until the stage changes or its deadline (+ margin) passes, printing a countdown. */
+  async waitForStage(view) {
+    const s = stageOf(view);
+    const endMs = nsToMs(s.deadlineNs) + DEADLINE_MARGIN_MS;
+    let lastPrint = this.now();
+    for (;;) {
+      if (this.now() > endMs) return { deadline: true, view };
+      await this.sleep(Math.max(1, Math.min(WAIT_POLL_MS, endMs - this.now() + 1)));
+      let v;
+      try {
+        v = await this.getJob();
+      } catch {
+        continue; // RPC hiccup: keep waiting for the deadline
+      }
+      if (v === null) {
+        const again = await this.readLiveJob();
+        if (again === null) return { closed: true };
+        v = again;
+      }
+      if (stageOf(v).key !== s.key) return { view: v };
+      if (this.now() - lastPrint >= COUNTDOWN_EVERY_MS) {
+        this.say(`  waiting: ${s.what}, ${s.field} ${fmtLeft(nsToMs(s.deadlineNs) - this.now())}`);
+        lastPrint = this.now();
+      }
+    }
+  }
+
+  /** (b) The review we hold must be exactly the one the escrow stored for this job. */
+  reviewMatchesChain(view) {
+    const r = this.review;
+    const c = view.review;
+    if (!r || typeof r.response_body !== "string" || !r.tee || !c) return false;
+    const h = sha256Hex(r.response_body);
+    return h === lc(r.tee.response_sha256) && h === lc(c.response_sha256) && lc(r.tee.request_sha256) === lc(c.request_sha256) && lc(r.tee.signing_address) === lc(c.signing_address);
+  }
+
+  async revealStage(view) {
+    this.save({ ...this.job, status: "reviewed" });
+    if (!this.review) {
+      throw new HireError(
+        "REVIEW_BODY_MISSING",
+        `the signed review is on-chain, but this CLI has no copy of its response body (needed to reveal). It is in the submit_review tx arguments on ${EXPLORER}/address/${this.contractId}. Without a valid reveal by ${new Date(nsToMs(view.reveal_deadline_ns)).toISOString()}, the timeout pays the seller. Nothing was sent.`,
+      );
+    }
+    if (!this.reviewMatchesChain(view)) {
+      throw new HireError("REVIEW_MISMATCH", "refused: the saved review does not hash to the response_sha256 the escrow stored for this job. No key was revealed and no receipt was written.");
+    }
+    if (this.now() > nsToMs(view.reveal_deadline_ns) + DEADLINE_MARGIN_MS) return this.timeoutStage(view);
+    // Remembered so a later run that only finds the landed reveal tx knows this exact body was checked.
+    this.save({ ...this.job, review_checked_sha256: sha256Hex(this.review.response_body) });
+
+    let before = null;
+    try {
+      before = await fetchQuote({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, seller: this.job.seller });
+    } catch {
+      before = null; // only used to wait for the record to move
+    }
+    this.save({ ...this.job, status: "revealing" });
+    let outcome;
+    try {
+      outcome = await this.sendTx("reveal", { job_id: this.jobId, key: this.job.K, salt: this.job.salt, response: this.review.response_body }, REVEAL_GAS, (h) => {
+        this.save({ ...this.job, reveal_tx: h });
+      });
+    } catch (err) {
+      const why = String(err?.message ?? err).slice(0, 200);
+      if (err?.notSent) {
+        this.save({ ...this.job, status: "reviewed", reveal_tx: null });
+        throw new HireError("REVEAL_NOT_SENT", `the reveal did not reach the chain (${why}). Nothing moved; run \`earned hire\` again before ${new Date(nsToMs(view.reveal_deadline_ns)).toISOString()}.`);
+      }
+      throw new HireError("REVEAL_UNCONFIRMED", `the reveal was sent but no result came back (${why}). ${this.job.reveal_tx ? `Its tx ${this.job.reveal_tx} is saved; ` : ""}run \`earned hire\` again to look it up.`);
+    }
+    const p = parseTxOutcome(outcome, this.contractId);
+    if (p.failure) {
+      this.save({ ...this.job, status: "reviewed" });
+      throw new HireError(
+        "REVEAL_REJECTED",
+        `Reveal rejected: ${p.failure} (tx ${p.txHash}). Nothing moved. Without a valid reveal by ${new Date(nsToMs(view.reveal_deadline_ns)).toISOString()}, the signed review pays the seller.`,
+      );
+    }
+    return this.finish("reveal", p, before);
+  }
+
+  async timeoutStage(view) {
+    const s = stageOf(view);
+    this.say(`${s.field} has passed: calling timeout(${this.jobId})`);
+    const prior = this.job.status;
+    let last = "";
+    for (let i = 0; i < TIMEOUT_TRIES; i++) {
+      if (i > 0) await this.sleep(POLL_MS * 2);
+      this.save({ ...this.job, status: "timing_out" });
+      let outcome;
+      try {
+        outcome = await this.sendTx("timeout", { job_id: this.jobId }, TIMEOUT_GAS, (h) => this.save({ ...this.job, timeout_tx: h }));
+      } catch (err) {
+        last = String(err?.message ?? err).slice(0, 200);
+        if (err?.notSent) {
+          this.save({ ...this.job, status: prior, timeout_tx: null });
+          continue;
+        }
+        throw new HireError("TIMEOUT_UNCONFIRMED", `timeout was sent but no result came back (${last}). Run \`earned hire\` again to look it up.`);
+      }
+      const p = parseTxOutcome(outcome, this.contractId);
+      if (!p.failure) return this.finish("timeout", p, null);
+      last = p.failure;
+      this.save({ ...this.job, status: prior, timeout_tx: null });
+      if (/has not passed yet/.test(p.failure)) continue; // block time is behind our clock
+      if (/no open job with that id/.test(p.failure)) return this.closedUnseen();
+      break;
+    }
+    throw new HireError("TIMEOUT_REFUSED", `timeout(${this.jobId}) did not land: ${last}. Run \`earned hire\` again.`);
+  }
+
+  /** The job is gone from get_job and we never saw its closing tx (another caller closed it). */
+  closedUnseen() {
+    this.save({ ...this.job, status: "closed", outcome: "closed_elsewhere" });
+    this.say(`Job ${this.jobId} is closed on-chain (get_job returns null), but this CLI did not see the closing tx. Find the outcome at ${EXPLORER}/address/${this.contractId}.`);
+    this.say("Job file closed; run `earned pick <1|2|3>` for a new job.");
+    return { job: this.job, outcome: null, receiptPath: null, verify: null, pass: false };
+  }
+
+  async finish(kind, p, before) {
+    const outcome = outcomeOf(p.events, this.jobId, this.state.account_id);
+    const txs = { ...(this.job.txs ?? {}), ...(this.job.create_tx ? { create: this.job.create_tx } : {}), [kind]: p.txHash };
+    // Closed first: whatever happens below, pick can start a new job.
+    this.save({ ...this.job, status: "closed", outcome: outcome?.kind ?? "unknown", closing_tx: p.txHash, txs });
+    if (outcome?.refundYocto) {
+      const amount = BigInt(outcome.refundYocto) < BigInt(this.job.price_yocto) ? outcome.refundYocto : this.job.price_yocto;
+      this.state = releaseSpend(this.state, amount);
+      saveState(this.dir, this.state);
+    }
+
+    let regrade = null;
+    if (outcome?.reveal && this.review) {
+      const { g, lines } = gradeLines(this.key, this.review.response_body);
+      lines.forEach((l) => this.say(l));
+      regrade = g;
+      const e = outcome.reveal.data;
+      if (e.found !== g.found || e.passed !== g.passed) this.say(`WARNING: the escrow graded ${e.found}/${e.total} (${e.passed ? "pass" : "fail"}); this CLI's regrade differs`);
+    } else if (outcome?.reveal) {
+      const e = outcome.reveal.data;
+      this.say(`Grade (escrow): ${e.found}/${e.total} found (pass mark ${e.pass_min}) -> ${e.passed ? "PASS" : "FAIL"}${e.error ? ` (${e.error})` : ""}`);
+    }
+    if (!outcome) {
+      this.say(`The ${kind} tx ${p.txHash} landed, but it has no closing event for job ${this.jobId}; check ${EXPLORER}/txns/${p.txHash}`);
+      return { job: this.job, outcome: null, receiptPath: null, verify: null, pass: false };
+    }
+    this.say(outcome.line);
+    this.say(`  ${kind === "reveal" ? "settle tx (the settle runs inside reveal)" : "timeout tx"}: ${p.txHash}`);
+    this.say(`  ${EXPLORER}/txns/${p.txHash}`);
+
+    const quote = await this.nextQuote(before, outcome.graded);
+    let receiptPath = null;
+    let v = null;
+    if (kind === "reveal" && this.review && this.liveReviewOnChain) {
+      ({ receiptPath, v } = this.writeReceipt(quote, txs));
+    } else if (kind === "reveal") {
+      this.say("No receipt: this CLI does not hold the live review that the escrow stored for this job.");
+    }
+    const pass = outcome.kind === "settled" && regrade?.passed === true && v?.ok === true && v.checks?.[3]?.ok === true && v.checks[3].regrade?.passed === true;
+    if (pass) this.say("SEE: step 3 PASS");
+    else this.say("Job file closed; run `earned pick <1|2|3>` for a new job.");
+    return { job: this.job, outcome, receiptPath, verify: v, pass };
+  }
+
+  /** The quote after the close, from get_record. A graded close is waited for (the view lags). */
+  async nextQuote(before, graded) {
+    const beforeText = formatMilli(Number(BigInt(this.job.price_yocto) / YOCTO_PER_MNEAR));
+    let after = null;
+    for (let i = 0; i < VIEW_POLLS; i++) {
+      try {
+        after = await fetchQuote({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, seller: this.job.seller });
+      } catch {
+        after = null;
+      }
+      if (after && (!graded || !before || after.record.jobs > before.record.jobs)) break;
+      if (i < VIEW_POLLS - 1) await this.sleep(POLL_MS);
+    }
+    if (!after) {
+      this.say(`Next quote: unavailable (testnet RPC); was ${beforeText} NEAR. Run \`earned quote ${this.job.seller}\`.`);
+      return { before: beforeText, after: "unavailable", formula: undefined };
+    }
+    this.say(`Next quote (get_record): ${beforeText} -> ${formatMilli(after.quoteMilli)} NEAR`);
+    after.lines.slice(1).forEach((l) => this.say(l));
+    return { before: beforeText, after: formatMilli(after.quoteMilli), formula: after.lines[1].replace(/^\s*formula: /, "") };
+  }
+
+  // The review we hold passed revealStage's check against the escrow's stored hash for this job
+  // (in this run or the run that sent the reveal), so it is the live review that landed.
+  get liveReviewOnChain() {
+    return !!this.review && typeof this.job.review_checked_sha256 === "string" && sha256Hex(this.review.response_body) === this.job.review_checked_sha256;
+  }
+
+  writeReceipt(quote, txs) {
+    const j = this.job;
+    const receipt = buildReceipt({
+      job: { network: "testnet", contract: this.contractId, job_id: this.jobId, pack_id: j.pack_id, buyer: this.state.account_id, seller: j.seller, commit_hash: j.commit_hash },
+      reveal: { K: j.K, salt: j.salt },
+      review: this.review,
+      quote,
+      txs: Object.fromEntries(Object.entries(txs).filter(([, h]) => typeof h === "string" && h !== "")),
+    });
+    const paths = receiptPaths(this.dir, this.jobId);
+    saveReviewFile(this.dir, this.jobId, this.review);
+    writeReceipt(paths.receipt, receipt);
+    const v = verifyReceipt(receipt, { trust: this.trust });
+    this.say(`Receipt: ${paths.receipt}`);
+    this.say(`  full review (response + attestation): ${paths.review}`);
+    for (const c of v.checks) this.say(`  ${c.ok ? "PASS" : "FAIL"}  ${c.n} ${c.title}`);
+    const rg = v.checks[3]?.regrade;
+    this.say(`  regrade: ${rg ? `${rg.found}/${rg.total} ${rg.passed ? "PASS" : "FAIL"}` : "not computed"}`);
+    this.say(`  ${v.verdict}`);
+    this.say(`  ${v.not_proven}`);
+    this.say(`Check it yourself: earned verify ${paths.receipt}`);
+    return { receiptPath: paths.receipt, v };
+  }
+
+  /** Replay: a recorded past run, labelled RECORDED. Never builds or writes a receipt. */
+  showRecorded() {
+    const file = join(this.recordedDir, `${this.job.pack_id}.json`);
+    if (!existsSync(file)) {
+      this.say(`RECORDED: no recorded live run of ${this.job.pack_id} ships with this version yet.`);
+      return;
+    }
+    try {
+      const r = readReceipt(file);
+      const v = verifyReceipt(r, { trust: this.trust });
+      const rg = v.checks[3]?.regrade;
+      this.say(`RECORDED (a past run, job ${r.job_id}; not your job, and no receipt is written for your job)`);
+      this.say(`  RECORDED grade: ${rg ? `${rg.found}/${rg.total} ${rg.passed ? "PASS" : "FAIL"}` : "unreadable"}; settle tx ${r.txs?.reveal ?? "none recorded"}`);
+      this.say(`  RECORDED ${v.verdict}`);
+      this.say(`  ${v.not_proven}`);
+    } catch (err) {
+      this.say(`RECORDED: the recorded run of ${this.job.pack_id} is unreadable (${err?.code ?? "error"})`);
+    }
+  }
+}
+
+/** Real dependencies: keyless views over the T-014 RPC list; txs signed with near-api-js 7.4.0. */
+export async function defaultHireDeps(env = process.env, { localSeller = false } = {}) {
+  const urls = env.EARNED_RPC_URL ? [env.EARNED_RPC_URL] : RPC_URLS;
+  urls.forEach(assertTestnetRpc);
+  const load = async () => [await import("near-api-js"), await import("near-api-js/rpc-errors")];
+  const sendTx = async (req) => {
+    const [near, rpcErrors] = await load();
+    const makeAccount = (url, st) => new near.Account(st.account_id, new near.JsonRpcProvider({ url }, { retries: RPC_RETRIES }), st.private_key);
+    return sendCreateTx({ ...req, urls, makeAccount, near, rpcErrors });
+  };
+  const lookupTx = async ({ txHash, accountId }) => {
+    const [near] = await load();
+    for (const url of urls) {
+      try {
+        return await new near.JsonRpcProvider({ url }, { retries: RPC_RETRIES }).viewTransactionStatus({ txHash, accountId, waitUntil: "EXECUTED_OPTIMISTIC" });
+      } catch {
+        // next RPC
+      }
+    }
+    return null;
+  };
+  let makeSeller = null;
+  if (localSeller) {
+    const sellerKey = env.EARNED_SELLER_PRIVATE_KEY;
+    const apiKey = env.NEAR_AI_API_KEY;
+    if (!sellerKey || !apiKey) {
+      throw new HireError("SELLER_NOT_CONFIGURED", "--local-seller needs EARNED_SELLER_PRIVATE_KEY (the seller's key) and NEAR_AI_API_KEY in the environment. Nothing was sent.");
+    }
+    const { reviewJob } = await import("../seller/review.js");
+    makeSeller = ({ accountId, contractId, getJob, say }) =>
+      makeLocalSeller({
+        sellerState: { account_id: accountId, private_key: sellerKey },
+        contractId,
+        sendTx,
+        getJob,
+        getSigners: () => viewFunction({ fetch: globalThis.fetch, urls, contractId, method: "signers" }),
+        reviewJob,
+        apiKey,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        log: say,
+      });
+  }
+  return {
+    cwd: process.cwd(),
+    env,
+    network: env.EARNED_NETWORK || NETWORK,
+    fetch: globalThis.fetch,
+    urls,
+    sendTx,
+    lookupTx,
+    lookupCreate: lookupTx,
+    makeSeller,
+  };
+}
+
+export { TxError };
