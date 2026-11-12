@@ -209,14 +209,16 @@ export function outcomeOf(events, jobId, buyer) {
     return { kind: "payout_failed_refunded", line: "The payout to the seller failed, so you were refunded. The seller's record is unchanged.", graded: false, refundYocto: refunded(failedPayout), reveal };
   }
   if (reveal) {
-    if (reveal.data.outcome === "pass" && payout) return { kind: "settled", line: "Passed. The seller was paid from escrow.", graded: true, refundYocto: null, reveal };
-    if (reveal.data.outcome === "fail" && refund) return { kind: "refunded_fail", line: "Failed. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal };
+    // recordBlock: the block of the receipt that wrote the record (payout callback = record_pass;
+    // the reveal's own receipt = record_fail), so the after-read can be pinned to it (review R-1).
+    if (reveal.data.outcome === "pass" && payout) return { kind: "settled", line: "Passed. The seller was paid from escrow.", graded: true, refundYocto: null, reveal, recordBlock: payout.blockHash ?? null };
+    if (reveal.data.outcome === "fail" && refund) return { kind: "refunded_fail", line: "Failed. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal, recordBlock: refund.blockHash ?? null };
     return null;
   }
   if (timeout) {
     const reason = timeout.data.reason;
     if (reason === "not_accepted" && refund) return { kind: "timeout_refund", line: "Timed out: the seller did not accept by accept_by. You were refunded; the seller's record is unchanged.", graded: false, refundYocto: refunded(refund), reveal: null };
-    if (reason === "no_review" && refund) return { kind: "timeout_refund_fail", line: "Timed out: no signed review by review_by. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal: null };
+    if (reason === "no_review" && refund) return { kind: "timeout_refund_fail", line: "Timed out: no signed review by review_by. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal: null, recordBlock: refund.blockHash ?? null };
     if (reason === "no_reveal" && payout) return { kind: "timeout_paid_seller", line: "Timed out: no valid reveal by reveal_deadline, so the signed review paid the seller. The record is unchanged.", graded: false, refundYocto: null, reveal: null };
   }
   return null;
@@ -662,7 +664,7 @@ class Hire {
     this.say(`  ${txLabel}: ${p.txHash}`);
     this.say(`  ${EXPLORER}/txns/${p.txHash}`);
 
-    const quote = await this.nextQuote(before, outcome.graded);
+    const quote = await this.nextQuote(before, outcome);
     let receiptPath = null;
     let v = null;
     if (kind === "reveal" && this.review && this.liveReviewOnChain) {
@@ -685,6 +687,31 @@ class Hire {
     return { job: this.job, outcome, receiptPath, verify: v, pass };
   }
 
+  /**
+   * get_record + quote at the block of the closing receipt that wrote the record, accepted only if
+   * get_job(this job) is null at that same block. The block may be ahead of the RPC for a moment
+   * (UNKNOWN_BLOCK): polled VIEW_POLLS times. Returns the fetchQuote result or null (step 4 then
+   * says "unclear" and prints no SEE line).
+   */
+  async pinnedAfter(outcome) {
+    const at = outcome.graded ? outcome.recordBlock : null;
+    if (typeof at !== "string" || at === "") return null;
+    for (let i = 0; i < VIEW_POLLS; i++) {
+      if (i > 0) await this.sleep(POLL_MS);
+      let q;
+      let job;
+      try {
+        q = await fetchQuote({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, seller: this.job.seller, blockId: at });
+        job = await viewFunction({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, method: "get_job", args: { id: this.jobId }, blockId: at });
+      } catch {
+        continue; // the RPC does not know that block yet
+      }
+      if (q.blockHash !== at) return null; // not the block we asked for: never compare it
+      return job === null ? q : null; // still open at that block: this state does not include our close
+    }
+    return null;
+  }
+
   /** The record read just before an earlier run's reveal (job file), as { record, quoteMilli }, or null. */
   savedBefore() {
     try {
@@ -696,12 +723,17 @@ class Hire {
   }
 
   /** The quote after the close, from get_record. A graded close is waited for (the view lags). */
-  async nextQuote(before, graded) {
+  async nextQuote(before, outcome) {
+    const graded = outcome.graded;
     // The quote just before the close if we read it, else the price this job paid (L-2).
     const beforeText = formatMilli(before ? before.quoteMilli : Number(BigInt(this.job.price_yocto) / YOCTO_PER_MNEAR));
-    let after = null;
-    this.afterQuote = null;
-    for (let i = 0; i < VIEW_POLLS; i++) {
+    // Review R-1 / sec L-3: only a read that provably includes this job's close may be compared with
+    // the before-read. Close txs come back at EXECUTED_OPTIMISTIC, final views trail them, and
+    // another buyer's close of the same seller also moves `jobs`. So get_record + quote are read AT
+    // the block of the receipt that wrote the record, and get_job(job) must be null at that block.
+    this.afterQuote = await this.pinnedAfter(outcome);
+    let after = this.afterQuote;
+    for (let i = 0; !after && i < VIEW_POLLS; i++) {
       try {
         after = await fetchQuote({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, seller: this.job.seller });
       } catch {
@@ -714,7 +746,7 @@ class Hire {
       this.say(`Next quote: unavailable (testnet RPC); was ${beforeText} NEAR. Run \`earned quote ${this.job.seller}\`.`);
       return { before: beforeText, after: "unavailable", formula: undefined };
     }
-    this.afterQuote = after;
+    // A display-only read (not pinned to our close) is never handed to step 4 (this.afterQuote stays null).
     this.say(`Next quote (get_record): ${beforeText} -> ${formatMilli(after.quoteMilli)} NEAR`);
     after.lines.slice(1).forEach((l) => this.say(l));
     return { before: beforeText, after: formatMilli(after.quoteMilli), formula: after.lines[1].replace(/^\s*formula: /, "") };

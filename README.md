@@ -420,7 +420,11 @@ checkout: `init`, `quote`, `pick 2`, `hire` (step 3), `verify` (plus `--tamper`)
 `hire --pack 3` (step 4, same buyer) and `verify` of that receipt. Without `--go` it only runs
 the read-only preflight (Node, a clean checkout, `NEAR_AI_API_KEY`, `EARNED_SELLER_PRIVATE_KEY`,
 the live code_hash, `seller.earned-price.testnet` exists and holds that key) and signs nothing.
-Each step must print its `SEE:` line or the script stops and names the step's log.
+Each step must print its `SEE:` line or the script stops, names the step's log and prints
+the commands to resume with the same buyer (`EARNED_HOME`); do not rerun the script after a
+failed step. `--go` refuses `EARNED_RPC_URL` and any network but testnet, and refuses a seller
+whose record is not empty (the demo's 0.030 -> 0.040 -> 0.040 needs a fresh seller) unless
+`--used-seller` is given.
 
 ## License
 

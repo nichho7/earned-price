@@ -2,17 +2,22 @@
 // Preflight for scripts/live-run.sh (T-032): everything the live 5-command run needs, checked
 // before anything is signed. Read-only: keyless testnet RPC views only, no tx, no NEAR AI call.
 //
-//   node scripts/live-preflight.mjs [--home <EARNED_HOME>] [--expect-code-hash <base58>]
+//   node scripts/live-preflight.mjs [--home <EARNED_HOME>] [--expect-code-hash <base58>] [--require-fresh]
 //
-// Prints one line per check (OK / MISSING / WRONG, each with the fix) and exits 0 only when every
-// check passes, 3 otherwise. Secrets: the NEAR AI key is only tested for presence and the seller's
-// private key only to derive its public key; neither is ever printed.
+// Prints one line per check (OK / WARN / MISSING, each with the fix) and exits 0 only when every
+// check passes, 3 otherwise. A seller that is not fresh (record not empty, quote not 0.030) is a
+// loud WARN, or a failure with --require-fresh (live-run.sh --go: that run is the recorded demo).
+// Every printed line goes through printable(): RPC text can't inject escapes (review sec L-2).
+// Secrets: the NEAR AI key is only tested for presence and the seller's private key only to derive
+// its public key; neither is ever printed.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RPC_URLS } from "../cli/init.js";
 import { CONTRACT_ACCOUNT } from "../cli/names.js";
 import { DEMO_SELLER, REUSABLE_STATUSES } from "../cli/pick.js";
+import { BASE_MNEAR, fetchQuote, formatMilli } from "../cli/quote.js";
+import { printable } from "../verify/receipt.js";
 
 // earned-price.testnet as deployed 2026-11-12 (Nicho "deploy approve"; wasm sha256 287a61ff...c117).
 export const EXPECTED_CODE_HASH = "3j1YYcy6bDSMyN2bUEnE8uQc4s3HbHWfc4dAs3NC9byG";
@@ -60,9 +65,13 @@ async function rpc(fetchFn, urls, params) {
  * Returns [{ ok, name, detail, fix }].
  */
 export async function runPreflight(deps) {
-  const { env = {}, fetch: fetchFn, urls = RPC_URLS, home, expectCodeHash = EXPECTED_CODE_HASH, nodeVersion = process.versions.node, derivePublicKey } = deps;
+  const { env = {}, fetch: fetchFn, urls = RPC_URLS, home, expectCodeHash = EXPECTED_CODE_HASH, nodeVersion = process.versions.node, derivePublicKey, requireFresh = false } = deps;
   const checks = [];
-  const add = (ok, name, detail, fix) => checks.push({ ok, name, detail, fix: ok ? null : fix });
+  const add = (ok, name, detail, fix, warn = false) => checks.push({ ok, name, detail, fix: ok && !warn ? null : fix, warn });
+
+  // Sec L-1: the run must talk to the RPCs this preflight checks, on testnet.
+  add(!env.EARNED_RPC_URL, "RPC", env.EARNED_RPC_URL ? "EARNED_RPC_URL is set: the run would use another node than the one checked here" : `default testnet RPCs (${urls.join(", ")})`, "unset EARNED_RPC_URL for the live run");
+  add(!env.EARNED_NETWORK || env.EARNED_NETWORK === "testnet", "network", env.EARNED_NETWORK ? `EARNED_NETWORK=${env.EARNED_NETWORK}` : "testnet", "unset EARNED_NETWORK (testnet only)");
 
   const major = Number(String(nodeVersion).split(".")[0]);
   add(major >= NODE_MIN_MAJOR, "Node.js", `v${nodeVersion}`, `install Node.js ${NODE_MIN_MAJOR} or newer`);
@@ -97,6 +106,31 @@ export async function runPreflight(deps) {
   else {
     const amount = BigInt(seller.value.amount ?? "0");
     add(amount >= MIN_SELLER_YOCTO, "seller account", `${DEMO_SELLER} exists, balance ${amount} yocto`, `fund ${DEMO_SELLER} with at least 0.1 NEAR for gas`);
+  }
+
+  // Review O-3 / CoS 5: the demo's 0.030 -> 0.040 -> 0.040 needs a seller with an empty record.
+  if (contract.value) {
+    let q = null;
+    try {
+      q = await fetchQuote({ fetch: fetchFn, urls, contractId: CONTRACT_ACCOUNT, seller: DEMO_SELLER });
+    } catch (err) {
+      add(!requireFresh, "seller record", `could not read get_record + quote (${err?.code ?? "error"})`, "check the network and retry", true);
+    }
+    if (q) {
+      const r = q.record;
+      const fresh = r.jobs === 0 && r.passes === 0 && r.fails === 0 && r.unique_buyers === 0 && q.quoteMilli === BASE_MNEAR;
+      const detail = `passes ${r.passes}, fails ${r.fails}, unique_buyers ${r.unique_buyers}, jobs ${r.jobs}; quote ${formatMilli(q.quoteMilli)} NEAR`;
+      if (fresh) add(true, "seller record", `${detail} (fresh: the run will show 0.030 -> 0.040 -> 0.040)`, null);
+      else {
+        add(
+          !requireFresh,
+          "seller record",
+          `${detail}. NOT A FRESH SELLER: this run will NOT show 0.030 -> 0.040 -> 0.040`,
+          "the first --go run is the recorded demo run: use a seller nobody has hired yet, or pass --used-seller to live-run.sh to record these numbers on purpose",
+          true,
+        );
+      }
+    }
   }
 
   if (sellerPk && seller.value) {
@@ -137,11 +171,13 @@ export async function runPreflight(deps) {
   return checks;
 }
 
-export function printChecks(checks, out = (l) => console.log(l)) {
+export function printChecks(checks, write = (l) => console.log(l)) {
+  const out = (l) => write(printable(l));
   for (const c of checks) {
-    out(`${c.ok ? "OK     " : "MISSING"}  ${c.name}: ${c.detail}`);
-    if (!c.ok) out(`         fix: ${c.fix}`);
+    out(`${!c.ok ? "MISSING" : c.warn ? "WARN   " : "OK     "}  ${c.name}: ${c.detail}`);
+    if (c.fix) out(`         fix: ${c.fix}`);
   }
+  for (const c of checks.filter((x) => x.ok && x.warn)) out(`!!! WARNING ${c.name}: ${c.detail} !!!`);
   const bad = checks.filter((c) => !c.ok).length;
   out(bad === 0 ? "PREFLIGHT OK: nothing was sent." : `PREFLIGHT FAILED: ${bad} item(s) to fix. Nothing was sent.`);
   return bad === 0;
@@ -158,6 +194,7 @@ async function main(argv) {
     fetch: globalThis.fetch,
     home: opt("home"),
     expectCodeHash: opt("expect-code-hash") ?? EXPECTED_CODE_HASH,
+    requireFresh: argv.includes("--require-fresh"),
     derivePublicKey: (sk) => {
       if (!/^ed25519:[1-9A-HJ-NP-Za-km-z]+$/.test(sk)) throw new Error("not an ed25519 key");
       return KeyPair.fromString(sk).getPublicKey().toString();

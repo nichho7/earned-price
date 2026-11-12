@@ -115,14 +115,28 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
     nullReads: 0, // get_job answers null this many times first (view lag)
     hideReviewReads: 0, // get_job shows review: null this many times while a review is on-chain
     seq: 0,
+    // Block history (review R-1): every state change makes a block; views can be pinned to one.
+    height: 0,
+    blocks: new Map(),
+    head: null,
+    staleFinal: null, // a block hash: finality=final get_record/quote reads answer from it (view lag)
+    unknownBlockReads: 0, // block-pinned reads answer UNKNOWN_BLOCK this many times first
   };
+  chain.snap = () => {
+    const h = `B${++chain.height}`;
+    chain.blocks.set(h, { record: { ...chain.record }, job: chain.job ? { ...chain.job } : null });
+    chain.head = h;
+    return h;
+  };
+  chain.snap();
   const quoteOf = (r) => Math.min(100, Math.max(25, 30 + 10 * r.unique_buyers - 5 * r.fails));
   const ev = (event, data) => `EVENT_JSON:${JSON.stringify({ standard: "earned_price", version: "0.1.0", event, data })}`;
-  const ok = (hash, value, logs, signerId) => ({
+  // logs[i] is one receipt's logs; blocks[i] the block it executed in (default: the head after the tx).
+  const ok = (hash, value, logs, signerId, blocks = []) => ({
     status: { SuccessValue: b64(JSON.stringify(value ?? null)) },
     transaction: { hash },
     transaction_outcome: { id: hash, outcome: { executor_id: signerId, logs: [] } },
-    receipts_outcome: logs.map((l, i) => ({ id: `${hash}-r${i}`, outcome: { executor_id: CONTRACT, logs: l } })),
+    receipts_outcome: logs.map((l, i) => ({ id: `${hash}-r${i}`, block_hash: blocks[i] ?? chain.snap(), outcome: { executor_id: CONTRACT, logs: l } })),
   });
   const fail = (hash, msg, signerId) => ({
     status: { Failure: { ActionError: { index: 0, kind: { FunctionCallError: { ExecutionError: `Smart contract panicked: ${msg}` } } } } },
@@ -135,6 +149,24 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
     const p = JSON.parse(init.body).params;
     const args = JSON.parse(Buffer.from(p.args_base64, "base64").toString());
     let value;
+    if (p.block_id !== undefined) {
+      // A block-pinned read: the state as of that block, or UNKNOWN_BLOCK (ahead of this node).
+      const b = chain.blocks.get(p.block_id);
+      if (!b || chain.unknownBlockReads > 0) {
+        if (b) chain.unknownBlockReads--;
+        return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", error: { name: "HANDLER_ERROR", cause: { name: "UNKNOWN_BLOCK" } } }) };
+      }
+      if (p.method_name === "get_job") value = b.job && args.id === b.job.id ? b.job : null;
+      else if (p.method_name === "get_record") value = b.record;
+      else if (p.method_name === "quote") value = (BigInt(quoteOf(b.record)) * YOCTO_PER_MNEAR).toString();
+      else throw new Error(`unexpected pinned view ${p.method_name}`);
+      return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: p.block_id, block_height: 1, logs: [], result: bytes(value) } }) };
+    }
+    if (chain.staleFinal && (p.method_name === "get_record" || p.method_name === "quote")) {
+      const b = chain.blocks.get(chain.staleFinal);
+      value = p.method_name === "get_record" ? b.record : (BigInt(quoteOf(b.record)) * YOCTO_PER_MNEAR).toString();
+      return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: chain.staleFinal, block_height: 1, logs: [], result: bytes(value) } }) };
+    }
     if (p.method_name === "get_job") {
       if (chain.nullReads > 0) {
         chain.nullReads--;
@@ -148,7 +180,7 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
     else if (p.method_name === "quote") value = (BigInt(quoteOf(chain.record)) * YOCTO_PER_MNEAR).toString();
     else if (p.method_name === "signers") value = [signer];
     else throw new Error(`unexpected view ${p.method_name}`);
-    return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: "BLOCK1", block_height: 1, logs: [], result: bytes(value) } }) };
+    return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: chain.head, block_height: 1, logs: [], result: bytes(value) } }) };
   };
   chain.outcomes = {}; // every outcome by tx hash, as an RPC lookup would return it
   chain.sendTx = async (req) => {
@@ -172,6 +204,7 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
       if (who !== j.seller) return fail(hash, "Earned Price: only the job's seller can accept it", who);
       j.status = "accepted";
       j.accepted_at_ns = t.toString();
+      chain.snap();
       return ok(hash, null, [[ev("accept", { job_id: j.id, seller: j.seller, accepted_at_ns: t.toString() })]], who);
     }
     if (req.methodName === "submit_review") {
@@ -189,13 +222,16 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
       const reveal = ev("reveal", { ...base, pack_id: g.pack_id, found: g.found, total: g.total, pass_min: g.pass_min, passed: g.passed, matched: g.matched.map((m) => m.bug), missed: g.missed, false_positives: g.false_positives, error: g.error ?? null, outcome: g.passed ? "pass" : "fail" });
       chain.job = null;
       if (g.passed) {
+        const closed = chain.snap(); // the reveal receipt: job deleted, record not written yet
+        const transfer = chain.snap();
+        await chain.betweenCloseAndPayout?.();
         chain.record.passes++;
         if (!chain.passBuyers.has(j.buyer)) {
           chain.passBuyers.add(j.buyer);
           chain.record.unique_buyers++;
         }
         chain.record.jobs++;
-        return ok(hash, true, [[reveal], [], [ev("payout", { ...base, amount: j.price, kind: "settle" })]], who);
+        return ok(hash, true, [[reveal], [], [ev("payout", { ...base, amount: j.price, kind: "settle" })]], who, [closed, transfer, chain.snap()]);
       }
       chain.record.fails++;
       chain.record.jobs++;
@@ -1013,7 +1049,7 @@ test("step 4 real fail: refund amount from the refund event, refund tx, quote 0.
   for (const b of ["B1", "B2", "B3", "B4", "B5"]) assert.match(out, new RegExp(`  ${b} missed  `));
   assert.match(out, /Failed\. You were refunded and the seller takes a fail\./);
   assert.match(out, /refund tx \(the refund runs inside reveal\): revealTx3/);
-  assert.match(out, /Refund: 0\.04 NEAR back to you \(refund event, reason grade_fail, in reveal tx revealTx3\)\./);
+  assert.match(out, /Refund: 0\.040 NEAR back to you \(refund event, reason grade_fail, in reveal tx revealTx3\)\./);
   assert.match(out, /Next quote \(get_record\): 0\.040 -> 0\.035 NEAR/);
   assert.match(out, /formula: 0\.030 \+ 0\.010×1 − 0\.005×1 = 0\.035 NEAR/);
   assert.match(out, /Fail counted: F 0 -> 1, so the quote dropped: 0\.040 -> 0\.035 NEAR/);
@@ -1157,7 +1193,7 @@ test("step4 units: step4Report prints SEE-worthy pass only when regrade, escrow 
   const f = step4Report(fb);
   assert.equal(f.kind, "fail");
   assert.equal(f.pass, true);
-  assert.match(f.lines.join("\n"), /Refund: 0\.04 NEAR back to you[\s\S]*0\.040 -> 0\.035 NEAR/);
+  assert.match(f.lines.join("\n"), /Refund: 0\.040 NEAR back to you[\s\S]*0\.040 -> 0\.035 NEAR/);
   for (const bad of [{ outcome: { kind: "refunded_fail", refundYocto: null } }, { regrade: { passed: true } }, { verify: okVerify(true) }, { after: { ...fb.after, quoteMilli: 40 } }]) {
     assert.equal(step4Report({ ...fb, ...bad }).pass, false, JSON.stringify(bad));
   }
@@ -1170,4 +1206,96 @@ test("earned hire: no --rigged flag anywhere in the CLI (S-023 AC3)", () => {
   for (const f of ["cli/earned.js", "cli/hire.js", "cli/step4.js", "cli/pick.js"]) {
     assert.ok(!/--rigged|rigged/i.test(readFileSync(new URL(`../${f}`, import.meta.url), "utf8")), f);
   }
+});
+
+// --- T-032 review R-1 / sec L-3: the after-read must include this job's close --------------------
+
+/** Another buyer's close for the same seller, applied on-chain right now (its own block). */
+function otherClose(chain, kind) {
+  if (kind === "first_pass") {
+    chain.record.passes++;
+    chain.record.unique_buyers++;
+  } else if (kind === "repeat") chain.record.passes++;
+  else chain.record.fails++;
+  chain.record.jobs++;
+  return chain.snap();
+}
+
+test("R-1 probe: ours is a repeat, a stale final view shows only another buyer's first pass -> never first_pass, unclear, no SEE", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  chain.betweenCloseAndPayout = async () => {
+    chain.staleFinal = otherClose(chain, "first_pass"); // final views stop here: theirs, not ours
+  };
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.notEqual(r.step4.kind, "first_pass");
+  assert.equal(r.step4.kind, "unclear");
+  assert.match(text(lines), /Step 4 can't attribute the quote change to this job: the seller's record moved by more than this job \(jobs \+2/);
+  assert.equal(r.pass, false);
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+test("sec L-3 probe: ours is a first pass, a stale final view shows only another buyer's repeat -> no 'Repeat pass', no SEE", async () => {
+  const { chain, clock, deps, lines } = step4Setup({ passBuyers: ["someone-else.testnet"] });
+  chain.betweenCloseAndPayout = async () => {
+    chain.staleFinal = otherClose(chain, "repeat");
+  };
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "unclear");
+  assert.ok(!text(lines).includes("Repeat pass"));
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+test("R-1: final views lag behind our close the whole run -> the read pinned to the payout block still gives repeat + SEE", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  chain.betweenCloseAndPayout = async () => {
+    chain.staleFinal = chain.head; // final = before our record write, for every later read
+  };
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "repeat");
+  assert.equal(lines.at(-1), "SEE: step 4 PASS");
+});
+
+test("R-1: the closing block is ahead of the RPC for a moment -> polled; never known -> unclear, no SEE", async () => {
+  const a = step4Setup();
+  a.chain.betweenCloseAndPayout = async () => {
+    a.chain.unknownBlockReads = 2;
+  };
+  const r1 = await runHire({ ...a.deps, makeSeller: pack3Seller(a.chain, a.clock, PACK3_PASS_BODY) });
+  assert.equal(r1.step4.kind, "repeat");
+  assert.equal(a.lines.at(-1), "SEE: step 4 PASS");
+  const b = step4Setup();
+  b.chain.betweenCloseAndPayout = async () => {
+    b.chain.unknownBlockReads = 1000;
+  };
+  const r2 = await runHire({ ...b.deps, makeSeller: pack3Seller(b.chain, b.clock, PACK3_PASS_BODY) });
+  assert.equal(r2.step4.kind, "unclear");
+  assert.match(text(b.lines), /could not be read at this job's closing block/);
+  assert.ok(!b.lines.includes("SEE: step 4 PASS"));
+});
+
+test("R-1: get_job is not null at the pinned block (that state does not include our close) -> unclear, no SEE", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  const sendTx = async (req) => {
+    const o = await chain.sendTx(req);
+    if (req.methodName === "reveal") {
+      const at = o.receipts_outcome.at(-1).block_hash;
+      chain.blocks.get(at).job = { id: "7" };
+    }
+    return o;
+  };
+  const r = await runHire({ ...deps, sendTx, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "unclear");
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+test("R-1: a closing tx whose receipts carry no block_hash is never compared (unclear, no SEE)", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  const sendTx = async (req) => {
+    const o = await chain.sendTx(req);
+    if (req.methodName === "reveal") for (const ro of o.receipts_outcome) delete ro.block_hash;
+    return o;
+  };
+  const r = await runHire({ ...deps, sendTx, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "unclear");
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
 });

@@ -5,17 +5,21 @@
 // - paid_seller / refunded_buyer: the closing tx's EVENT_JSON (`payout` kind settle, or `refund`
 //   reason grade_fail), via hire.js outcomeOf.
 // - counts_unique_buyer: the escrow's events don't carry it, so it is read from get_record just
-//   before the reveal and just after the close (each read pins `quote` to the same block as the
-//   record, cli/quote.js fetchQuote). A repeat pass moves passes +1 and leaves unique_buyers (P)
+//   before the reveal and AT the block of the closing receipt that wrote the record, where
+//   get_job(job) must already be null (review R-1); each read pins `quote` to the same block as
+//   the record (cli/quote.js fetchQuote). A repeat pass moves passes +1 and leaves unique_buyers (P)
 //   alone, so the quote holds; a fail moves fails +1 and the quote drops 0.005.
 // - The grade: our regrade of the signed findings against the revealed key, cross-checked with
 //   the escrow's reveal event.
 // If the record moved by anything other than this one job (another buyer closed a job for the
 // same seller in between), nothing is attributed and no SEE line is printed.
 import { formatNear } from "./spend-cap.js";
-import { formatMilli, quoteMilli } from "./quote.js";
+import { YOCTO_PER_MNEAR, formatMilli, quoteMilli } from "./quote.js";
 
 export const STEP4_PACK = "pack-3";
+/** yoctoNEAR -> "0.040" (3 decimals, m001 section 1) when whole milliNEAR, else the exact NEAR amount. */
+const near3 = (yocto) => (yocto % YOCTO_PER_MNEAR === 0n ? formatMilli(Number(yocto / YOCTO_PER_MNEAR)) : formatNear(yocto));
+
 export const FAIL_LINE = "a fail subtracts 0.005 (see README step: contract test)";
 
 const KEYS = ["jobs", "passes", "fails", "unique_buyers"];
@@ -43,7 +47,7 @@ export function classifyClose(outcome, before, after) {
   const base = { paid_seller, refunded_buyer, counts_unique_buyer: null, reason: null };
   if (!paid_seller && !refunded_buyer) return { ...base, kind: "other", reason: `the job closed as ${outcome?.kind ?? "unknown"}, not a graded reveal` };
   const d = recordDelta(before, after);
-  if (!d) return { ...base, kind: "unclear", reason: `get_record ${before ? "after the close" : "before the reveal"} could not be read` };
+  if (!d) return { ...base, kind: "unclear", reason: before ? "get_record after the close could not be read at this job's closing block (the RPC lagged, or the job was still open there)" : "get_record before the reveal could not be read" };
   if (paid_seller && same(d, { jobs: 1, passes: 1 })) return { ...base, kind: "repeat", counts_unique_buyer: false };
   if (paid_seller && same(d, { jobs: 1, passes: 1, unique_buyers: 1 })) return { ...base, kind: "first_pass", counts_unique_buyer: true };
   if (refunded_buyer && same(d, { jobs: 1, fails: 1 })) return { ...base, kind: "fail", counts_unique_buyer: false };
@@ -82,7 +86,7 @@ export function step4Report({ outcome, txHash, seller, priceYocto, before, after
     pass = graded && regrade.passed === true && authentic && verify.checks[3].regrade?.passed === true && after.quoteMilli === before.quoteMilli && after.quoteMilli === quoteMilli(a);
   } else if (close.kind === "fail") {
     const refund = outcome.refundYocto;
-    lines.push(`Refund: ${refund ? `${formatNear(BigInt(refund))} NEAR back to you` : "amount not in the refund event"} (refund event, reason grade_fail, in reveal tx ${txHash}).`);
+    lines.push(`Refund: ${refund ? `${near3(BigInt(refund))} NEAR back to you` : "amount not in the refund event"} (refund event, reason grade_fail, in reveal tx ${txHash}).`);
     lines.push(`Fail counted: F ${b.fails} -> ${a.fails}, so the quote dropped: ${q0} -> ${q1} NEAR (a fail subtracts 0.005).`);
     pass =
       graded &&
