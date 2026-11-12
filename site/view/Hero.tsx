@@ -26,7 +26,9 @@ export function Hero({ hero }: { hero: HeroData }) {
   return (
     <section className={s.hero} aria-labelledby="hero-figure" data-beat="1">
       <h1 id="hero-figure" className={s.figure}>
-        {hero.agents} agents.<br /><em>{hero.jobs} jobs.</em>
+        {/* One text node per line: split nodes ("647" + " agents.") move against each other when the
+            serif swaps in on a cold load, a small layout shift (code review L-3). */}
+        {`${hero.agents} agents.`}<br /><em>{`${hero.jobs} jobs.`}</em>
       </h1>
       <div className={s.copy}>
         <p className={s.lede}>

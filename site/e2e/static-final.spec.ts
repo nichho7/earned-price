@@ -150,11 +150,13 @@ test("keyboard: the event log opens from the keyboard and focus is visible", asy
   await expect(page.locator("[data-event-log] tbody tr")).toHaveCount(36);
 });
 
-test("B5 LCP <= 2.5 s at 4x CPU on a slow-4G profile (Chromium lab measure)", async ({ browser, browserName }) => {
+test("B5 LCP <= 2.5 s and CLS 0 on a cold load at 4x CPU, slow 4G (Chromium lab measure)", async ({ browser, browserName }) => {
   test.skip(browserName !== "chromium", "CPU and network throttling need CDP (Chromium only, ADR B4 R8)");
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await ctx.newPage();
   const cdp = await ctx.newCDPSession(page);
+  await cdp.send("Network.enable");
+  await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
   await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
   // Lighthouse mobile "slow 4G": 150 ms RTT, 1.6 Mbps down, 750 kbps up (stricter than the B5 "Fast 4G" note)
   await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 150, downloadThroughput: (1.6 * 1024 * 1024) / 8, uploadThroughput: (750 * 1024) / 8 });
@@ -169,5 +171,18 @@ test("B5 LCP <= 2.5 s at 4x CPU on a slow-4G profile (Chromium lab measure)", as
   console.log(`[LCP] ${Math.round(lcp)} ms (4x CPU, slow 4G, 390px)`);
   expect(lcp).toBeGreaterThan(0);
   expect(lcp).toBeLessThanOrEqual(2500);
+  // Cold, throttled load is where a late font swap would shift layout (code review L-3): wait for the
+  // fonts, then read every layout shift since navigation.
+  await page.evaluate(() => document.fonts.ready);
+  const cls = await page.evaluate(
+    () => new Promise<number>((resolve) => {
+      let sum = 0;
+      new PerformanceObserver((l) => { for (const e of l.getEntries() as (PerformanceEntry & { value: number; hadRecentInput: boolean })[]) if (!e.hadRecentInput) sum += e.value; })
+        .observe({ type: "layout-shift", buffered: true });
+      setTimeout(() => resolve(sum), 1500);
+    }),
+  );
+  console.log(`[CLS cold] ${cls} (4x CPU, slow 4G, 390px)`);
+  expect(cls).toBe(0);
   await ctx.close();
 });
