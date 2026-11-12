@@ -1,0 +1,12 @@
+/* [CTO] T-033 · event log <details> on the violet ground (the lab's dark log colours never ship). */
+.log { position: relative; margin-top: var(--s7); border-top: var(--hairline) solid var(--line); font: 400 var(--fs-small)/1.4 var(--mono); color: var(--cream-2); }
+.log summary { min-height: 44px; display: flex; align-items: center; gap: var(--s2); list-style: none; cursor: pointer; font-weight: 500; letter-spacing: .08em; color: var(--cream); }
+.log summary::-webkit-details-marker { display: none; }
+/* ▸ closed, ▾ open. A static rotation, no transition, so reduced motion is unaffected. */
+.marker { flex: none; width: .5em; height: .6em; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.log[open] .marker { transform: rotate(90deg); }
+.scroll { overflow-x: auto; }
+.log table { width: 100%; min-width: 720px; border-collapse: collapse; }
+.log th { text-align: left; font-weight: 500; color: var(--cream); padding: 6px var(--s2); border-bottom: var(--hairline) solid var(--line); }
+.log td { padding: 6px var(--s2); border-bottom: var(--hairline) solid var(--slot); vertical-align: top; }
+.log :global(.lnk) { color: var(--cream); }

@@ -1,0 +1,490 @@
+{
+  "schema": "earned-lab-events",
+  "version": 1,
+  "sequence": "fail",
+  "mode": "contract-test",
+  "network": "sandbox",
+  "recorded": false,
+  "placeholder": true,
+  "clock_base_ns": "0",
+  "contract": "PLACEHOLDER_sandbox_contract",
+  "contract_deployed": false,
+  "seller": "PLACEHOLDER_sandbox_seller",
+  "buyer": "PLACEHOLDER_sandbox_buyer",
+  "pack_id": "pack-3",
+  "skills_used": "spec-driven-development, api-and-interface-design, karpathy-guidelines",
+  "notes": [
+    "All t_ms gaps are CTO estimates (block ~1-2 s, TEE review 2-4 s with reasoning off), not measured. Replace with a recorded run.",
+    "Refund path per A-017: shown by a README contract-test step (contract/tests/sandbox.rs balances_follow_the_escrow_rules: pass then fail, same buyer, 0.040 -> 0.035, refund in full). Sandbox tx hashes never resolve on testnet: label this sequence 'contract test (local sandbox)', never with the TESTNET chip.",
+    "Record before matches the sandbox test ({1,0,1,1}). After the live repeat beat it would be {2,0,1,2}; quotes are the same (0.040 -> 0.035)."
+  ],
+  "events": [
+    {
+      "seq": 0,
+      "type": "quote",
+      "t_ms": 0,
+      "at": null,
+      "job_id": null,
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "placeholder_fields": [
+        "block_height"
+      ],
+      "data": {
+        "phase": "before",
+        "block_height": null,
+        "record": {
+          "passes": 1,
+          "fails": 0,
+          "unique_buyers": 1,
+          "jobs": 1
+        },
+        "quote_mnear": 40,
+        "formula": "0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR"
+      }
+    },
+    {
+      "seq": 1,
+      "type": "tx_submitted",
+      "t_ms": 300,
+      "at": null,
+      "job_id": null,
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_create_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "job_id"
+      ],
+      "data": {
+        "action": "create",
+        "actor": "buyer",
+        "signer": "PLACEHOLDER_sandbox_buyer",
+        "deposit_mnear": 40,
+        "hold_deadline_ns": null
+      }
+    },
+    {
+      "seq": 2,
+      "type": "tx_confirmed",
+      "t_ms": 2600,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_create_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "job_id",
+        "block_height",
+        "block_timestamp_ns",
+        "price_mnear",
+        "excess_refunded_mnear",
+        "commit_hash",
+        "created_at_ns",
+        "accept_by_ns",
+        "review_by_ns",
+        "reveal_deadline_ns"
+      ],
+      "data": {
+        "action": "create",
+        "status": "success",
+        "error": null,
+        "block_height": null,
+        "block_timestamp_ns": null,
+        "chain_events": [
+          "create"
+        ],
+        "price_mnear": 40,
+        "excess_refunded_mnear": 0,
+        "commit_hash": "PLACEHOLDER_commit_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "created_at_ns": "2600000000",
+        "accept_by_ns": "122600000000",
+        "review_by_ns": "422600000000",
+        "reveal_deadline_ns": "722600000000"
+      }
+    },
+    {
+      "seq": 3,
+      "type": "tx_submitted",
+      "t_ms": 3100,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_accept_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "job_id"
+      ],
+      "data": {
+        "action": "accept",
+        "actor": "seller",
+        "signer": "PLACEHOLDER_sandbox_seller",
+        "deposit_mnear": 0,
+        "hold_deadline_ns": "122600000000"
+      }
+    },
+    {
+      "seq": 4,
+      "type": "tx_confirmed",
+      "t_ms": 5300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_accept_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "job_id",
+        "block_height",
+        "block_timestamp_ns"
+      ],
+      "data": {
+        "action": "accept",
+        "status": "success",
+        "error": null,
+        "block_height": null,
+        "block_timestamp_ns": null,
+        "chain_events": [
+          "accept"
+        ]
+      }
+    },
+    {
+      "seq": 5,
+      "type": "accepted",
+      "t_ms": 5300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_accept_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "accepted_at_ns"
+      ],
+      "data": {
+        "seller": "PLACEHOLDER_sandbox_seller",
+        "accepted_at_ns": "5300000000"
+      }
+    },
+    {
+      "seq": 6,
+      "type": "tx_submitted",
+      "t_ms": 8600,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_submit_review_xxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "job_id"
+      ],
+      "data": {
+        "action": "submit_review",
+        "actor": "seller",
+        "signer": "PLACEHOLDER_sandbox_seller",
+        "deposit_mnear": 0,
+        "hold_deadline_ns": "422600000000"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "tx_confirmed",
+      "t_ms": 11000,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_submit_review_xxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "job_id",
+        "block_height",
+        "block_timestamp_ns"
+      ],
+      "data": {
+        "action": "submit_review",
+        "status": "success",
+        "error": null,
+        "block_height": null,
+        "block_timestamp_ns": null,
+        "chain_events": [
+          "submit_review"
+        ]
+      }
+    },
+    {
+      "seq": 8,
+      "type": "attested",
+      "t_ms": 11000,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_submit_review_xxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "model",
+        "signing_address",
+        "request_sha256",
+        "response_sha256",
+        "signed_text",
+        "signature",
+        "findings_count"
+      ],
+      "data": {
+        "model": "PLACEHOLDER_model_id",
+        "signing_address": "PLACEHOLDER_0xfe00_337e",
+        "request_sha256": "PLACEHOLDER_request_sha256_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "response_sha256": "PLACEHOLDER_response_sha256_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "signed_text": "PLACEHOLDER_model_id:PLACEHOLDER_request_sha256_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx:PLACEHOLDER_response_sha256_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "signature": "PLACEHOLDER_signature_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "findings_count": 2
+      }
+    },
+    {
+      "seq": 9,
+      "type": "tx_submitted",
+      "t_ms": 11800,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_reveal_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "job_id"
+      ],
+      "data": {
+        "action": "reveal",
+        "actor": "buyer",
+        "signer": "PLACEHOLDER_sandbox_buyer",
+        "deposit_mnear": 0,
+        "hold_deadline_ns": "722600000000"
+      }
+    },
+    {
+      "seq": 10,
+      "type": "tx_confirmed",
+      "t_ms": 14300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_reveal_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "job_id",
+        "block_height",
+        "block_timestamp_ns"
+      ],
+      "data": {
+        "action": "reveal",
+        "status": "success",
+        "error": null,
+        "block_height": null,
+        "block_timestamp_ns": null,
+        "chain_events": [
+          "reveal",
+          "refund"
+        ]
+      }
+    },
+    {
+      "seq": 11,
+      "type": "check_graded",
+      "t_ms": 14300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_reveal_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "hit",
+        "found_so_far"
+      ],
+      "grade_basis": "placeholder: hits invented for layout only; the contract test uses its own review body",
+      "data": {
+        "index": 1,
+        "of": 5,
+        "bug_id": "B1",
+        "title": "Float money in card_surcharge",
+        "hit": true,
+        "found_so_far": 1
+      }
+    },
+    {
+      "seq": 12,
+      "type": "check_graded",
+      "t_ms": 14300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_reveal_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "hit",
+        "found_so_far"
+      ],
+      "grade_basis": "placeholder: hits invented for layout only; the contract test uses its own review body",
+      "data": {
+        "index": 2,
+        "of": 5,
+        "bug_id": "B2",
+        "title": "Local timezone in settlement_day",
+        "hit": false,
+        "found_so_far": 1
+      }
+    },
+    {
+      "seq": 13,
+      "type": "check_graded",
+      "t_ms": 14300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_reveal_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "hit",
+        "found_so_far"
+      ],
+      "grade_basis": "placeholder: hits invented for layout only; the contract test uses its own review body",
+      "data": {
+        "index": 3,
+        "of": 5,
+        "bug_id": "B3",
+        "title": "Unlocked check-then-act in payout",
+        "hit": true,
+        "found_so_far": 2
+      }
+    },
+    {
+      "seq": 14,
+      "type": "check_graded",
+      "t_ms": 14300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_reveal_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "hit",
+        "found_so_far"
+      ],
+      "grade_basis": "placeholder: hits invented for layout only; the contract test uses its own review body",
+      "data": {
+        "index": 4,
+        "of": 5,
+        "bug_id": "B4",
+        "title": "Shared cached schedule mutated in promo_adjust",
+        "hit": false,
+        "found_so_far": 2
+      }
+    },
+    {
+      "seq": 15,
+      "type": "check_graded",
+      "t_ms": 14300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_reveal_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "hit",
+        "found_so_far"
+      ],
+      "grade_basis": "placeholder: hits invented for layout only; the contract test uses its own review body",
+      "data": {
+        "index": 5,
+        "of": 5,
+        "bug_id": "B5",
+        "title": "Exclusive end in statement_window",
+        "hit": false,
+        "found_so_far": 2
+      }
+    },
+    {
+      "seq": 16,
+      "type": "settled",
+      "t_ms": 14300,
+      "at": null,
+      "job_id": "PLACEHOLDER_job_0",
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "tx_hash": "PLACEHOLDER_TX_reveal_xxxxxxxxxxxxxxxxxxxxxx",
+      "placeholder_fields": [
+        "tx_hash",
+        "grade"
+      ],
+      "data": {
+        "outcome": "refunded_buyer",
+        "amount_mnear": 40,
+        "to": "PLACEHOLDER_sandbox_buyer",
+        "reason": "grade_fail",
+        "record_change": "fail",
+        "counts_unique_buyer": false,
+        "grade": {
+          "found": 2,
+          "total": 5,
+          "pass_min": 4,
+          "passed": false,
+          "error": null
+        }
+      }
+    },
+    {
+      "seq": 17,
+      "type": "quote",
+      "t_ms": 14700,
+      "at": null,
+      "job_id": null,
+      "source": "sandbox",
+      "recorded": false,
+      "placeholder": true,
+      "placeholder_fields": [
+        "block_height"
+      ],
+      "data": {
+        "phase": "after",
+        "block_height": null,
+        "record": {
+          "passes": 1,
+          "fails": 1,
+          "unique_buyers": 1,
+          "jobs": 2
+        },
+        "quote_mnear": 35,
+        "formula": "0.030 + 0.010×1 − 0.005×1 = 0.035 NEAR",
+        "prev_quote_mnear": 40,
+        "delta_mnear": -5
+      }
+    }
+  ]
+}

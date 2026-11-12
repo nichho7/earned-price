@@ -16,6 +16,7 @@
 #                               earned-price.testnet accept + submit_review is enough)
 # EARNED_RPC_URL must be unset and EARNED_NETWORK unset or testnet: the run uses the default
 # testnet RPCs, the same ones preflight checks.
+# NODE_OPTIONS and NODE_TLS_REJECT_UNAUTHORIZED must be unset (no preloaded code, TLS checks on).
 # EARNED_HOME defaults to a fresh .earned-live/<UTC time>/ (gitignored, 0700): a new throwaway
 # buyer, as a judge would get. If a step fails, do NOT rerun this script (a new buyer, a new spend
 # and a higher seller quote): follow the resume lines it prints, which keep the same EARNED_HOME.
@@ -56,6 +57,11 @@ done
 # Sec L-1: never a different node or network than the one preflight checks.
 [ -z "${EARNED_RPC_URL:-}" ] || die "unset EARNED_RPC_URL: the live run uses the default testnet RPCs that preflight checks" 3
 [ -z "${EARNED_NETWORK:-}" ] || [ "$EARNED_NETWORK" = testnet ] || die "EARNED_NETWORK must be unset or testnet" 3
+# Sec I-5 (T-078): Node's own env can preload code (NODE_OPTIONS --import/--require) or turn off
+# TLS checks (NODE_TLS_REJECT_UNAUTHORIZED) for every node and npm call below. Refuse, don't inherit.
+for v in NODE_OPTIONS NODE_TLS_REJECT_UNAUTHORIZED; do
+  [ -z "${!v:-}" ] || die "unset $v: the live run refuses Node runtime overrides (preloaded code, TLS checks off)" 3
+done
 for tool in node npm; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed (Node.js >= 20 with npm)" 3
 done

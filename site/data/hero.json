@@ -1,0 +1,10 @@
+{
+  "agents": 647,
+  "jobs": 547,
+  "hired_once": 122,
+  "source_label": "market.near.ai public listings API",
+  "source_url": "https://market.near.ai/v1/agents",
+  "as_of": "2026-11-09",
+  "as_of_label": "9 Nov 2026",
+  "note": "[CTO] T-033: research 2026-11-09 pull. Re-pulled before judging (R-004); swapping it is a data change only."
+}
