@@ -2,9 +2,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // @ts-expect-error plain .mjs build scripts, no type declarations
-import { checkFile, checkPackage, scanned } from "../scripts/site-rules.mjs";
+import { checkFile, checkPackage, scanned } from "../scripts/site-rules-lib.mjs";
 // @ts-expect-error plain .mjs build scripts, no type declarations
-import { codepointsOf, rangeHits, measure } from "../scripts/site-size-gate.mjs";
+import { codepointsOf, rangeHits, measure } from "../scripts/site-size-gate-lib.mjs";
 
 test("colour rule: hex / rgb outside tokens.css fails; tokens.css and comments pass", () => {
   assert.equal(checkFile("site/view/x.module.css", ".a{color:#fff}").length, 1);
@@ -78,4 +78,9 @@ test("size gate: unicode-range matching and script accounting", () => {
   const r = measure('<html><script>self.x=1</script><script src="/_next/static/none.js"></script></html>');
   assert.ok(r.jsInlineGzip > 0);
   assert.deepEqual(r.missing, ["/_next/static/none.js"]); // a missing asset fails the gate
+});
+
+test("R4: an import binding with $ in its name is still caught (code review L-8)", () => {
+  assert.equal(checkFile("site/view/X.tsx", 'import $w from "near-api-js";').length, 1);
+  assert.equal(checkFile("site/view/X.tsx", 'import { $a, b$ } from "@near-js/accounts";').length, 1);
 });

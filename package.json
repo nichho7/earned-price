@@ -27,7 +27,7 @@
     "start": "next start",
     "site:typecheck": "tsc --noEmit",
     "site:unit": "node --test \"site/**/*.test.ts\"",
-    "site:e2e": "playwright test",
+    "site:e2e": "playwright test --grep-invert @perf && playwright test --grep @perf --workers=1",
     "site:ci": "npm run site:typecheck && npm run site:unit && npm run build && npm run site:e2e"
   },
   "dependencies": {

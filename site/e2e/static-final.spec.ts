@@ -1,6 +1,7 @@
 // [CTO] T-033 · ladder stage 1 (server-rendered final state + Beat 1 hook). Runs in Chromium and WebKit.
-// Rules: R1 (animated props), R4 (no wallet/RPC on /), R6 (no-JS + reduced-motion final state, CLS 0),
-// budgets B5 (fonts as actually downloaded), S-011 / S-028 AC 4 copy checks.
+// Rules: R1 (animated props), R4 (no wallet/RPC on /), R6 (no-JS final state, CLS 0; reduced motion is
+// the crossfade story since the 2026-11-12 amendment, see earn.spec.ts), budgets B5 (fonts as actually
+// downloaded), S-011 / S-028 AC 4 copy checks. S-028: the stage is the ported T-070 module (site/earn/).
 import { expect, test, type Page } from "@playwright/test";
 
 const FORBIDDEN_HOSTS = /rpc\.(testnet|mainnet)\.near\.org|helper\.nearprotocol\.com|fastnear|lava\.build|\/api\/review/;
@@ -14,22 +15,23 @@ test("no-JS HTML (what crawlers get) holds the whole final state", async ({ requ
   const res = await request.get("/");
   expect(res.status()).toBe(200);
   const html = (await res.text()).replace(/<!-- -->/g, ""); // React text-node separators
-  for (const s of ["Holds.", "0.040", "counted once", "COUNTED ONCE", "NOT COUNTED", "Price earned, not claimed.", "npx earned-price init", "Event log · 36 events", "647 agents.", "547 jobs.", "as of 9 Nov 2026"])
+  // R6 must-contain list (unchanged by the 2026-11-12 amendment)
+  for (const s of ["Holds.", "0.040", "counted once", "COUNTED ONCE", "NOT COUNTED", "Price earned, not claimed.", "npx earned-price init", "Event log · 36 events", "647 agents.", "547 jobs.", "as of 9 Nov 2026", "NEAR Real-World Money"])
     expect(html, `missing "${s}"`).toContain(s);
   expect(html).toContain('data-stage-state="holds"');
   expect(html).toContain('data-postmark="COUNTED"');
-  // both settle tx on screen (run register): a real testnet link, or a marked placeholder while no recorded run exists
-  for (const n of [1, 2]) {
-    const cell = new RegExp(`data-settle-tx="${n}"[^]*?</span></span>`).exec(html)?.[0] ?? "";
-    expect(cell, `run ${n} settle tx`).toMatch(/href="https:\/\/testnet\.nearblocks\.io\/txns\/|class="ph">PLACEHOLDER</);
+  // both settle tx on screen (run register), each a real testnet explorer link (the T-064 recorded run)
+  for (const [n, hash] of [[1, "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB"], [2, "3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw"]] as const) {
+    const cell = new RegExp(`data-settle-tx="${n}">[^]*?</a>`).exec(html)?.[0] ?? "";
+    expect(cell, `run ${n} settle tx`).toContain(`href="https://testnet.nearblocks.io/txns/${hash}"`);
   }
-  // honesty: placeholder data is announced, never silent
-  if (html.includes('data-placeholder="true"')) {
-    expect(html).toContain("PLACEHOLDER DATA");
-    expect(html).not.toMatch(/href="https:\/\/testnet\.nearblocks\.io\/txns\/PLACEHOLDER/);
-  }
-  // no motion code and no controls in this stage
-  expect(html).not.toMatch(/Skip to result|Replay the run|Motion: o/);
+  // honesty: real data, so no placeholder chip; placeholder data would be announced, never silent
+  expect(html).toContain('data-placeholder="false"');
+  expect(html).not.toContain("PLACEHOLDER DATA");
+  expect(html).not.toMatch(/href="https:\/\/testnet\.nearblocks\.io\/txns\/PLACEHOLDER/);
+  // the controls ship in the markup but stay hidden without JS; the head script marks JS pages only
+  expect(html).toMatch(/<div class="ep-ctl" hidden(="")?>/);
+  expect(html).toContain("classList.add('ep-js')");
 });
 
 for (const width of [390, 1280]) {
@@ -37,10 +39,12 @@ for (const width of [390, 1280]) {
     const ctx = await browser.newContext({ javaScriptEnabled: false, viewport: { width, height: 900 } });
     const page = await ctx.newPage();
     await page.goto("/");
-    await expect(page.locator("[data-stage-state]")).toHaveAttribute("data-stage-state", "holds");
-    await expect(page.locator("#stage-headline")).toHaveText("Holds.");
-    await expect(page.locator("[data-repeat-strip]")).toBeVisible();
+    await expect(page.locator(".ep")).toHaveAttribute("data-stage-state", "holds");
+    await expect(page.locator(".ep .hd .h-b")).toHaveText("Holds.");
+    await expect(page.locator(".ep .rep")).toBeVisible();
+    await expect(page.locator(".ep .pm[data-postmark=COUNTED]")).toBeVisible();
     await expect(page.locator("[data-closer]")).toBeVisible();
+    await expect(page.locator(".ep .ep-ctl")).toBeHidden();
     await noHorizontalScroll(page);
     await ctx.close();
   });
@@ -62,17 +66,19 @@ test("copy guard: no bond / slash / portable reputation wording on the page", as
   expect(text).not.toMatch(/\bbond|\bslash|portable reputation/i);
 });
 
-test("reduced motion: zero animations; R1 holds for anything that does animate", async ({ browser }) => {
+test("on load (before the stage starts): reduced motion runs no transform animation; R1 holds for anything that animates", async ({ browser }) => {
+  // R6 as amended 2026-11-12: reduced motion is the opacity-only crossfade story, not zero animations.
+  // The full timeline under Reduce Motion is checked in earn.spec.ts; here: the page at rest.
   for (const reducedMotion of ["reduce", "no-preference"] as const) {
     const ctx = await browser.newContext({ reducedMotion });
     const page = await ctx.newPage();
     await page.goto("/", { waitUntil: "networkidle" });
+    await page.waitForSelector("[data-ep-mounted]");
     const props = await page.evaluate(() =>
-      document.getAnimations().flatMap((a) => (a.effect as KeyframeEffect | null)?.getKeyframes().flatMap((k) => Object.keys(k)) ?? []),
+      document.getAnimations().filter((a) => a.playState === "running").flatMap((a) => (a.effect as KeyframeEffect | null)?.getKeyframes().flatMap((k) => Object.keys(k)) ?? []),
     );
-    if (reducedMotion === "reduce") expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
-    const bad = props.filter((p) => !["offset", "easing", "composite", "computedOffset", "transform", "opacity", "clipPath"].includes(p));
-    expect(bad, "R1: only transform / opacity / clip-path may animate").toEqual([]);
+    const allowed = reducedMotion === "reduce" ? ["offset", "easing", "composite", "computedOffset", "opacity"] : ["offset", "easing", "composite", "computedOffset", "transform", "opacity", "clipPath"];
+    expect(props.filter((p) => !allowed.includes(p)), "R1 / R6").toEqual([]);
     await ctx.close();
   }
 });
@@ -132,10 +138,14 @@ for (const width of [390, 1280]) {
   });
 }
 
-test("stage headline keeps its heading role inside the live region (code review M-3)", async ({ page }) => {
+test("stage headline keeps its heading role; changes are announced through one polite live region (code review M-3)", async ({ browser }) => {
+  const ctx = await browser.newContext({ javaScriptEnabled: false });
+  const page = await ctx.newPage();
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 2, name: "Holds." })).toBeVisible();
-  await expect(page.getByRole("status").getByRole("heading", { name: "Holds." })).toHaveCount(1);
+  await expect(page.locator(".ep [data-live-region]")).toHaveAttribute("aria-live", "polite");
+  await expect(page.locator(".ep [data-live-region]")).toHaveAttribute("role", "status");
+  await ctx.close();
 });
 
 test("keyboard: the event log opens from the keyboard and focus is visible", async ({ page, browserName }) => {
@@ -150,7 +160,7 @@ test("keyboard: the event log opens from the keyboard and focus is visible", asy
   await expect(page.locator("[data-event-log] tbody tr")).toHaveCount(36);
 });
 
-test("B5 LCP <= 2.5 s and CLS 0 on a cold load at 4x CPU, slow 4G (Chromium lab measure)", async ({ browser, browserName }) => {
+test("B5 LCP <= 2.5 s and CLS 0 on a cold load at 4x CPU, slow 4G, with the player in the bundle (Chromium lab measure) @perf", async ({ browser, browserName }) => {
   test.skip(browserName !== "chromium", "CPU and network throttling need CDP (Chromium only, ADR B4 R8)");
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await ctx.newPage();

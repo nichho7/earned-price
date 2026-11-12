@@ -1,0 +1,3 @@
+/* [CTO] T-033 / S-028 · footer (lab .foot). The closer's styles moved to site/earn/earn-stage.css. */
+.foot { position: relative; margin-top: var(--s5); max-width: 120ch; font: 400 var(--fs-micro)/1.6 var(--mono); color: var(--cream-2); }
+.foot p { margin: var(--s2) 0 0; }

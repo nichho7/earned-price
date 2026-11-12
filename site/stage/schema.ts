@@ -119,7 +119,8 @@ export interface SettledEvent extends EventBase {
     to: string;
     reason: "settle" | "grade_fail";   // chain: payout.kind "settle" / refund.reason "grade_fail"
     record_change: "pass" | "fail";
-    counts_unique_buyer: boolean;      // pass only: true if this buyer is new for this seller
+    counts_unique_buyer?: boolean;     // T-051 fixtures only. The contract never emits it: the site derives
+                                       // "counted once" from get_record before/after (T-070 review H-2), and checks this against it when present
     grade: { found: number; total: number; pass_min: number; passed: boolean; error: string | null };
   };
 }

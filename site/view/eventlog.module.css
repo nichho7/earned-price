@@ -3,7 +3,7 @@
 .log summary { min-height: 44px; display: flex; align-items: center; gap: var(--s2); list-style: none; cursor: pointer; font-weight: 500; letter-spacing: .08em; color: var(--cream); }
 .log summary::-webkit-details-marker { display: none; }
 /* ▸ closed, ▾ open. A static rotation, no transition, so reduced motion is unaffected. */
-.marker { flex: none; width: .5em; height: .6em; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.marker { flex: none; width: .5em; height: .6em; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); forced-color-adjust: none; } /* QA N4: stays visible in forced colours */
 .log[open] .marker { transform: rotate(90deg); }
 .scroll { overflow-x: auto; }
 .log table { width: 100%; min-width: 720px; border-collapse: collapse; }
