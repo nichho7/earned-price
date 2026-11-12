@@ -11,6 +11,7 @@
     "cli/",
     "grader/",
     "packs/",
+    "recorded/",
     "seller/",
     "verify/",
     "!packs/results/",

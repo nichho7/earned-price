@@ -59,6 +59,12 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// A yoctoNEAR quote string as NEAR with 3 decimals ("40000...000" -> "0.040").
+fn near3(yocto: &str) -> String {
+    let m = yocto.parse::<u128>().unwrap() / MILLI;
+    format!("{}.{:03}", m / 1000, m % 1000)
+}
+
 /// (canonical pack-1 key, salt hex, commit hex): the real pack-1 answer key
 /// sealed with the commit.json salt, commit = sha256(u32_be(len K) || K || salt).
 fn commit_vector() -> (String, String, String) {
@@ -312,9 +318,46 @@ async fn balances_follow_the_escrow_rules() {
     );
     assert!(job_is_gone(&e, &job0).await, "job deleted once paid");
 
+    // 3b. Repeat pass by the same buyer (A-017 = C, T-041): the seller is paid
+    // again, but P counts unique buyers, so the quote holds at 0.040.
+    let q_before = quote(&e, e.seller.id().as_str()).await;
+    let r = create(
+        &e,
+        e.seller.id().as_str(),
+        NearToken::from_yoctonear(40 * MILLI),
+    )
+    .await;
+    assert!(r.is_success(), "{r:?}");
+    let job_r: String = r.json().unwrap();
+    let repeat_body = pack1_body(&e, 5, "sbx-repeat").await;
+    accept_and_review(&e, &e.seller, &job_r, &repeat_body).await;
+    let sr = balance(&e.w, &e.seller).await;
+    let r = reveal(&e, &job_r, &repeat_body).await;
+    assert!(r.is_success(), "{r:?}");
+    let paid: bool = r.json().unwrap();
+    assert!(paid, "a repeat pass still pays the seller");
+    assert_eq!(
+        balance(&e.w, &e.seller).await - sr,
+        40 * MILLI,
+        "exact payout"
+    );
+    let q_after = quote(&e, e.seller.id().as_str()).await;
+    println!(
+        "repeat pass (same buyer): seller paid, quote {} -> {}",
+        near3(&q_before),
+        near3(&q_after)
+    );
+    assert_eq!(
+        q_after,
+        (40 * MILLI).to_string(),
+        "a second pass by the same buyer keeps the quote"
+    );
+
     // 4. FAIL: refund path. The buyer gets the 0.040 quote back in full (pays
     // gas only for create + reveal), and the fail counts (0.040 -> 0.035).
     let quote1 = 40 * MILLI;
+    let q_before = quote(&e, e.seller.id().as_str()).await;
+    assert_eq!(q_before, quote1.to_string());
     let b2 = balance(&e.w, &e.buyer).await;
     let r = create(
         &e,
@@ -346,10 +389,15 @@ async fn balances_follow_the_escrow_rules() {
         c1 + quote1 >= c0 && c1 + quote1 < c0 + MILLI,
         "contract kept nothing: before {c0} after {c1}"
     );
-    assert_eq!(
-        quote(&e, e.seller.id().as_str()).await,
-        (35 * MILLI).to_string()
+    let q_after = quote(&e, e.seller.id().as_str()).await;
+    // The README contract-test step (T-041) points at this line.
+    println!(
+        "fail + refund: quote {} -> {} (buyer refunded {} NEAR in full)",
+        near3(&q_before),
+        near3(&q_after),
+        near3(&quote1.to_string())
     );
+    assert_eq!(q_after, (35 * MILLI).to_string());
     // T-024: the record behind the quote, readable with a keyless view.
     let rec: Value =
         e.c.view("get_record")
@@ -360,7 +408,7 @@ async fn balances_follow_the_escrow_rules() {
             .unwrap();
     assert_eq!(
         rec,
-        json!({ "passes": 1, "fails": 1, "unique_buyers": 1, "jobs": 2 })
+        json!({ "passes": 2, "fails": 1, "unique_buyers": 1, "jobs": 3 })
     );
     assert!(job_is_gone(&e, &job1).await);
 
@@ -552,7 +600,7 @@ async fn balances_follow_the_escrow_rules() {
     let owner: String = e.c.view("owner").await.unwrap().json().unwrap();
     assert_eq!(owner, e.c.id().to_string());
 
-    // 10. next_job_id view: five creates succeeded above (jobs 0..4).
+    // 10. next_job_id view: six creates succeeded above (jobs 0..5).
     let next: String = e.c.view("next_job_id").await.unwrap().json().unwrap();
-    assert_eq!(next, "5");
+    assert_eq!(next, "6");
 }

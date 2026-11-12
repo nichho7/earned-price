@@ -45,7 +45,8 @@ export function parseTxOutcome(outcome, contractId) {
       if (typeof line !== "string" || !line.startsWith("EVENT_JSON:")) continue;
       try {
         const e = JSON.parse(line.slice("EVENT_JSON:".length));
-        if (e?.standard === "earned_price" && typeof e.event === "string" && isObj(e.data)) events.push({ event: e.event, data: e.data });
+        // blockHash: the block whose state includes this receipt's writes (step 4 pins its record read there).
+        if (e?.standard === "earned_price" && typeof e.event === "string" && isObj(e.data)) events.push({ event: e.event, data: e.data, blockHash: typeof o.block_hash === "string" && o.block_hash !== "" ? o.block_hash : null });
       } catch {
         // not an event we emit
       }

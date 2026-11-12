@@ -338,6 +338,22 @@ scripts/deploy.sh --dry-run
 # Offline receipt check, no key, no network: 4 checks in order, then a tampered copy
 node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json           # see: PASS 1-4, then NOT AN OFFICIAL PACK (fixture)
 node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json --tamper  # see: FAIL: check 2 TEE signature covers this review
+
+# The real receipt from our first live testnet run (tx hashes + explorer links: recorded/README.md)
+node cli/earned.js verify recorded/pack-2.json   # see: REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-2 request (prompt v1), regrade PASS.
+```
+
+#### Contract test: a fail refunds the buyer and drops the price
+
+`earned hire --pack 3` (step 4) is a repeat pass by the same buyer, so the quote holds at
+0.040 (P counts unique buyers). The fail path is proven here, on a local sandbox chain with
+real balances (Rust + cargo-near; the first run downloads near-sandbox):
+
+```sh
+cargo test -p earned-price --features sandbox-test --test sandbox balances_follow_the_escrow_rules -- --nocapture
+# see: repeat pass (same buyer): seller paid, quote 0.040 -> 0.040
+# see: fail + refund: quote 0.040 -> 0.035 (buyer refunded 0.040 NEAR in full)
+# see: test balances_follow_the_escrow_rules ... ok
 ```
 
 The checks: 1 commit hash matches the revealed key, and the key is the pack's
@@ -399,6 +415,23 @@ Safety rails:
   `timeout(job_id)` refunds it after 2 minutes. If a create tx was sent but
   its job id could not be read, the script writes `target/near/smoke-unconfirmed.txt` and
   refuses to smoke again until you have checked the explorer and deleted that file.
+
+### Live CLI run (team)
+
+`scripts/live-run.sh` runs the judge's CLI path against `earned-price.testnet` from a clean
+checkout: `init`, `quote`, `pick 2`, `hire` (step 3), `verify` (plus `--tamper`), then
+`hire --pack 3` (step 4, same buyer) and `verify` of that receipt. Without `--go` it only runs
+the read-only preflight (Node, a clean checkout, `NEAR_AI_API_KEY`, `EARNED_SELLER_PRIVATE_KEY`,
+the live code_hash, `seller.earned-price.testnet` exists and holds that key) and signs nothing.
+Each step must print its `SEE:` line or the script stops, names the step's log and prints
+the commands to resume with the same buyer (`EARNED_HOME`); do not rerun the script after a
+failed step. `--go` refuses `EARNED_RPC_URL` and any network but testnet, and refuses a seller
+whose record is not empty (the demo's 0.030 -> 0.040 -> 0.040 needs a fresh seller) unless
+`--used-seller` is given.
+
+The first `--go` run (2026-11-12, jobs 1 and 2) is shipped in `recorded/`: both receipts, the
+console output and every tx hash with its explorer link. `earned hire` replays it, labelled
+RECORDED, when the seller can't review live.
 
 ## License
 

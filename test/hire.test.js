@@ -21,8 +21,9 @@ import { DEMO_SELLER, loadJob, saveJob, sealPick } from "../cli/pick.js";
 import { YOCTO_PER_MNEAR } from "../cli/quote.js";
 import { REVEAL_GAS, TIMEOUT_GAS, parseTxOutcome } from "../cli/tx.js";
 import { makeLocalSeller, replayReason } from "../cli/seller-local.js";
-import { HireError, assertJobId, outcomeOf, parseHireArgs, receiptPaths, runHire, stageLine } from "../cli/hire.js";
+import { HireError, RECORDED_DIR, assertJobId, outcomeOf, parseHireArgs, receiptPaths, runHire, stageLine } from "../cli/hire.js";
 import { errorLine } from "../cli/errors.js";
+import { FAIL_LINE, classifyClose, recordDelta, step4Report } from "../cli/step4.js";
 import { parseVerifyArgs, printableJson, runVerify } from "../cli/verify-cmd.js";
 
 const CONTRACT = "earned-price.testnet";
@@ -63,11 +64,11 @@ const PACK2_REQUEST = buildReviewRequest(PACK2.reviewFiles);
 const PASS_BODY = readJson("packs/results/round-1/raw/pack-2-run01.json").response_body; // 5/5
 const FAIL_BODY = JSON.stringify({ id: "chatcmpl-fail-1", created: 1794398261, model: MODEL, choices: [{ message: { role: "assistant", content: JSON.stringify({ findings: [] }) } }] });
 
-function reviewResult(responseBody = PASS_BODY, jobId = "7") {
-  const text = `${MODEL}:${sha256Hex(PACK2_REQUEST)}:${sha256Hex(responseBody)}`;
+function reviewResult(responseBody = PASS_BODY, jobId = "7", request = PACK2_REQUEST) {
+  const text = `${MODEL}:${sha256Hex(request)}:${sha256Hex(responseBody)}`;
   const tee = {
     model: MODEL,
-    request_sha256: sha256Hex(PACK2_REQUEST),
+    request_sha256: sha256Hex(request),
     response_sha256: sha256Hex(responseBody),
     signed_text: text,
     signature: eip191Sign(text, sk),
@@ -78,7 +79,7 @@ function reviewResult(responseBody = PASS_BODY, jobId = "7") {
   };
   const findings = findingsFromResponse(responseBody);
   return {
-    request_body: PACK2_REQUEST,
+    request_body: request,
     response_body: responseBody,
     findings,
     check: { ok: true, list: findings },
@@ -91,16 +92,17 @@ function reviewResult(responseBody = PASS_BODY, jobId = "7") {
 }
 
 // --- an in-memory escrow -----------------------------------------------------------------------
-function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record = { passes: 0, fails: 0, unique_buyers: 0, jobs: 0 }, clock }) {
+function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record = { passes: 0, fails: 0, unique_buyers: 0, jobs: 0 }, passBuyers = [], packId = "pack-2", clock }) {
   const chain = {
     record: { ...record },
+    passBuyers: new Set(passBuyers), // the contract's pass_buyers: P counts a buyer's first pass only
     job: {
       id: jobId,
       buyer: BUYER,
       seller: DEMO_SELLER,
       price: price.toString(),
       commit_hash: sealed.commit_hash,
-      pack_id: "pack-2",
+      pack_id: packId,
       created_at_ns: msToNs(T0),
       accept_by_ns: msToNs(T0 + 2 * MIN),
       review_by_ns: msToNs(T0 + 7 * MIN),
@@ -113,14 +115,28 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
     nullReads: 0, // get_job answers null this many times first (view lag)
     hideReviewReads: 0, // get_job shows review: null this many times while a review is on-chain
     seq: 0,
+    // Block history (review R-1): every state change makes a block; views can be pinned to one.
+    height: 0,
+    blocks: new Map(),
+    head: null,
+    staleFinal: null, // a block hash: finality=final get_record/quote reads answer from it (view lag)
+    unknownBlockReads: 0, // block-pinned reads answer UNKNOWN_BLOCK this many times first
   };
+  chain.snap = () => {
+    const h = `B${++chain.height}`;
+    chain.blocks.set(h, { record: { ...chain.record }, job: chain.job ? { ...chain.job } : null });
+    chain.head = h;
+    return h;
+  };
+  chain.snap();
   const quoteOf = (r) => Math.min(100, Math.max(25, 30 + 10 * r.unique_buyers - 5 * r.fails));
   const ev = (event, data) => `EVENT_JSON:${JSON.stringify({ standard: "earned_price", version: "0.1.0", event, data })}`;
-  const ok = (hash, value, logs, signerId) => ({
+  // logs[i] is one receipt's logs; blocks[i] the block it executed in (default: the head after the tx).
+  const ok = (hash, value, logs, signerId, blocks = []) => ({
     status: { SuccessValue: b64(JSON.stringify(value ?? null)) },
     transaction: { hash },
     transaction_outcome: { id: hash, outcome: { executor_id: signerId, logs: [] } },
-    receipts_outcome: logs.map((l, i) => ({ id: `${hash}-r${i}`, outcome: { executor_id: CONTRACT, logs: l } })),
+    receipts_outcome: logs.map((l, i) => ({ id: `${hash}-r${i}`, block_hash: blocks[i] ?? chain.snap(), outcome: { executor_id: CONTRACT, logs: l } })),
   });
   const fail = (hash, msg, signerId) => ({
     status: { Failure: { ActionError: { index: 0, kind: { FunctionCallError: { ExecutionError: `Smart contract panicked: ${msg}` } } } } },
@@ -133,6 +149,24 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
     const p = JSON.parse(init.body).params;
     const args = JSON.parse(Buffer.from(p.args_base64, "base64").toString());
     let value;
+    if (p.block_id !== undefined) {
+      // A block-pinned read: the state as of that block, or UNKNOWN_BLOCK (ahead of this node).
+      const b = chain.blocks.get(p.block_id);
+      if (!b || chain.unknownBlockReads > 0) {
+        if (b) chain.unknownBlockReads--;
+        return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", error: { name: "HANDLER_ERROR", cause: { name: "UNKNOWN_BLOCK" } } }) };
+      }
+      if (p.method_name === "get_job") value = b.job && args.id === b.job.id ? b.job : null;
+      else if (p.method_name === "get_record") value = b.record;
+      else if (p.method_name === "quote") value = (BigInt(quoteOf(b.record)) * YOCTO_PER_MNEAR).toString();
+      else throw new Error(`unexpected pinned view ${p.method_name}`);
+      return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: p.block_id, block_height: 1, logs: [], result: bytes(value) } }) };
+    }
+    if (chain.staleFinal && (p.method_name === "get_record" || p.method_name === "quote")) {
+      const b = chain.blocks.get(chain.staleFinal);
+      value = p.method_name === "get_record" ? b.record : (BigInt(quoteOf(b.record)) * YOCTO_PER_MNEAR).toString();
+      return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: chain.staleFinal, block_height: 1, logs: [], result: bytes(value) } }) };
+    }
     if (p.method_name === "get_job") {
       if (chain.nullReads > 0) {
         chain.nullReads--;
@@ -146,7 +180,7 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
     else if (p.method_name === "quote") value = (BigInt(quoteOf(chain.record)) * YOCTO_PER_MNEAR).toString();
     else if (p.method_name === "signers") value = [signer];
     else throw new Error(`unexpected view ${p.method_name}`);
-    return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: "BLOCK1", block_height: 1, logs: [], result: bytes(value) } }) };
+    return { ok: true, json: async () => ({ jsonrpc: "2.0", id: "earned", result: { block_hash: chain.head, block_height: 1, logs: [], result: bytes(value) } }) };
   };
   chain.outcomes = {}; // every outcome by tx hash, as an RPC lookup would return it
   chain.sendTx = async (req) => {
@@ -170,6 +204,7 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
       if (who !== j.seller) return fail(hash, "Earned Price: only the job's seller can accept it", who);
       j.status = "accepted";
       j.accepted_at_ns = t.toString();
+      chain.snap();
       return ok(hash, null, [[ev("accept", { job_id: j.id, seller: j.seller, accepted_at_ns: t.toString() })]], who);
     }
     if (req.methodName === "submit_review") {
@@ -187,10 +222,16 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
       const reveal = ev("reveal", { ...base, pack_id: g.pack_id, found: g.found, total: g.total, pass_min: g.pass_min, passed: g.passed, matched: g.matched.map((m) => m.bug), missed: g.missed, false_positives: g.false_positives, error: g.error ?? null, outcome: g.passed ? "pass" : "fail" });
       chain.job = null;
       if (g.passed) {
+        const closed = chain.snap(); // the reveal receipt: job deleted, record not written yet
+        const transfer = chain.snap();
+        await chain.betweenCloseAndPayout?.();
         chain.record.passes++;
-        chain.record.unique_buyers++;
+        if (!chain.passBuyers.has(j.buyer)) {
+          chain.passBuyers.add(j.buyer);
+          chain.record.unique_buyers++;
+        }
         chain.record.jobs++;
-        return ok(hash, true, [[reveal], [], [ev("payout", { ...base, amount: j.price, kind: "settle" })]], who);
+        return ok(hash, true, [[reveal], [], [ev("payout", { ...base, amount: j.price, kind: "settle" })]], who, [closed, transfer, chain.snap()]);
       }
       chain.record.fails++;
       chain.record.jobs++;
@@ -215,14 +256,15 @@ function makeChain({ jobId = "7", sealed, price = 30n * YOCTO_PER_MNEAR, record 
 }
 
 // --- buyer home with a job as `earned pick 2` leaves it ----------------------------------------
-function setup({ jobId = "7", spent = (30n * YOCTO_PER_MNEAR).toString(), status = "open", record } = {}) {
+function setup({ jobId = "7", spent, status = "open", record, pack = "2", priceMilli = 30n, passBuyers, noJob = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "earned-hire-"));
-  saveState(dir, { version: 1, network: "testnet", account_id: BUYER, public_key: "ed25519:FakePublicKey11111111111111111111111111111111", private_key: PRIV, status: "created", spent_yocto: spent, created_at: "2026-11-12T00:00:00Z" });
-  const sealed = sealPick(PACK2, "2", SALT);
-  const price = 30n * YOCTO_PER_MNEAR;
-  saveJob(dir, { version: 1, network: "testnet", contract: CONTRACT, buyer: BUYER, seller: DEMO_SELLER, pack_id: sealed.pack_id, pack_hash: PACK2.hash, commit_hash: sealed.commit_hash, K: sealed.K, salt: sealed.salt, price_yocto: price.toString(), status, job_id: jobId, create_tx: "CreateTx111" });
+  const price = priceMilli * YOCTO_PER_MNEAR;
+  saveState(dir, { version: 1, network: "testnet", account_id: BUYER, public_key: "ed25519:FakePublicKey11111111111111111111111111111111", private_key: PRIV, status: "created", spent_yocto: spent ?? price.toString(), created_at: "2026-11-12T00:00:00Z" });
+  const packData = loadPack(pack);
+  const sealed = sealPick(packData, pack, SALT);
+  if (!noJob) saveJob(dir, { version: 1, network: "testnet", contract: CONTRACT, buyer: BUYER, seller: DEMO_SELLER, pack_id: sealed.pack_id, pack_hash: packData.hash, commit_hash: sealed.commit_hash, K: sealed.K, salt: sealed.salt, price_yocto: price.toString(), status, job_id: jobId, create_tx: "CreateTx111" });
   const clock = { t: T0 + 5000, now() { return this.t; } };
-  const chain = makeChain({ jobId: /^\d+$/.test(jobId) ? jobId : "7", sealed, price, clock, record });
+  const chain = makeChain({ jobId: /^\d+$/.test(jobId) ? jobId : "7", sealed, price, clock, record, passBuyers, packId: sealed.pack_id });
   const recordedDir = mkdtempSync(join(tmpdir(), "earned-recorded-"));
   const lines = [];
   const deps = {
@@ -564,7 +606,11 @@ test("reveal rejected by the escrow: nothing moved, job stays live (status revie
 test("parseHireArgs: no args or --local-seller once; anything else is USAGE", () => {
   assert.deepEqual(parseHireArgs([]), { localSeller: false });
   assert.deepEqual(parseHireArgs(["--local-seller"]), { localSeller: true });
-  for (const bad of [["--local-seller", "--local-seller"], ["2"], ["--pack", "3"], ["--yes"]]) assert.throws(() => parseHireArgs(bad), { code: "USAGE" });
+  assert.deepEqual(parseHireArgs(["--pack", "3"]), { localSeller: false, pack: "3" });
+  assert.deepEqual(parseHireArgs(["--local-seller", "--pack", "3"]), { localSeller: true, pack: "3" });
+  for (const bad of [["--local-seller", "--local-seller"], ["2"], ["--pack"], ["--pack", "4"], ["--pack", "3", "--pack", "3"], ["--pack", "--local-seller"], ["--rigged"], ["--pack", "3", "--rigged"], ["--yes"]]) {
+    assert.throws(() => parseHireArgs(bad), { code: "USAGE" });
+  }
   assert.ok(new HireError("X", "y") instanceof Error);
 });
 
@@ -946,3 +992,330 @@ test("sec L-1 PoC: the error line escapes terminal control bytes and cuts key-sh
   assert.match(errorLine(Object.assign(new Error("pk ed25519:4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"), { code: "X" }), ""), /4vJ9JU1b/, "public keys are kept");
   assert.equal(errorLine(new Error("boom"), "hire failed"), "error UNEXPECTED: hire failed");
 });
+
+// --- step 4 (S-023 / T-032): `earned hire --pack 3`, the same buyer again ------------------------
+
+const PACK3 = loadPack("3");
+const PACK3_REQUEST = buildReviewRequest(PACK3.reviewFiles);
+// A real recorded pack-3 TEE answer (round 4, run 1): our regrade gives 4/5, B5 missed. The tests
+// read the grade from the regrade, as the CLI does; nothing in the CLI knows "4/5".
+const PACK3_PASS_BODY = readJson("packs/results/round-4/raw/pack-3-run01.json").response_body;
+const PACK3_FAIL_BODY = JSON.stringify({ id: "chatcmpl-fail-3", created: 1794398261, model: MODEL, choices: [{ message: { role: "assistant", content: JSON.stringify({ findings: [] }) } }] });
+// After step 3 (pack 2 passed, paid 0.030): one pass from this buyer, quote 0.040.
+const AFTER_STEP3 = { passes: 1, fails: 0, unique_buyers: 1, jobs: 1 };
+const step4Setup = (over = {}) => setup({ pack: "3", priceMilli: 40n, record: AFTER_STEP3, passBuyers: [BUYER], ...over });
+const pack3Seller = (chain, clock, body) => localSellerWith(chain, clock, async ({ job }) => reviewResult(body, String(job.id), PACK3_REQUEST));
+
+test("step 4 repeat pass: per-bug grade from the regrade (4/5, B5 missed), settle tx, quote holds 0.040 with P/passes/F, fail line, SEE: step 4 PASS", async () => {
+  const expected = grade(PACK3.key, findingsFromResponse(PACK3_PASS_BODY));
+  assert.equal(`${expected.found}/${expected.total}`, "4/5", "fixture sanity: the recorded run grades 4/5");
+  const { dir, chain, clock, deps, lines } = step4Setup();
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  const out = text(lines);
+  assert.equal(r.pass, true);
+  assert.equal(r.step4.kind, "repeat");
+  assert.deepEqual({ paid: r.step4.close.paid_seller, refunded: r.step4.close.refunded_buyer, counts: r.step4.close.counts_unique_buyer }, { paid: true, refunded: false, counts: false });
+  assert.match(out, /Grade: 4\/5 found \(pass mark 4\) -> PASS/);
+  for (const b of ["B1", "B2", "B3", "B4"]) assert.match(out, new RegExp(`  ${b} found   \\(finding at line \\d+; key `));
+  assert.match(out, /  B5 missed  \(key /);
+  assert.match(out, /Passed\. The seller was paid from escrow\./);
+  assert.match(out, /settle tx \(the settle runs inside reveal\): revealTx3/);
+  assert.match(out, /Next quote \(get_record\): 0\.040 -> 0\.040 NEAR/);
+  assert.match(out, /formula: 0\.030 \+ 0\.010×1 − 0\.005×0 = 0\.040 NEAR/);
+  assert.match(out, /P = 1 unique buyers with a pass \(2 passes, 1 counted: one per buyer\), F = 0 fails, 2 graded jobs/);
+  assert.match(out, /Repeat pass: this buyer already has a paid pass with seller\.earned-price\.testnet, so P \(unique buyers\) stays 1; passes 1 -> 2\./);
+  assert.match(out, /Quote held: 0\.040 -> 0\.040 NEAR \(P = 1 unique buyer, 2 passes, F = 0\)/);
+  assert.ok(lines.includes("a fail subtracts 0.005 (see README step: contract test)"));
+  assert.match(out, /REVIEW AUTHENTIC \(offline\): genuine NEAR AI TEE review of the official pack-3 request/);
+  assert.equal(lines.at(-1), "SEE: step 4 PASS");
+  assert.ok(!out.includes("SEE: step 3"));
+  const job = loadJob(dir);
+  assert.equal(job.status, "closed");
+  assert.equal(job.outcome, "settled");
+  assert.deepEqual(job.record_before, AFTER_STEP3, "the record read before the reveal is kept for a resumed run");
+  assert.equal(loadState(dir).spent_yocto, (40n * YOCTO_PER_MNEAR).toString(), "paid, so the spend stays counted");
+  const receipt = JSON.parse(readFileSync(receiptPaths(dir, "7").receipt, "utf8"));
+  assert.deepEqual(receipt.quote, { before: "0.040", after: "0.040", formula: "0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR" });
+});
+
+test("step 4 real fail: refund amount from the refund event, refund tx, quote 0.040 -> 0.035 from get_record, SEE: step 4 PASS (the honest fail)", async () => {
+  const { dir, chain, clock, deps, lines } = step4Setup();
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_FAIL_BODY) });
+  const out = text(lines);
+  assert.equal(r.outcome.kind, "refunded_fail");
+  assert.equal(r.step4.kind, "fail");
+  assert.deepEqual({ paid: r.step4.close.paid_seller, refunded: r.step4.close.refunded_buyer }, { paid: false, refunded: true });
+  assert.match(out, /Grade: 0\/5 found \(pass mark 4\) -> FAIL/);
+  for (const b of ["B1", "B2", "B3", "B4", "B5"]) assert.match(out, new RegExp(`  ${b} missed  `));
+  assert.match(out, /Failed\. You were refunded and the seller takes a fail\./);
+  assert.match(out, /refund tx \(the refund runs inside reveal\): revealTx3/);
+  assert.match(out, /Refund: 0\.040 NEAR back to you \(refund event, reason grade_fail, in reveal tx revealTx3\)\./);
+  assert.match(out, /Next quote \(get_record\): 0\.040 -> 0\.035 NEAR/);
+  assert.match(out, /formula: 0\.030 \+ 0\.010×1 − 0\.005×1 = 0\.035 NEAR/);
+  assert.match(out, /Fail counted: F 0 -> 1, so the quote dropped: 0\.040 -> 0\.035 NEAR/);
+  assert.equal(lines.at(-1), "SEE: step 4 PASS");
+  assert.equal(r.pass, true);
+  assert.equal(loadState(dir).spent_yocto, "0", "the refund releases the reservation");
+  assert.equal(loadJob(dir).outcome, "refunded_fail");
+});
+
+test("step 4 fail: the refund amount is the event's, never the job price; a short refund gets no SEE PASS", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  const sendTx = async (req) => {
+    const o = await chain.sendTx(req);
+    if (req.methodName !== "reveal") return o;
+    for (const ro of o.receipts_outcome) ro.outcome.logs = ro.outcome.logs.map((l) => l.replace(/"amount":"\d+"/, `"amount":"${(39n * YOCTO_PER_MNEAR).toString()}"`));
+    return o;
+  };
+  const r = await runHire({ ...deps, sendTx, makeSeller: pack3Seller(chain, clock, PACK3_FAIL_BODY) });
+  assert.match(text(lines), /Refund: 0\.039 NEAR back to you/);
+  assert.equal(r.pass, false);
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+test("step 4 first pass (this buyer had no pass yet): P +1, quote rises, says to run step 3 first, no SEE: step 4 PASS", async () => {
+  const { chain, clock, deps, lines } = step4Setup({ priceMilli: 30n, record: { passes: 0, fails: 0, unique_buyers: 0, jobs: 0 }, passBuyers: [] });
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  const out = text(lines);
+  assert.equal(r.step4.kind, "first_pass");
+  assert.equal(r.step4.close.counts_unique_buyer, true);
+  assert.match(out, /First pass from this buyer with seller\.earned-price\.testnet: P 0 -> 1, so the quote rose 0\.030 -> 0\.040 NEAR\./);
+  assert.equal(r.pass, false);
+  assert.ok(!out.includes("SEE: step 4 PASS"));
+});
+
+test("step 4 unclear: another buyer's job for the same seller closes between the two reads -> nothing attributed, no SEE PASS", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  chain.beforeSend = async (req) => {
+    if (req.methodName === "reveal") {
+      chain.record.passes++; // someone else's first pass lands in the same window
+      chain.record.unique_buyers++;
+      chain.record.jobs++;
+    }
+    return null;
+  };
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "unclear");
+  assert.match(text(lines), /Step 4 can't attribute the quote change to this job: the seller's record moved by more than this job \(jobs \+2, passes \+2, fails \+0, unique_buyers \+1\)/);
+  assert.equal(r.pass, false);
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+test("step 4 resume: the reveal landed in an earlier run; the record read before it comes from the job file -> still the repeat verdict", async () => {
+  const { dir, chain, clock, deps, lines } = step4Setup();
+  chain.beforeSend = async (req) => {
+    if (req.methodName === "reveal") throw new Error("socket hang up");
+  };
+  await assert.rejects(runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) }), { code: "REVEAL_UNCONFIRMED" });
+  assert.deepEqual(loadJob(dir).record_before, AFTER_STEP3);
+  chain.beforeSend = null;
+  const landed = await chain.sendTx({ state: { account_id: BUYER }, methodName: "reveal", args: chain.sends[2].args });
+  lines.length = 0;
+  const r = await runHire({ ...deps, pack: "3", lookupTx: async ({ txHash }) => (txHash === "revealTx3" ? landed : null), pick: async () => assert.fail("an open pack-3 job is resumed, never re-picked") });
+  const out = text(lines);
+  assert.match(out, /Resuming the open pack-3 job 7/);
+  assert.match(out, /Earlier reveal tx revealTx3 landed/);
+  assert.match(out, /Next quote \(get_record\): 0\.040 -> 0\.040 NEAR/);
+  assert.equal(r.step4.kind, "repeat");
+  assert.equal(lines.at(-1), "SEE: step 4 PASS");
+});
+
+test("hire --pack 3 with no open job: runs pick 3 first (embedded, no SEE: step 2), then the whole hire on that job", async () => {
+  const { dir, chain, clock, deps, lines, sealed } = step4Setup({ noJob: true });
+  const picks = [];
+  const pick = async (opts) => {
+    picks.push(opts);
+    // What `earned pick 3` leaves behind (the real runPick is covered in test/pick.test.js).
+    saveJob(opts.dir, { version: 1, network: "testnet", contract: CONTRACT, buyer: BUYER, seller: DEMO_SELLER, pack_id: "pack-3", pack_hash: PACK3.hash, commit_hash: sealed.commit_hash, K: sealed.K, salt: sealed.salt, price_yocto: (40n * YOCTO_PER_MNEAR).toString(), status: "open", job_id: "7", create_tx: "CreateTx3" });
+    opts.out("SEE-free pick output");
+  };
+  const r = await runHire({ ...deps, pack: "3", pick, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(picks.length, 1);
+  assert.deepEqual({ pack: picks[0].pack, dir: picks[0].dir, embedded: picks[0].embedded }, { pack: "3", dir, embedded: true });
+  assert.match(text(lines), /No open job: opening a pack-3 job first \(as `earned pick 3`\)/);
+  assert.equal(r.step4.kind, "repeat");
+  assert.equal(lines.at(-1), "SEE: step 4 PASS");
+  // A closed job before it (step 3's pack-2 job) is also a "no open job": pick runs.
+  const s2 = setup({ status: "closed" });
+  let picked = 0;
+  await assert.rejects(runHire({ ...s2.deps, pack: "3", pick: async () => { picked++; throw new HireError("STOP", "stop after pick"); } }), { code: "STOP" });
+  assert.equal(picked, 1);
+});
+
+test("hire --pack 3 refuses while a job for another pack is open (its salt is needed); nothing picked or sent", async () => {
+  const { chain, deps } = setup(); // open pack-2 job
+  let picked = 0;
+  await assert.rejects(runHire({ ...deps, pack: "3", pick: async () => picked++ }), (e) => e.code === "OTHER_JOB_OPEN" && /for pack-2 is still open/.test(e.message) && /earned hire --pack 3/.test(e.message));
+  assert.equal(picked, 0);
+  assert.equal(chain.sends.length, 0);
+  await assert.rejects(runHire({ ...deps, pack: "9" }), { code: "USAGE" });
+});
+
+test("step4 units: classifyClose reads paid/refunded from the outcome and counts_unique_buyer from the record delta", () => {
+  const rec = (passes, fails, unique_buyers, jobs) => ({ passes, fails, unique_buyers, jobs });
+  const b = rec(1, 0, 1, 1);
+  assert.deepEqual(recordDelta(b, rec(2, 0, 1, 2)), { jobs: 1, passes: 1, fails: 0, unique_buyers: 0 });
+  assert.equal(recordDelta(null, b), null);
+  const settled = { kind: "settled" };
+  const failed = { kind: "refunded_fail", refundYocto: "1" };
+  assert.equal(classifyClose(settled, b, rec(2, 0, 1, 2)).kind, "repeat");
+  assert.equal(classifyClose(settled, b, rec(2, 0, 2, 2)).kind, "first_pass");
+  assert.equal(classifyClose(failed, b, rec(1, 1, 1, 2)).kind, "fail");
+  // An event that disagrees with the record is never forced into a verdict.
+  assert.equal(classifyClose(settled, b, rec(1, 1, 1, 2)).kind, "unclear");
+  assert.equal(classifyClose(failed, b, rec(2, 0, 1, 2)).kind, "unclear");
+  assert.equal(classifyClose(failed, b, rec(2, 1, 2, 3)).kind, "unclear", "a fail plus someone else's pass in the window");
+  assert.equal(classifyClose(settled, b, rec(2, 0, 1, 1)).kind, "unclear", "jobs must move by exactly one");
+  assert.match(classifyClose(settled, null, b).reason, /before the reveal/);
+  assert.match(classifyClose(settled, b, null).reason, /after the close/);
+  for (const kind of ["payout_failed_refunded", "timeout_refund", "timeout_refund_fail", "timeout_paid_seller"]) {
+    const c = classifyClose({ kind }, b, rec(1, 0, 1, 1));
+    assert.equal(c.kind, "other");
+    assert.equal(c.paid_seller || c.refunded_buyer, false);
+  }
+  assert.equal(classifyClose(null, b, b).kind, "other");
+});
+
+test("step4 units: step4Report prints SEE-worthy pass only when regrade, escrow event, receipt and same-block quote all agree", () => {
+  const before = { record: AFTER_STEP3, quoteMilli: 40 };
+  const after = { record: { passes: 2, fails: 0, unique_buyers: 1, jobs: 2 }, quoteMilli: 40 };
+  const okVerify = (passed) => ({ ok: true, checks: [{}, {}, {}, { ok: true, regrade: { passed } }] });
+  const base = { outcome: { kind: "settled" }, txHash: "T", seller: DEMO_SELLER, priceYocto: (40n * YOCTO_PER_MNEAR).toString(), before, after, regrade: { passed: true }, escrowAgrees: true, verify: okVerify(true) };
+  const good = step4Report(base);
+  assert.equal(good.pass, true);
+  assert.ok(good.lines.includes(FAIL_LINE));
+  assert.equal(FAIL_LINE, "a fail subtracts 0.005 (see README step: contract test)");
+  for (const bad of [{ escrowAgrees: false }, { regrade: null }, { regrade: { passed: false } }, { verify: null }, { verify: { ...okVerify(true), ok: false } }, { verify: okVerify(false) }, { after: { ...after, quoteMilli: 50 } }, { before: { ...before, quoteMilli: 30 } }]) {
+    assert.equal(step4Report({ ...base, ...bad }).pass, false, JSON.stringify(bad));
+  }
+  // The fail branch: refund must be the full price from the event, quote must be the record's.
+  const fb = { ...base, outcome: { kind: "refunded_fail", refundYocto: base.priceYocto }, after: { record: { passes: 1, fails: 1, unique_buyers: 1, jobs: 2 }, quoteMilli: 35 }, regrade: { passed: false }, verify: okVerify(false) };
+  const f = step4Report(fb);
+  assert.equal(f.kind, "fail");
+  assert.equal(f.pass, true);
+  assert.match(f.lines.join("\n"), /Refund: 0\.040 NEAR back to you[\s\S]*0\.040 -> 0\.035 NEAR/);
+  for (const bad of [{ outcome: { kind: "refunded_fail", refundYocto: null } }, { regrade: { passed: true } }, { verify: okVerify(true) }, { after: { ...fb.after, quoteMilli: 40 } }]) {
+    assert.equal(step4Report({ ...fb, ...bad }).pass, false, JSON.stringify(bad));
+  }
+  // No verdict lines and no pass for a non-graded close.
+  const other = step4Report({ ...base, outcome: { kind: "timeout_paid_seller" } });
+  assert.deepEqual([other.kind, other.lines, other.pass], ["other", [], false]);
+});
+
+test("earned hire: no --rigged flag anywhere in the CLI (S-023 AC3)", () => {
+  for (const f of ["cli/earned.js", "cli/hire.js", "cli/step4.js", "cli/pick.js"]) {
+    assert.ok(!/--rigged|rigged/i.test(readFileSync(new URL(`../${f}`, import.meta.url), "utf8")), f);
+  }
+});
+
+// --- T-032 review R-1 / sec L-3: the after-read must include this job's close --------------------
+
+/** Another buyer's close for the same seller, applied on-chain right now (its own block). */
+function otherClose(chain, kind) {
+  if (kind === "first_pass") {
+    chain.record.passes++;
+    chain.record.unique_buyers++;
+  } else if (kind === "repeat") chain.record.passes++;
+  else chain.record.fails++;
+  chain.record.jobs++;
+  return chain.snap();
+}
+
+test("R-1 probe: ours is a repeat, a stale final view shows only another buyer's first pass -> never first_pass, unclear, no SEE", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  chain.betweenCloseAndPayout = async () => {
+    chain.staleFinal = otherClose(chain, "first_pass"); // final views stop here: theirs, not ours
+  };
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.notEqual(r.step4.kind, "first_pass");
+  assert.equal(r.step4.kind, "unclear");
+  assert.match(text(lines), /Step 4 can't attribute the quote change to this job: the seller's record moved by more than this job \(jobs \+2/);
+  assert.equal(r.pass, false);
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+test("sec L-3 probe: ours is a first pass, a stale final view shows only another buyer's repeat -> no 'Repeat pass', no SEE", async () => {
+  const { chain, clock, deps, lines } = step4Setup({ passBuyers: ["someone-else.testnet"] });
+  chain.betweenCloseAndPayout = async () => {
+    chain.staleFinal = otherClose(chain, "repeat");
+  };
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "unclear");
+  assert.ok(!text(lines).includes("Repeat pass"));
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+test("R-1: final views lag behind our close the whole run -> the read pinned to the payout block still gives repeat + SEE", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  chain.betweenCloseAndPayout = async () => {
+    chain.staleFinal = chain.head; // final = before our record write, for every later read
+  };
+  const r = await runHire({ ...deps, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "repeat");
+  assert.equal(lines.at(-1), "SEE: step 4 PASS");
+});
+
+test("R-1: the closing block is ahead of the RPC for a moment -> polled; never known -> unclear, no SEE", async () => {
+  const a = step4Setup();
+  a.chain.betweenCloseAndPayout = async () => {
+    a.chain.unknownBlockReads = 2;
+  };
+  const r1 = await runHire({ ...a.deps, makeSeller: pack3Seller(a.chain, a.clock, PACK3_PASS_BODY) });
+  assert.equal(r1.step4.kind, "repeat");
+  assert.equal(a.lines.at(-1), "SEE: step 4 PASS");
+  const b = step4Setup();
+  b.chain.betweenCloseAndPayout = async () => {
+    b.chain.unknownBlockReads = 1000;
+  };
+  const r2 = await runHire({ ...b.deps, makeSeller: pack3Seller(b.chain, b.clock, PACK3_PASS_BODY) });
+  assert.equal(r2.step4.kind, "unclear");
+  assert.match(text(b.lines), /could not be read at this job's closing block/);
+  assert.ok(!b.lines.includes("SEE: step 4 PASS"));
+});
+
+test("R-1: get_job is not null at the pinned block (that state does not include our close) -> unclear, no SEE", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  const sendTx = async (req) => {
+    const o = await chain.sendTx(req);
+    if (req.methodName === "reveal") {
+      const at = o.receipts_outcome.at(-1).block_hash;
+      chain.blocks.get(at).job = { id: "7" };
+    }
+    return o;
+  };
+  const r = await runHire({ ...deps, sendTx, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "unclear");
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+test("R-1: a closing tx whose receipts carry no block_hash is never compared (unclear, no SEE)", async () => {
+  const { chain, clock, deps, lines } = step4Setup();
+  const sendTx = async (req) => {
+    const o = await chain.sendTx(req);
+    if (req.methodName === "reveal") for (const ro of o.receipts_outcome) delete ro.block_hash;
+    return o;
+  };
+  const r = await runHire({ ...deps, sendTx, makeSeller: pack3Seller(chain, clock, PACK3_PASS_BODY) });
+  assert.equal(r.step4.kind, "unclear");
+  assert.ok(!lines.includes("SEE: step 4 PASS"));
+});
+
+// --- T-064: the shipped RECORDED replay (recorded/pack-2.json, pack-3.json from the 2026-11-12 run) ----
+
+for (const [pack, want] of [["2", { job: 1, grade: "5/5", settle: "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB" }], ["3", { job: 2, grade: "4/5", settle: "3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw" }]]) {
+  test(`replay ships: no live seller -> the recorded pack-${pack} run, labelled RECORDED, REVIEW AUTHENTIC with the real anchors; no receipt for this job`, async () => {
+    const { dir, chain, deps, lines } = setup({ pack });
+    // The real shipped folder and the real trust anchors (not the test signer).
+    const r = await runHire({ ...deps, trust: TRUST, recordedDir: RECORDED_DIR });
+    const out = text(lines);
+    assert.ok(!out.includes("ships with this version yet"), out);
+    assert.match(out, new RegExp(`RECORDED \\(a past run, job ${want.job}; not your job, and no receipt is written for your job\\)`));
+    assert.match(out, new RegExp(`RECORDED grade: ${want.grade} PASS; settle tx ${want.settle}`));
+    assert.match(out, new RegExp(`RECORDED REVIEW AUTHENTIC \\(offline\\): genuine NEAR AI TEE review of the official pack-${pack} request`));
+    // Replay-only: nothing recorded is submitted; the job just times out and refunds.
+    assert.deepEqual(chain.sends.map((s) => s.methodName), ["timeout"]);
+    assert.equal(r.outcome.kind, "timeout_refund");
+    assert.equal(r.receiptPath, null);
+    assert.ok(!existsSync(receiptPaths(dir, "7").receipt));
+  });
+}

@@ -22,8 +22,9 @@ import { dirname, join } from "node:path";
 import { CONTRACT_ACCOUNT, NETWORK } from "./names.js";
 import { RPC_RETRIES, RPC_URLS, assertTestnet, assertTestnetRpc, loadState, redact, saveState, stateDir } from "./init.js";
 import { formatNear } from "./spend-cap.js";
-import { YOCTO_PER_MNEAR, fetchQuote, formatMilli, viewFunction } from "./quote.js";
-import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, jobFilePath, loadJob, reconcileCreate, releaseSpend, saveJob, sendCreateTx } from "./pick.js";
+import { YOCTO_PER_MNEAR, fetchQuote, formatMilli, parseRecord, quoteMilli, viewFunction } from "./quote.js";
+import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, defaultPickDeps, jobFilePath, loadJob, reconcileCreate, releaseSpend, runPick, saveJob, sendCreateTx } from "./pick.js";
+import { STEP4_PACK, step4Report } from "./step4.js";
 import { REVEAL_GAS, TIMEOUT_GAS, TxError, parseTxOutcome } from "./tx.js";
 import { makeLocalSeller } from "./seller-local.js";
 import { readReceipt, writeReceipt } from "./receipt-file.js";
@@ -46,7 +47,8 @@ export const LOOKUP_TRIES = 6; // a saved closing tx: looked up this many times 
 const RESTART = Symbol("restart"); // the stage changed under a timeout: go round the main loop again
 const MAX_REVIEW_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_ROUNDS = 8; // stage changes per run: open -> accepted -> reviewed is 3
-const USAGE = "usage: earned hire [--local-seller]";
+const USAGE = "usage: earned hire [--pack <1|2|3>] [--local-seller]";
+const PACK_ARGS = ["1", "2", "3"];
 
 export class HireError extends Error {
   constructor(code, message, extra = {}) {
@@ -57,14 +59,41 @@ export class HireError extends Error {
   }
 }
 
-/** argv after "hire" -> { localSeller }. */
+/** argv after "hire" -> { localSeller, pack? }. `--pack N` opens a pack-N job first when none is open (step 4). */
 export function parseHireArgs(argv) {
   let localSeller = false;
-  for (const a of argv) {
+  let pack;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
     if (a === "--local-seller" && !localSeller) localSeller = true;
+    else if (a === "--pack" && pack === undefined && PACK_ARGS.includes(argv[i + 1])) pack = argv[++i];
     else throw new HireError("USAGE", USAGE);
   }
-  return { localSeller };
+  return pack === undefined ? { localSeller } : { localSeller, pack };
+}
+
+/**
+ * `--pack N`: the job hire works on. An open pack-N job is resumed as is. No open job (none yet,
+ * or the last one closed/failed): `earned pick N` runs first (same seal, pin check, haggle, spend
+ * cap and create as the pick command). An open job for another pack is refused: its salt is
+ * needed to reveal it, so it must be finished first. Nothing is sent before these checks.
+ */
+async function ensurePackJob(deps, dir, out) {
+  const want = `pack-${deps.pack}`;
+  const job = loadJob(dir);
+  if (job && !REUSABLE_STATUSES.has(job.status)) {
+    if (job.pack_id === want) {
+      out(`Resuming the open ${want} job ${job.job_id ?? "(create not confirmed yet)"} from ${jobFilePath(dir)}`);
+      return;
+    }
+    throw new HireError(
+      "OTHER_JOB_OPEN",
+      `job ${job.job_id ?? "(no id)"} for ${job.pack_id} is still ${job.status}; finish it with \`earned hire\` first, then run \`earned hire --pack ${deps.pack}\`. Nothing was sent.`,
+    );
+  }
+  if (typeof deps.pick !== "function") throw new HireError("NO_PICK", "this build cannot open a job from `earned hire --pack`; run `earned pick` first");
+  out(`No open job: opening a ${want} job first (as \`earned pick ${deps.pack}\`)`);
+  await deps.pick({ pack: deps.pack, dir, out, embedded: true });
 }
 
 /** A job id we may put in a path or an arg: 1-20 digits, at most u64::MAX. Returns it as a string. */
@@ -180,14 +209,16 @@ export function outcomeOf(events, jobId, buyer) {
     return { kind: "payout_failed_refunded", line: "The payout to the seller failed, so you were refunded. The seller's record is unchanged.", graded: false, refundYocto: refunded(failedPayout), reveal };
   }
   if (reveal) {
-    if (reveal.data.outcome === "pass" && payout) return { kind: "settled", line: "Passed. The seller was paid from escrow.", graded: true, refundYocto: null, reveal };
-    if (reveal.data.outcome === "fail" && refund) return { kind: "refunded_fail", line: "Failed. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal };
+    // recordBlock: the block of the receipt that wrote the record (payout callback = record_pass;
+    // the reveal's own receipt = record_fail), so the after-read can be pinned to it (review R-1).
+    if (reveal.data.outcome === "pass" && payout) return { kind: "settled", line: "Passed. The seller was paid from escrow.", graded: true, refundYocto: null, reveal, recordBlock: payout.blockHash ?? null };
+    if (reveal.data.outcome === "fail" && refund) return { kind: "refunded_fail", line: "Failed. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal, recordBlock: refund.blockHash ?? null };
     return null;
   }
   if (timeout) {
     const reason = timeout.data.reason;
     if (reason === "not_accepted" && refund) return { kind: "timeout_refund", line: "Timed out: the seller did not accept by accept_by. You were refunded; the seller's record is unchanged.", graded: false, refundYocto: refunded(refund), reveal: null };
-    if (reason === "no_review" && refund) return { kind: "timeout_refund_fail", line: "Timed out: no signed review by review_by. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal: null };
+    if (reason === "no_review" && refund) return { kind: "timeout_refund_fail", line: "Timed out: no signed review by review_by. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal: null, recordBlock: refund.blockHash ?? null };
     if (reason === "no_reveal" && payout) return { kind: "timeout_paid_seller", line: "Timed out: no valid reveal by reveal_deadline, so the signed review paid the seller. The record is unchanged.", graded: false, refundYocto: null, reveal: null };
   }
   return null;
@@ -220,6 +251,10 @@ export async function runHire(deps) {
   const dir = deps.dir ?? stateDir(deps.cwd ?? process.cwd(), deps.env ?? process.env);
   const buyer = loadState(dir);
   if (!buyer || buyer.status !== "created") throw new HireError("NO_BUYER", "no testnet buyer yet; run `earned init` first");
+  if (deps.pack !== undefined) {
+    if (!PACK_ARGS.includes(String(deps.pack))) throw new HireError("USAGE", USAGE);
+    await ensurePackJob(deps, dir, out); // takes and releases the pick lock itself
+  }
   const release = acquirePickLock(dir, { say: out });
   try {
     return await new Hire({ ...deps, out, dir }).run();
@@ -494,9 +529,10 @@ class Hire {
     try {
       before = await fetchQuote({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, seller: this.job.seller });
     } catch {
-      before = null; // only used to wait for the record to move
+      before = null; // used to wait for the record to move and, for step 4, to read what moved
     }
-    this.save({ ...this.job, status: "revealing" });
+    // Kept in the job file so a run that resumes from a landed reveal can still compare (step 4).
+    this.save({ ...this.job, status: "revealing", record_before: before ? before.record : null });
     let outcome;
     try {
       outcome = await this.sendTx("reveal", { job_id: this.jobId, key: this.job.K, salt: this.job.salt, response: this.review.response_body }, REVEAL_GAS, (h) => {
@@ -603,14 +639,17 @@ class Hire {
       }
     };
     if (kind === "reveal") this.review = reviewWithHash(this.reviews, this.job.review_checked_sha256) ?? this.review;
+    before ??= this.savedBefore();
 
     let regrade = null;
+    let escrowAgrees = false;
     if (outcome?.reveal && this.review) {
       const { g, lines } = gradeLines(this.key, this.review.response_body);
       lines.forEach((l) => this.say(l));
       regrade = g;
       const e = outcome.reveal.data;
-      if (e.found !== g.found || e.passed !== g.passed) this.say(`WARNING: the escrow graded ${e.found}/${e.total} (${e.passed ? "pass" : "fail"}); this CLI's regrade differs`);
+      escrowAgrees = e.found === g.found && e.passed === g.passed;
+      if (!escrowAgrees) this.say(`WARNING: the escrow graded ${e.found}/${e.total} (${e.passed ? "pass" : "fail"}); this CLI's regrade differs`);
     } else if (outcome?.reveal) {
       const e = outcome.reveal.data;
       this.say(`Grade (escrow): ${e.found}/${e.total} found (pass mark ${e.pass_min}) -> ${e.passed ? "PASS" : "FAIL"}${e.error ? ` (${e.error})` : ""}`);
@@ -621,10 +660,11 @@ class Hire {
       return { job: this.job, outcome: null, receiptPath: null, verify: null, pass: false };
     }
     this.say(outcome.line);
-    this.say(`  ${kind === "reveal" ? "settle tx (the settle runs inside reveal)" : "timeout tx"}: ${p.txHash}`);
+    const txLabel = kind !== "reveal" ? "timeout tx" : outcome.kind === "settled" ? "settle tx (the settle runs inside reveal)" : outcome.kind === "refunded_fail" ? "refund tx (the refund runs inside reveal)" : "reveal tx";
+    this.say(`  ${txLabel}: ${p.txHash}`);
     this.say(`  ${EXPLORER}/txns/${p.txHash}`);
 
-    const quote = await this.nextQuote(before, outcome.graded);
+    const quote = await this.nextQuote(before, outcome);
     let receiptPath = null;
     let v = null;
     if (kind === "reveal" && this.review && this.liveReviewOnChain) {
@@ -633,18 +673,67 @@ class Hire {
       this.say("No receipt: this CLI does not hold the live review that the escrow stored for this job.");
     }
     close();
+    if (this.job.pack_id === STEP4_PACK && kind === "reveal") {
+      // Step 4 (S-023): the repeat pass (or a real fail), checked against the on-chain record.
+      const step4 = step4Report({ outcome, txHash: p.txHash, seller: this.job.seller, priceYocto: this.job.price_yocto, before, after: this.afterQuote, regrade, escrowAgrees, verify: v });
+      step4.lines.forEach((l) => this.say(l));
+      if (step4.pass) this.say("SEE: step 4 PASS");
+      else this.say("Job file closed; run `earned hire --pack 3` for a new pack 3 job.");
+      return { job: this.job, outcome, receiptPath, verify: v, pass: step4.pass, step4 };
+    }
     const pass = outcome.kind === "settled" && regrade?.passed === true && v?.ok === true && v.checks?.[3]?.ok === true && v.checks[3].regrade?.passed === true;
     if (pass) this.say("SEE: step 3 PASS");
     else this.say("Job file closed; run `earned pick <1|2|3>` for a new job.");
     return { job: this.job, outcome, receiptPath, verify: v, pass };
   }
 
+  /**
+   * get_record + quote at the block of the closing receipt that wrote the record, accepted only if
+   * get_job(this job) is null at that same block. The block may be ahead of the RPC for a moment
+   * (UNKNOWN_BLOCK): polled VIEW_POLLS times. Returns the fetchQuote result or null (step 4 then
+   * says "unclear" and prints no SEE line).
+   */
+  async pinnedAfter(outcome) {
+    const at = outcome.graded ? outcome.recordBlock : null;
+    if (typeof at !== "string" || at === "") return null;
+    for (let i = 0; i < VIEW_POLLS; i++) {
+      if (i > 0) await this.sleep(POLL_MS);
+      let q;
+      let job;
+      try {
+        q = await fetchQuote({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, seller: this.job.seller, blockId: at });
+        job = await viewFunction({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, method: "get_job", args: { id: this.jobId }, blockId: at });
+      } catch {
+        continue; // the RPC does not know that block yet
+      }
+      if (q.blockHash !== at) return null; // not the block we asked for: never compare it
+      return job === null ? q : null; // still open at that block: this state does not include our close
+    }
+    return null;
+  }
+
+  /** The record read just before an earlier run's reveal (job file), as { record, quoteMilli }, or null. */
+  savedBefore() {
+    try {
+      const record = parseRecord(this.job.record_before);
+      return { record, quoteMilli: quoteMilli(record) };
+    } catch {
+      return null;
+    }
+  }
+
   /** The quote after the close, from get_record. A graded close is waited for (the view lags). */
-  async nextQuote(before, graded) {
+  async nextQuote(before, outcome) {
+    const graded = outcome.graded;
     // The quote just before the close if we read it, else the price this job paid (L-2).
     const beforeText = formatMilli(before ? before.quoteMilli : Number(BigInt(this.job.price_yocto) / YOCTO_PER_MNEAR));
-    let after = null;
-    for (let i = 0; i < VIEW_POLLS; i++) {
+    // Review R-1 / sec L-3: only a read that provably includes this job's close may be compared with
+    // the before-read. Close txs come back at EXECUTED_OPTIMISTIC, final views trail them, and
+    // another buyer's close of the same seller also moves `jobs`. So get_record + quote are read AT
+    // the block of the receipt that wrote the record, and get_job(job) must be null at that block.
+    this.afterQuote = await this.pinnedAfter(outcome);
+    let after = this.afterQuote;
+    for (let i = 0; !after && i < VIEW_POLLS; i++) {
       try {
         after = await fetchQuote({ fetch: this.d.fetch, urls: this.d.urls, contractId: this.contractId, seller: this.job.seller });
       } catch {
@@ -657,6 +746,7 @@ class Hire {
       this.say(`Next quote: unavailable (testnet RPC); was ${beforeText} NEAR. Run \`earned quote ${this.job.seller}\`.`);
       return { before: beforeText, after: "unavailable", formula: undefined };
     }
+    // A display-only read (not pinned to our close) is never handed to step 4 (this.afterQuote stays null).
     this.say(`Next quote (get_record): ${beforeText} -> ${formatMilli(after.quoteMilli)} NEAR`);
     after.lines.slice(1).forEach((l) => this.say(l));
     return { before: beforeText, after: formatMilli(after.quoteMilli), formula: after.lines[1].replace(/^\s*formula: /, "") };
@@ -765,6 +855,8 @@ export async function defaultHireDeps(env = process.env, { localSeller = false }
     lookupTx,
     lookupCreate: lookupTx,
     makeSeller,
+    // `--pack N` with no open job: the same pick as `earned pick N` (demo seller, scripted haggle).
+    pick: async (opts) => runPick({ ...(await defaultPickDeps(env)), ...opts }),
   };
 }
 
