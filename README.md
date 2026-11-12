@@ -231,6 +231,19 @@ to ship with, in plain words, each with what it costs and what would fix it.
   and offline verify checks the signature against its own trust anchors. For
   anything that matters, check the transaction on the testnet explorer or point
   `EARNED_RPC_URL` at an RPC you trust.
+- **Our own NEAR AI outage can still cost the hosted seller a fail** (T-084).
+  The website's seller accepts before it calls the TEE (A-010), and an
+  accepted job with no review can only end in `timeout`, which refunds the
+  buyer and records a fail for the seller (A-008). So before each accept the
+  site checks NEAR AI with a free `POST /v1/check_api_key` (gateway up, key
+  valid, credit left); if that fails (401, 402, 429, 5xx, timeout) it declines
+  the open job instead, so the buyer is refunded at once and the record is
+  untouched. The check can't see everything: NEAR AI can fail in the seconds
+  between the check and the review, or the review model's own backend can be
+  down while the gateway answers; that job still ends as a fail on our seller.
+  An unexpected answer from the check (for example a 404 if NEAR AI moves the
+  endpoint, which its docs mark deprecated) is logged and the review goes
+  ahead as before.
 - **Fake buyers and the key holder.** A seller paying for jobs from its own buyer
   accounts can farm its quote up (see the Sybil limit above, A-014), and whoever
   holds the contract account's full-access key can deploy new code (see "Trust
