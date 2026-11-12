@@ -18,7 +18,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { grade } from "../grader/grade.js";
-import { bindingOk, checkAttestationBinding, verifyCompletionSignature } from "./nearai-verify.mjs";
+import { bindingOk, checkAttestationBinding, verifyCompletionSignature } from "../verify/nearai-verify.js";
 
 const BASE = "https://cloud-api.near.ai/v1";
 const arg = (name, dflt) => {

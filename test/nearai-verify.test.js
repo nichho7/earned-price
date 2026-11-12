@@ -10,7 +10,7 @@ import {
   recoverEip191,
   sha256Hex,
   verifyCompletionSignature,
-} from "../spike/nearai-verify.mjs";
+} from "../verify/nearai-verify.js";
 
 const evidence = JSON.parse(
   readFileSync(new URL("../spike/evidence/attestation-keyless-2026-11-10.json", import.meta.url), "utf8"),

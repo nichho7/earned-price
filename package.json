@@ -12,6 +12,7 @@
     "grader/",
     "packs/",
     "seller/",
+    "verify/",
     "!packs/results/",
     "names.json"
   ],

@@ -1,10 +1,11 @@
-// Offline verification helpers for NEAR AI Cloud evidence (T-003 spike).
+// Offline verification helpers for NEAR AI Cloud evidence (written in the T-003 spike; moved out of
+// spike/ in T-027 so the shipped seller module, seller/review.js, can use them).
 // No network, no API key. Sources (read 2026-11-10):
 //   https://docs.near.ai/cloud/verification/cloud-api/response-signatures.md
 //   https://docs.near.ai/cloud/verification/cloud-api/gateway-attestation.md
 //   https://github.com/nearai/nearai-cloud-verifier
 // Not covered here (needs network collateral): Intel DCAP quote signature chain
-// (dcap-qvl / TEE Explorer) and NVIDIA GPU evidence (NRAS). See README in this folder.
+// (dcap-qvl / TEE Explorer) and NVIDIA GPU evidence (NRAS). See spike/README.md.
 import { createHash } from "node:crypto";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { ed25519 } from "@noble/curves/ed25519.js";
