@@ -6,12 +6,21 @@
 //   (none)    both.
 // Two kinds of check, and it prints only file paths and the kind of finding, never a matched value:
 //   1. Patterns: a NEAR ed25519 SECRET key (64 bytes base58, ~87 chars; public keys are ~44 and pass),
+//      the same key's base58 body with no `ed25519:` prefix (any 85-90 char base58 run that decodes to 64
+//      bytes whose second half is the ed25519 public key of the first: a real key, so no false positives),
+//      a `secp256k1:` secret key (32-byte seed or 96-byte extended; its 64-byte public keys pass),
 //      `sk-...` API keys, PEM private keys, and a secret-named variable assigned a literal value.
 //   2. Known values: the value of every secret-named variable in this process's environment (on Vercel
 //      that is the real NEAR AI key, seller key, hash secret and Upstash token), and the private_key in any
 //      local key file (.earned/*.json under EARNED_HOME or the working folder). Any of them anywhere = fail.
-// Fakes in test files that say DO-NOT-LEAK are allowed (they are the tests' own canaries).
+//      A NEAR key value also adds its other working forms: the body without the prefix, and the 32-byte
+//      seed form (near-api-js accepts `ed25519:<seed>` as the same private key; security review M-1).
+// A test file may hold a fake only when DO-NOT-LEAK is INSIDE the matched string (security review L-4): a
+// base58 key can never contain it, so key-shaped fakes in tests must be built at runtime.
+// Not scanned (security review I-3): .next/server/chunks (server-only code, not served) and runtime responses
+// of the site-api functions (covered by the T-028/T-029 reviews, not by this build gate).
 // Skills used: security-and-hardening, ci-cd-and-automation, karpathy-guidelines
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -22,8 +31,47 @@ export const SECRET_ENV_NAMES = [
 ];
 
 const B58 = "1-9A-HJ-NP-Za-km-z";
+const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/** base58 (Bitcoin alphabet, as NEAR uses) -> bytes; null if a character is not base58. */
+export function base58Decode(s) {
+  let n = 0n;
+  for (const c of s) {
+    const i = ALPHABET.indexOf(c);
+    if (i < 0) return null;
+    n = n * 58n + BigInt(i);
+  }
+  const out = [];
+  while (n > 0n) { out.unshift(Number(n & 0xffn)); n >>= 8n; }
+  for (const c of s) { if (c !== "1") break; out.unshift(0); }
+  return Uint8Array.from(out);
+}
+
+export function base58Encode(bytes) {
+  let n = 0n;
+  for (const b of bytes) n = (n << 8n) | BigInt(b);
+  let s = "";
+  while (n > 0n) { s = ALPHABET[Number(n % 58n)] + s; n /= 58n; }
+  for (const b of bytes) { if (b !== 0) break; s = "1" + s; }
+  return s;
+}
+
+/** true when `body` is a real NEAR ed25519 secret key body: 64 bytes = seed + the seed's public key. */
+export function isEd25519SecretBody(body) {
+  const b = base58Decode(body);
+  if (!b || b.length !== 64) return false;
+  const pub = ed25519.getPublicKey(b.subarray(0, 32));
+  return pub.every((x, i) => x === b[32 + i]);
+}
+
 export const PATTERNS = [
   { kind: "NEAR ed25519 secret key", re: new RegExp(`ed25519:[${B58}]{80,90}(?![${B58}])`, "g") },
+  {
+    kind: "NEAR ed25519 secret key (no prefix)",
+    re: new RegExp(`(?<![${B58}])[${B58}]{85,90}(?![${B58}])`, "g"),
+    verify: isEd25519SecretBody,
+  },
+  { kind: "NEAR secp256k1 secret key", re: new RegExp(`secp256k1:(?:[${B58}]{40,46}|[${B58}]{125,135})(?![${B58}])`, "g") },
   { kind: "sk- API key", re: /\bsk-[A-Za-z0-9_-]{20,}/g },
   { kind: "PEM private key", re: /-----BEGIN (?:RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/g },
   {
@@ -38,9 +86,10 @@ const isTestFile = (rel) => /(^|\/)(test|e2e)\//.test(rel) || /\.(test|spec)\.[c
 /** Findings in one file's text: [{ file, kind }]. `values` = known secret values to look for. */
 export function scanText(rel, text, values = []) {
   const out = [];
-  for (const { kind, re } of PATTERNS) {
+  for (const { kind, re, verify } of PATTERNS) {
     for (const m of text.matchAll(re)) {
-      if (isTestFile(rel) && FAKE.test(m[0] + text.slice(m.index, m.index + m[0].length + 40))) continue;
+      if (verify && !verify(m[0])) continue;
+      if (isTestFile(rel) && FAKE.test(m[0])) continue; // the canary word must be part of the match (L-4)
       out.push({ file: rel, kind });
       break; // one finding per kind per file is enough to fail; never echo the match
     }
@@ -49,12 +98,28 @@ export function scanText(rel, text, values = []) {
   return out;
 }
 
-/** Known secret values: secret-named env vars (>= 8 chars) and private keys in local key files. */
+/**
+ * A known value plus its other working forms when it is a NEAR key (security review M-1): the base58 body
+ * without the `ed25519:` / `secp256k1:` prefix, and the 32-byte seed form (the first 32 bytes of a 64-byte
+ * ed25519 or 96-byte secp256k1 secret key; near-api-js accepts it as the same private key). A bare body
+ * also matches the prefixed and the split ("ed25519:" + body) forms, since the check is a substring check.
+ */
+export function keyForms(name, value) {
+  const out = [{ name, value }];
+  const m = new RegExp(`^(?:(ed25519|secp256k1):)?([${B58}]{40,})$`).exec(value);
+  if (!m) return out;
+  if (m[1]) out.push({ name: `${name} (no prefix)`, value: m[2] });
+  const bytes = base58Decode(m[2]);
+  if (bytes && (bytes.length === 64 || bytes.length === 96)) out.push({ name: `${name} (seed form)`, value: base58Encode(bytes.subarray(0, 32)) });
+  return out;
+}
+
+/** Known secret values: secret-named env vars (>= 8 chars) and private keys in local key files, in every form. */
 export function knownSecrets(env = process.env, cwd = process.cwd()) {
   const out = [];
   for (const name of SECRET_ENV_NAMES) {
     const v = env[name];
-    if (typeof v === "string" && v.trim().length >= 8) out.push({ name, value: v.trim() });
+    if (typeof v === "string" && v.trim().length >= 8) out.push(...keyForms(name, v.trim()));
   }
   for (const dir of [env.EARNED_HOME, join(cwd, ".earned")].filter(Boolean)) {
     if (!existsSync(dir)) continue;
@@ -62,7 +127,7 @@ export function knownSecrets(env = process.env, cwd = process.cwd()) {
       if (!f.endsWith(".json")) continue;
       try {
         const k = JSON.parse(readFileSync(join(dir, f), "utf8"))?.private_key;
-        if (typeof k === "string" && k.length >= 16) out.push({ name: `private_key in ${f}`, value: k });
+        if (typeof k === "string" && k.length >= 16) out.push(...keyForms(`private_key in ${f}`, k));
       } catch { /* not a key file */ }
     }
   }
