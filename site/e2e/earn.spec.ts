@@ -290,6 +290,49 @@ test("frames at 4x CPU during the earn beat: no long animation frame > 50 ms, ta
   await ctx.close();
 });
 
+test("failsafe race (review O-2): JS that arrives after the 2.5 s failsafe keeps the final state on screen; it never rewinds to READY", async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } }); // headline in the band: autoplay would fire at once
+  const page = await ctx.newPage();
+  await page.addInitScript(() => {
+    const w = window as unknown as { __states: string[] };
+    w.__states = [];
+    document.addEventListener("DOMContentLoaded", () => {
+      const ep = document.querySelector<HTMLElement>(".ep")!;
+      w.__states.push(ep.dataset.stageState ?? "");
+      new MutationObserver(() => w.__states.push(ep.dataset.stageState ?? "")).observe(ep, { attributes: true, attributeFilter: ["data-stage-state"] });
+    });
+  });
+  await page.route("**/_next/static/chunks/**/*.js", async (r) => { await new Promise((d) => setTimeout(d, 3500)); await r.continue(); });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(3000);
+  expect(await page.locator(".ep").evaluate((el) => !el.hasAttribute("data-ep-mounted") && getComputedStyle(el).opacity), "failsafe showed the server's final state before the player mounted").toBe("1");
+  await page.waitForSelector("[data-ep-mounted]", { timeout: 15_000 });
+  await page.waitForTimeout(1000);
+  const states = await page.evaluate(() => (window as unknown as { __states: string[] }).__states);
+  expect(states).not.toContain("ready");
+  expect((await snap(page)).state).toBe("holds");
+  await expect(page.locator('.ep [data-act="replay"]')).toBeVisible();
+  await ctx.close();
+});
+
+for (const width of [390, 1280])
+  test(`tx links at ${width}: one line each (Designer QA note 2) and a hit area of at least 24 px (note 3)`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width, height: 900 } });
+    const page = await ctx.newPage();
+    await mount(page);
+    await page.locator('.ep [data-act="skip"]').click();
+    const links = await page.locator(".ep a.lnk").evaluateAll((as) => as.map((a) => {
+      const tops = new Set([...a.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
+      return { slot: a.closest<HTMLElement>("[data-slot]")?.dataset.slot ?? "", lines: tops.size, h: a.getBoundingClientRect().height };
+    }));
+    expect(links.length).toBeGreaterThan(0);
+    for (const l of links) {
+      if (l.slot === "reg") expect(l.lines, `register link wraps at ${width}`).toBe(1);
+      expect(l.h, `${l.slot} link hit area at ${width}`).toBeGreaterThanOrEqual(24);
+    }
+    await ctx.close();
+  });
+
 test("honest data: real recorded run, so no PLACEHOLDER DATA chip; the network chip sits in the stage, not the header", async ({ page }) => {
   await mount(page);
   await expect(page.locator('[data-chip="placeholder"]')).toHaveCount(0);

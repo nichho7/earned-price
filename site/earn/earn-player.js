@@ -4,8 +4,8 @@
 // whose seq the run already has (L-2), the live region reads text only (L-3), and the takeover layer has
 // no animation of its own: the waves are hidden at rest by CSS, so the peak animation count drops by one (M-5).
 // Fixed skeleton (build spec 8.1, B5 CLS <= 0.02): in RECORDED mode every slot is locked at mount to the
-// height of its tallest step, measured in one synchronous pass while the stage is still hidden, and
-// re-measured when the stage width changes or the fonts finish loading.
+// height of its tallest step, measured in one layout pass on hidden per-slot sizers (review O-1), and re-measured
+// when the stage width changes or the fonts finish loading.
 // mountEarnStage(el, opts) mounts on server-rendered markup (or renders it),
 // then plays the story step by step:
 //   RECORDED: real events, real order, real values. A wait longer than the cap
@@ -82,33 +82,64 @@ export function mountEarnStage(host, opts = {}) {
       else el.innerHTML = html;
       cache[name] = html; changed.push(name);
     }
-    const hd = $('.hd'); if (hd) hd.classList.toggle('wait', !!flags.wait);
-    const cls = $('.cls'), wasCloser = cls && cls.dataset.on === '1';
-    if (cls) { cls.dataset.on = flags.closer ? '1' : '0'; if (flags.closer) cls.removeAttribute('aria-hidden'); else cls.setAttribute('aria-hidden', 'true'); }
-    const res = $('.ep-res'), wasRes = res && res.dataset.on === '1';
-    if (res) res.dataset.on = flags.residue ? '1' : '0';
-    Object.assign(root.dataset, { stageState: flags.state, outcome: flags.outcome, seq: flags.seq, run: String(flags.run), rail: String(flags.rail) });
+    const { wasCloser, wasRes } = applyFlags(root, flags);
     return { changed, flags, closerOn: flags.closer && !wasCloser, residueOn: flags.residue && !wasRes };
+  }
+  /** The state flags patch() writes on a stage root (the live one, or a sizer clone). */
+  function applyFlags(r, flags) {
+    const hd = r.querySelector('.hd'); if (hd) hd.classList.toggle('wait', !!flags.wait);
+    const cls = r.querySelector('.cls'), wasCloser = cls && cls.dataset.on === '1';
+    if (cls) { cls.dataset.on = flags.closer ? '1' : '0'; if (flags.closer) cls.removeAttribute('aria-hidden'); else cls.setAttribute('aria-hidden', 'true'); }
+    const res = r.querySelector('.ep-res'), wasRes = res && res.dataset.on === '1';
+    if (res) res.dataset.on = flags.residue ? '1' : '0';
+    Object.assign(r.dataset, { stageState: flags.state, outcome: flags.outcome, seq: flags.seq, run: String(flags.run), rail: String(flags.rail) });
+    return { wasCloser, wasRes };
   }
 
   /* ---------- fixed skeleton: lock each slot to its tallest step (RECORDED) --- */
+  // One layout pass (code review O-1). The live stage is never patched here. Instead, each locked element
+  // gets one hidden sizer per DISTINCT content it shows across the story (most slots have 2-5, not 20):
+  // a clone placed next to it at the same width, filled with that content. Every height is read after a single
+  // layout, and the sizers are removed in the same task, so they are never painted. Because the live stage is
+  // untouched, a re-lock mid-play no longer cancels running beats either (O-3). No state-attribute rule in
+  // earn-stage.css changes a locked slot's height, so measuring outside the step's root flags is exact.
   const LOCKED = ['kick', 'chips', 'mv', 'lede', 'note', 'ldg', 'cap', 'rec', 'reg', 'rtop', 'proc', 'tee', 'dots', 'rows', 'onetx', 'sum', 'q', 'tx'];
+  const SIZED = ['.ep-top', ...LOCKED.map(n => `[data-slot="${n}"]`)]; // .ep-top: a longer kicker can wrap the kicker + chip row at 390 px
   let lockedWidth = -1;
   function lockHeights() {
     if (live || !story.steps.length) return;
     const w = root.getBoundingClientRect().width;
     if (w === lockedWidth) return;
     lockedWidth = w;
-    // .ep-top too: a longer kicker can wrap the kicker + chip row onto a second line at 390 px
-    const els = [root.querySelector('.ep-top'), ...LOCKED.map(n => root.querySelector(`[data-slot="${n}"]`))].filter(Boolean);
+    const els = SIZED.map(q => root.querySelector(q)).filter(Boolean);
     els.forEach(el => { el.style.minHeight = ''; });
-    const max = els.map(() => 0);
-    for (let i = 0; i < story.steps.length; i++) {
-      patch(C.storyStateAt(story, i));
-      els.forEach((el, j) => { max[j] = Math.max(max[j], el.offsetHeight); });
-    }
+    // A slot inside another locked element (kick, chips in .ep-top) is shrink-to-fit there, so it is measured
+    // inside that element's sizers, in its real layout context, not in a sizer of its own.
+    const hostOf = el => els.find(h => h !== el && h.contains(el));
+    const tops = els.filter(el => !hostOf(el));
+    const widths = tops.map(el => el.getBoundingClientRect().width); // read before any write
+    const steps = story.steps.map((_, i) => slotsOf(C.storyStateAt(story, i), viewOpts()).slots);
+    const sizers = new Map(); // top-level element -> its sizer clones
+    tops.forEach((el, j) => {
+      const names = el.dataset.slot ? [el.dataset.slot] : [...el.querySelectorAll('[data-slot]')].map(n => n.dataset.slot);
+      const seen = new Set(), list = [];
+      for (const slots of steps) {
+        const key = names.map(n => slots[n]).join('\u0000');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const c = el.cloneNode(true);
+        for (const n of names) { const t = c.dataset.slot === n ? c : c.querySelector(`[data-slot="${n}"]`); if (t) t.innerHTML = slots[n]; }
+        c.setAttribute('aria-hidden', 'true'); c.inert = true;
+        c.style.cssText += `;position:absolute;left:0;top:0;width:${widths[j]}px;box-sizing:border-box;visibility:hidden;pointer-events:none`;
+        list.push(c);
+      }
+      el.after(...list);
+      sizers.set(el, list);
+    });
+    const inSizer = (el, c) => { const h = hostOf(el); return h ? c.querySelector(`[data-slot="${el.dataset.slot}"]`) : c; };
+    const max = els.map(el => Math.max(0, ...sizers.get(hostOf(el) || el).map(c => { const m = inSizer(el, c); return m ? m.offsetHeight : 0; }))); // one layout
+    [...sizers.values()].flat().forEach(c => c.remove());
     els.forEach((el, j) => { el.style.minHeight = `${max[j]}px`; });
-    patch(C.storyStateAt(story, Math.max(k, 0))); // back to the step on screen
   }
 
   /* ---------- beats ------------------------------------------------------- */
@@ -327,6 +358,10 @@ export function mountEarnStage(host, opts = {}) {
   }
 
   /* ---------- mount --------------------------------------------------------- */
+  // Failsafe race (code review O-2): if the 2.5 s CSS failsafe already showed the server's final state, the
+  // reader has seen how it ends. Stay there, with Replay, instead of rewinding to READY.
+  const shownByFailsafe = !live && typeof document !== 'undefined' && document.documentElement.classList.contains('ep-js') &&
+    !root.hasAttribute('data-ep-mounted') && getComputedStyle(root).opacity === '1';
   if (mq && mq.addEventListener) mq.addEventListener('change', onMq);
   root.addEventListener('click', onClick);
   const ctl = $('.ep-ctl'); if (ctl) ctl.hidden = false;
@@ -337,7 +372,7 @@ export function mountEarnStage(host, opts = {}) {
   if (ro) ro.observe(root);
   if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (!destroyed) { lockedWidth = -1; lockHeights(); } });
   if (live) { show(Math.max(0, nextUnplayed()), false); ticker = setInterval(liveTick, 1000); if (story.steps.length) pump(); }
-  else if (o.autoplay === false) show(C.finalIndex(story), false);
+  else if (o.autoplay === false || shownByFailsafe) show(C.finalIndex(story), false);
   else {
     show(0, false); // READY (the server's final state stays for no-JS readers)
     const start = () => runFrom(1);
