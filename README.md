@@ -480,9 +480,12 @@ to ship with, in plain words, each with what it costs and what would fix it.
   untouched. The check can't see everything: NEAR AI can fail in the seconds
   between the check and the review, or the review model's own backend can be
   down while the gateway answers; that job still ends as a fail on our seller.
-  An unexpected answer from the check (for example a 404 if NEAR AI moves the
-  endpoint, which its docs mark deprecated) is logged and the review goes
-  ahead as before.
+  An unexpected answer from the check (for example a redirect or a 404 if
+  NEAR AI moves the endpoint, which its docs mark deprecated) is logged and the
+  review goes ahead as before. Each decline costs the seller gas from its key's
+  allowance, so the site declines at most 35 jobs a day and pauses the check
+  for a minute after a failure; past that, the job is left open and its
+  `timeout` refunds the buyer without a fail for the seller.
 - **Fake buyers and the key holder.** A seller paying for jobs from its own buyer
   accounts can farm its quote up (see the Sybil limit above, A-014), and whoever
   holds the contract account's full-access key can deploy new code (see "Trust

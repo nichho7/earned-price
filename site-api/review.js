@@ -20,7 +20,10 @@
 // pre-recorded is ever submitted on-chain (the escrow's freshness check + replay guard would
 // refuse it anyway). Refusals that hold for EVERY caller (GLOBAL_REFUSALS) and happen before accept
 // also decline the open job, so the buyer is refunded at once and the seller's record is untouched;
-// per-caller refusals (cap_visitor, cap_buyer) never decline. T-084: tee_unavailable is one of them
+// per-caller refusals (cap_visitor, cap_buyer) never decline. Every decline costs the seller FC
+// key's gas allowance, so declines draw on a site-wide daily budget (caps.js DAILY_DECLINE_CAP,
+// security M-1); past it, or with no store to count in, the job is left open and refunds through
+// timeout (no fail for the seller). T-084: tee_unavailable is one of them
 // when the pre-accept NEAR AI probe (site-api/tee-probe.js, deps.teeProbe) says NEAR AI is down or our
 // key can't pay (401/402/403/408/429/5xx/network/timeout): our own outage then declines the open job
 // instead of accepting it into a review that can't happen. Residual window: NEAR AI (or just the
@@ -35,7 +38,7 @@
 // lower layers are never echoed: responses carry fixed codes and copy only.
 import { DEFAULT_BUDGET_MS, DEFAULT_MAX_ATTEMPTS, ReviewError } from "../seller/review.js";
 import { authShapeOk, checkReviewAuth } from "./buyer-auth.js";
-import { CapStoreError, reserveLive, reviewReserveMicro, utcDay } from "./caps.js";
+import { CapStoreError, markTeeDown, reserveLive, reviewReserveMicro, takeDecline, teeDown, utcDay } from "./caps.js";
 import { PROBE_TIMEOUT_MS } from "./tee-probe.js";
 import { header, visitorId } from "./visitor.js";
 
@@ -135,7 +138,8 @@ const nsToMs = (ns) => Number(BigInt(ns) / 1_000_000n);
  * liveEnabled === false: the deployment may not run live reviews (no durable cap store, H-1).
  * sellerKeyCheck(): "ok" | "full_access" | "wrong_scope" | "missing" (M-2); anything but "ok" = no tx.
  * teeProbe({ timeoutMs }) -> { verdict: "ok" | "unavailable" | "inconclusive", status } (T-084), run
- * once before accepting an open job; "unavailable" (or a throw / no answer in time) declines it.
+ * once before accepting an open job; "unavailable" (or a throw / no answer in time) declines it and
+ * sets a 60 s breaker (caps.js TEE_DOWN_S) during which open jobs replay with no probe and no decline.
  * Without teeProbe there is no probe (site-api/vercel.js always wires one).
  *
  * Never throws: an unexpected error becomes a fixed replay body (S-1 / L-3).
@@ -160,8 +164,9 @@ async function handle(req, deps) {
   const chainMs = () => Math.max(1, Math.min(deps.chainTimeoutMs ?? CHAIN_CALL_MS, deadline - now()));
   const log = deps.log ?? ((l) => console.log(l));
   const visitor = visitorId(req.headers, deps.visitorSecret);
+  const logCtx = {}; // fields every later log line carries (the probe's verdict and latency, O-3)
   const done = (res, extra = {}) => {
-    log(JSON.stringify({ at: "review-fn", outcome: res.body.mode, code: res.body.code ?? res.body.reason ?? null, visitor: visitor.slice(0, 8), ms: now() - t0, ...extra }));
+    log(JSON.stringify({ at: "review-fn", outcome: res.body.mode, code: res.body.code ?? res.body.reason ?? null, visitor: visitor.slice(0, 8), ms: now() - t0, ...logCtx, ...extra }));
     return res;
   };
 
@@ -235,11 +240,21 @@ async function handle(req, deps) {
   }
 
   // Refused before accept: decline an open job (buyer refunded now) only when the refusal would hit
-  // any caller; a per-caller cap leaves the job open (M-1).
+  // any caller; a per-caller cap leaves the job open (M-1). Declines spend the seller FC key's gas
+  // allowance, so they come out of a site-wide daily budget (T-084 fix round 1, security M-1). No
+  // decline (job left open, refund through timeout, no fail for the seller) when the budget is spent,
+  // when the store can't count it (cap_store_unavailable, or a store error: the safe side), or when
+  // this deployment may not run live reviews (no durable store to count in, H-1).
+  let declineStatus = null; // the decline tx's outcome, if one was sent
   const declineOrReplay = async (reason, logExtra = {}) => {
     if (job.status !== "open") return replay(reason, "accepted_no_review", {}, logExtra);
     if (!GLOBAL_REFUSALS.has(reason)) return replay(reason, "open", {}, logExtra);
+    if (deps.liveEnabled === false) return replay(reason, "open", { decline_tx: null }, { ...logExtra, decline: "no_durable_store" });
+    if (reason === "cap_store_unavailable" || !(await takeDecline({ store: deps.store, day: utcDay(t0) }))) {
+      return replay(reason, "open", { decline_tx: null }, { ...logExtra, decline: "budget_spent_or_uncounted" });
+    }
     const d = await tx(deps.chain.decline(jobId), chainMs());
+    declineStatus = d.status;
     return d.status === "landed" ? replay(reason, "declined", { decline_tx: d.txHash }, logExtra) : replay(reason, "open", { decline_tx: null }, logExtra);
   };
   // H-1: no durable cap store (or no dedicated NEAR AI key) means no live review.
@@ -285,7 +300,14 @@ async function handle(req, deps) {
   // before the slot is released, so a retry can't take the lock and accept meanwhile. A resumed,
   // already accepted job is past that point: it is never probed or declined here.
   if (job.status === "open" && deps.teeProbe) {
-    const probeMs = Math.max(1, Math.min(PROBE_TIMEOUT_MS, deadline - now()));
+    // Breaker (security M-1): a probe said "down" in the last minute. No probe, no decline: the open
+    // job refunds through timeout, which saves the FC key's allowance and NEAR AI's rate limit.
+    if (await teeDown(deps.store)) {
+      await free();
+      return replay("tee_unavailable", "open", { decline_tx: null }, { tee_probe: "breaker" });
+    }
+    const probeStart = now();
+    const probeMs = Math.max(1, Math.min(PROBE_TIMEOUT_MS, deadline - probeStart));
     let probe;
     try {
       probe = await within(Promise.resolve(deps.teeProbe({ timeoutMs: probeMs })), probeMs + PROBE_GRACE_MS);
@@ -294,13 +316,27 @@ async function handle(req, deps) {
     }
     const verdict = ["ok", "unavailable", "inconclusive"].includes(probe?.verdict) ? probe.verdict : "unavailable";
     const status = Number.isInteger(probe?.status) ? probe.status : null;
+    Object.assign(logCtx, { tee_probe: verdict, tee_probe_status: status, tee_probe_ms: now() - probeStart });
     if (verdict === "unavailable") {
-      const res = await declineOrReplay("tee_unavailable", { tee_probe: verdict, tee_probe_status: status });
-      await free();
+      await markTeeDown(deps.store);
+      const res = await declineOrReplay("tee_unavailable");
+      // A decline that may have landed (unknown) keeps the job lock until its TTL, so a quick retry
+      // can't send a second decline (security L-2); the counters go back either way.
+      try {
+        await (declineStatus === "unknown" ? slot.releaseCounts() : slot.release());
+      } catch {
+        // the daily keys and the job lock expire on their own
+      }
       return res;
     }
-    // Inconclusive (e.g. the deprecated endpoint moved): proceed as before T-084, but say so in the logs.
-    if (verdict === "inconclusive") log(JSON.stringify({ at: "review-fn", tee_probe: verdict, tee_probe_status: status, job_id: jobId }));
+    // Inconclusive (e.g. the deprecated endpoint moved): proceed as before T-084; logCtx says so.
+  }
+
+  // The probe (or a slow store or chain) may have used up the rest of accept_by (code review O-4):
+  // replay rather than send an accept the escrow will refuse.
+  if (job.status === "open" && BigInt(job.accept_by_ns) < BigInt(now()) * 1_000_000n) {
+    await free();
+    return replay("job_expired", "open", { code: "JOB_EXPIRED" });
   }
 
   // 6. Accept (A-010: before the review; the escrow's freshness window starts here).

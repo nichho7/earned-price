@@ -10,7 +10,7 @@ import { ReviewError, reviewJob, DEFAULT_BUDGET_MS } from "../seller/review.js";
 import { ethAddress } from "../verify/nearai-verify.js";
 import { KeyPair } from "near-api-js";
 import { signReviewAuth } from "../site-api/buyer-auth.js";
-import { memoryStore, reviewReserveMicro, CapStoreError, DAILY_LIVE_CAP, SPEND_STOP_MICRO_USD } from "../site-api/caps.js";
+import { memoryStore, reviewReserveMicro, CapStoreError, DAILY_DECLINE_CAP, DAILY_LIVE_CAP, SPEND_STOP_MICRO_USD, TEE_DOWN_KEY, TEE_DOWN_S } from "../site-api/caps.js";
 import { COPY, GLOBAL_REFUSALS, INTERNAL_REPLAY, handleReview, MAX_BODY_BYTES, REPLAY_REASONS } from "../site-api/review.js";
 import { visitorId } from "../site-api/visitor.js";
 import { depsFromEnv, maxDuration, toWebResponse, fromWebRequest, handleWebRequest } from "../site-api/vercel.js";
@@ -132,7 +132,7 @@ function setup(over = {}) {
 const signed = (body, kp = BUYER_KP, nowMs = T0) =>
   typeof body === "string" || "public_key" in body ? body : { ...body, ...signReviewAuth(kp, { job_id: body.job_id, pack_id: body.pack_id, nowMs }) };
 const req = (body = { job_id: "7", pack_id: "pack-1" }, over = {}) => {
-  const b = signed(body, over.kp);
+  const b = signed(body, over.kp, over.nowMs);
   return {
     method: over.method ?? "POST",
     headers: new Headers({ "content-type": "application/json", "x-vercel-forwarded-for": IP, ...(over.headers ?? {}) }),
@@ -409,7 +409,7 @@ test("a failed get_record does not block a live review (the floor is a backstop)
   assert.equal((await handleReview(req(), fc.deps)).body.mode, "live");
 });
 
-test("replay cap_store_unavailable: a failing cap store fails closed (no accept, job declined)", async () => {
+test("replay cap_store_unavailable: a failing cap store fails closed (no accept; no decline either: it can't be counted, M-1)", async () => {
   const { deps, calls, reviewCalls } = setup({
     deps: {
       store: {
@@ -422,7 +422,9 @@ test("replay cap_store_unavailable: a failing cap store fails closed (no accept,
   });
   const r = await handleReview(req(), deps);
   assertReplay(r, "cap_store_unavailable", calls);
-  assert.ok(!calls.some((c) => c[0] === "accept"));
+  assert.ok(!calls.some((c) => c[0] === "accept" || c[0] === "decline"));
+  assert.equal(r.body.job_state, "open", "refund through timeout, no fail for the seller");
+  assert.equal(r.body.decline_tx, null);
   assert.equal(reviewCalls.length, 0);
 });
 
@@ -626,11 +628,12 @@ test("replay chain_unavailable when the buyer key can't be checked; no tx, no ca
 });
 
 // ---- H-1 / M-2: configuration gates ----
-test("replay not_configured when live reviews are off (no durable cap store, H-1): decline, no accept, no review", async () => {
+test("replay not_configured when live reviews are off (no durable cap store, H-1): no tx at all (the decline budget can't be counted), no review", async () => {
   const { deps, calls, reviewCalls } = setup({ deps: { liveEnabled: false } });
   const r = await handleReview(req(), deps);
   assertReplay(r, "not_configured", calls);
-  assert.ok(calls.some((c) => c[0] === "decline"));
+  assert.ok(!calls.some((c) => c[0] === "decline"));
+  assert.equal(r.body.job_state, "open");
   assert.ok(!calls.some((c) => c[0] === "accept"));
   assert.equal(reviewCalls.length, 0);
 });
@@ -790,6 +793,7 @@ function probeDep(calls, answer) {
   };
   return { teeProbe, seen };
 }
+const VISITOR = visitorId(new Headers({ "x-vercel-forwarded-for": IP }), "s");
 const withProbe = (answer, over = {}) => {
   const s = setup(over);
   const p = probeDep(s.calls, answer);
@@ -822,6 +826,9 @@ for (const [name, answer] of [
     assert.equal(await deps.store.get("spend:micro"), 0, "reservation given back");
     assert.equal(await deps.store.get("day:2026-11-12"), 0, "not counted against the daily cap");
     assert.equal(await deps.store.get("job:7"), 0, "job lock released");
+    assert.equal(await deps.store.get(`visitor:2026-11-12:${VISITOR}`), 0, "visitor count given back");
+    assert.equal(await deps.store.get("buyer:2026-11-12:judge1.testnet"), 0, "buyer count given back");
+    assert.equal(await deps.store.get("declines:2026-11-12"), 1, "one decline taken from today's budget");
     const line = JSON.parse(logs.at(-1));
     assert.equal(line.tee_probe, "unavailable");
     noSecrets(r.body, logs);
@@ -838,8 +845,38 @@ test("T-084: probe ok -> live as before; probed once, after the caps and before 
   assert.ok(order.indexOf("getRecord") < order.indexOf("teeProbe"), "after the caps");
   assert.ok(order.indexOf("teeProbe") < order.indexOf("accept"), "before accept");
   assert.ok(!order.includes("decline"));
-  assert.ok(probeSeen[0].timeoutMs > 0 && probeSeen[0].timeoutMs <= 8_000);
+  assert.equal(probeSeen[0].timeoutMs, 8_000);
+  const line = JSON.parse(logs.at(-1));
+  assert.equal(line.tee_probe, "ok", "the final log line says the probe passed (O-3)");
+  assert.equal(line.tee_probe_status, 200);
+  assert.equal(typeof line.tee_probe_ms, "number");
   noSecrets(r.body, logs);
+});
+
+test("T-084: the probe's timeout is clamped to the function's time left (O-1)", async () => {
+  // 15 s function - 10 s safety = 5 s left at t0: less than PROBE_TIMEOUT_MS (8 s).
+  const { deps, probeSeen } = withProbe({ verdict: "ok", status: 200 }, { deps: { maxDurationMs: 15_000, now: () => T0 } });
+  await handleReview(req(), deps);
+  assert.equal(probeSeen[0].timeoutMs, 5_000);
+});
+
+test("T-084: the probe ate the rest of accept_by -> replay job_expired, no accept, slot released (O-4)", async () => {
+  let t = T0;
+  const job = openJob({ accept_by_ns: ns(T0 + 3_000) });
+  const { deps, calls } = withProbe(
+    () => {
+      t += 4_000; // a slow probe
+      return { verdict: "ok", status: 200 };
+    },
+    { chainOpts: { job }, deps: { now: () => t } },
+  );
+  const r = await handleReview(req(), deps);
+  assertReplay(r, "job_expired", calls);
+  assert.equal(r.body.code, "JOB_EXPIRED");
+  assert.equal(r.body.job_state, "open");
+  assert.ok(!calls.some((c) => c[0] === "accept" || c[0] === "decline"));
+  assert.equal(await deps.store.get("job:7"), 0);
+  assert.equal(await deps.store.get("day:2026-11-12"), 0);
 });
 
 test("T-084: a resumed accepted job (no review yet) is never probed or declined, even with NEAR AI down", async () => {
@@ -988,4 +1025,110 @@ test("T-079: the 35th live review of the day runs, the 36th replays cap_daily an
   const r = await handleReview(req(), s36.deps);
   assertReplay(r, "cap_daily", s36.calls);
   assert.equal(r.body.job_state, "declined");
+});
+
+// ---- T-084 fix round 1: the daily decline budget, the TEE-down breaker (security M-1), L-2 ----
+for (const [name, reason, prep] of [
+  ["daily cap (no slot held)", "cap_daily", async (d) => d.store.incrBy("day:2026-11-12", DAILY_LIVE_CAP)],
+  ["spend stop", "cap_spend", async (d) => d.store.incrBy("spend:micro", SPEND_STOP_MICRO_USD)],
+  ["no NEAR AI key", "not_configured", async (d) => (d.apiKey = undefined)],
+  ["probe down", "tee_unavailable", async (d) => (d.teeProbe = async () => ({ verdict: "unavailable", status: 503 }))],
+]) {
+  test(`M-1: past today's decline budget, ${name} -> replay ${reason}, job left open, no decline tx`, async () => {
+    const { deps, calls } = setup();
+    await prep(deps);
+    await deps.store.incrBy("declines:2026-11-12", DAILY_DECLINE_CAP);
+    const r = await handleReview(req(), deps);
+    assertReplay(r, reason, calls);
+    assert.equal(r.body.job_state, "open");
+    assert.equal(r.body.decline_tx, null);
+    assert.match(r.body.message, /calling the escrow's timeout refunds your deposit/);
+    assert.ok(!calls.some((c) => c[0] === "decline" || c[0] === "accept"));
+  });
+}
+
+test("M-1: the budget is site-wide: the 35th decline of the day is sent, the 36th is not, whoever asks", async () => {
+  const a = setup();
+  await a.deps.store.incrBy("day:2026-11-12", DAILY_LIVE_CAP);
+  await a.deps.store.incrBy("declines:2026-11-12", DAILY_DECLINE_CAP - 1);
+  assert.equal((await handleReview(req(), a.deps)).body.job_state, "declined");
+  // A different visitor and buyer, same store: the budget is not per caller.
+  const job = openJob({ id: "8", buyer: "judge2.testnet" });
+  const b = setup({ chainOpts: { job, hasAccessKey: () => true }, deps: { store: a.deps.store } });
+  const r = await handleReview(req({ job_id: "8", pack_id: "pack-1" }, { headers: { "x-vercel-forwarded-for": "198.51.100.9" } }), b.deps);
+  assertReplay(r, "cap_daily", b.calls);
+  assert.equal(r.body.job_state, "open");
+  assert.ok(!b.calls.some((c) => c[0] === "decline"));
+  assert.equal(await a.deps.store.get("buyer:2026-11-12:judge2.testnet"), 0, "per-caller counters untouched");
+});
+
+test("M-1: per-caller refusals and live reviews never draw on the decline budget", async () => {
+  const live = setup();
+  assert.equal((await handleReview(req(), live.deps)).body.mode, "live");
+  assert.equal(await live.deps.store.get("declines:2026-11-12"), 0);
+  const capped = setup();
+  await capped.deps.store.incrBy("buyer:2026-11-12:judge1.testnet", 3);
+  assert.equal((await handleReview(req(), capped.deps)).body.reason, "cap_buyer");
+  assert.equal(await capped.deps.store.get("declines:2026-11-12"), 0);
+});
+
+test("M-1: a store that fails while counting the decline -> no decline tx (the safe side)", async () => {
+  const { deps, calls } = setup({ deps: { apiKey: undefined } });
+  const store = deps.store;
+  deps.store = { ...store, kind: "upstash", incrBy: async () => {
+    throw new CapStoreError("Cap store unreachable.");
+  } };
+  const r = await handleReview(req(), deps);
+  assertReplay(r, "not_configured", calls);
+  assert.equal(r.body.job_state, "open");
+  assert.ok(!calls.some((c) => c[0] === "decline"));
+});
+
+test("M-1 breaker: a probe that says down sets tee:down for 60 s; meanwhile open jobs replay with no probe and no decline; then it probes again", async () => {
+  let t = T0;
+  const store = memoryStore({ now: () => t });
+  const first = withProbe({ verdict: "unavailable", status: 503 }, { deps: { store, now: () => t } });
+  assert.equal((await handleReview(req(), first.deps)).body.job_state, "declined");
+  assert.equal(await store.get(TEE_DOWN_KEY), 1);
+
+  t += (TEE_DOWN_S - 1) * 1000;
+  const second = withProbe({ verdict: "ok", status: 200 }, { deps: { store, now: () => t } });
+  const r = await handleReview(req({ job_id: "7", pack_id: "pack-1" }, { kp: BUYER_KP }), second.deps);
+  assertReplay(r, "tee_unavailable", second.calls);
+  assert.equal(r.body.job_state, "open");
+  assert.equal(r.body.decline_tx, null);
+  assert.ok(!second.calls.some((c) => c[0] === "teeProbe" || c[0] === "decline" || c[0] === "accept"));
+  assert.equal(await store.get("job:7"), 0, "slot released");
+  assert.equal(await store.get("declines:2026-11-12"), 1, "no decline taken");
+  assert.equal(JSON.parse(second.logs.at(-1)).tee_probe, "breaker");
+
+  t += 2_000; // past the 60 s
+  const third = withProbe({ verdict: "ok", status: 200 }, { deps: { store, now: () => t }, chainOpts: { job: openJob({ accept_by_ns: ns(t + 60_000) }) } });
+  const r3 = await handleReview(req({ job_id: "7", pack_id: "pack-1" }, { kp: BUYER_KP, nowMs: t }), third.deps);
+  assert.equal(r3.body.mode, "live");
+  assert.equal(third.probeSeen.length, 1);
+});
+
+test("M-1 breaker: a store that can't read tee:down means probe as usual", async () => {
+  const { deps, calls } = withProbe({ verdict: "ok", status: 200 });
+  deps.store.get = async () => {
+    throw new CapStoreError("x");
+  };
+  assert.equal((await handleReview(req(), deps)).body.mode, "live");
+  assert.equal(calls.filter((c) => c[0] === "teeProbe").length, 1);
+});
+
+test("L-2: a decline with an unknown outcome keeps the job lock (a quick retry gets job_busy, no 2nd decline); the counters go back", async () => {
+  const { deps, calls } = withProbe({ verdict: "unavailable", status: 503 }, { chainOpts: { decline: async () => ({ status: "unknown", txHash: null }) } });
+  const r = await handleReview(req(), deps);
+  assertReplay(r, "tee_unavailable", calls);
+  assert.equal(r.body.job_state, "open");
+  assert.equal(await deps.store.get("job:7"), 1, "lock kept until its TTL");
+  assert.equal(await deps.store.get("day:2026-11-12"), 0);
+  assert.equal(await deps.store.get("spend:micro"), 0);
+  assert.equal(await deps.store.get(`visitor:2026-11-12:${VISITOR}`), 0);
+  await deps.store.del(TEE_DOWN_KEY); // the retry would otherwise stop at the breaker
+  const again = await handleReview(req(), deps);
+  assert.equal(again.body.reason, "job_busy");
+  assert.equal(calls.filter((c) => c[0] === "decline").length, 1);
 });

@@ -26,6 +26,9 @@
 //   - Call the contract's timeout(job_id) with the buyer key once accept_by has passed (job_state
 //     "open") or review_by has passed (job_state "accepted_no_review"). Nothing refunds otherwise.
 //
+// depsFromEnv must keep wiring teeProbe (T-084): handleReview skips the pre-accept NEAR AI probe
+// when it is missing, and our own outage would then cost the seller a fail (code review N-3).
+//
 // Environment (Vercel project settings, never in code or the repo). Set the secrets for the
 // PRODUCTION environment only (not Preview / Development):
 //   NEAR_AI_API_KEY            secret. A DEDICATED NEAR AI key for this function only, loaded with at

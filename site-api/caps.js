@@ -32,6 +32,19 @@ export const SPEND_STOP_MICRO_USD = 1_750_000; // $1.75, in micro-USD so counter
 // recorded in packs/results/round-4/summary.json on 2026-11-11): $0.30 in / $1.20 out per M tokens.
 export const PRICE_USD_PER_TOKEN = { in: 0.3e-6, out: 1.2e-6 };
 export const JOB_LOCK_S = 15 * 60; // longer than a job's whole review window (7 min)
+// T-084 fix round 1 (security M-1): declines a day, site-wide, across every GLOBAL_REFUSALS reason.
+// Each decline prepays 30 Tgas (~0.003 NEAR of the seller FC key's allowance, estimate), and unused
+// gas does not go back to the allowance. Sizing (CFO t076, A-028): 35 live jobs x ~0.033 NEAR +
+// 35 declines x ~0.003 NEAR = ~1.26 NEAR a day at most, so the 10 NEAR key lasts ~7.9 days (past
+// Nov 18 even if made Nov 12); declines add at most ~9% to the live jobs' own drawdown. 35 also
+// matches the honest demand: one decline per live slot covers a day of over-cap visitors or an outage
+// at judging traffic (CFO mid case: 25 public jobs a day). Past it the job is left open and refunds
+// through timeout (no fail for the seller), so only the refund's speed degrades.
+export const DAILY_DECLINE_CAP = 35;
+// Optional breaker (security M-1): after a probe says NEAR AI is down, requests in the next minute
+// neither probe nor decline; the open job refunds through timeout.
+export const TEE_DOWN_S = 60;
+export const TEE_DOWN_KEY = "tee:down";
 const DAY_TTL_S = 2 * 24 * 3600; // daily keys carry the date; the TTL only cleans them up
 const SPEND_KEY = "spend:micro";
 
@@ -153,11 +166,42 @@ export function storeFromEnv(env, fetch) {
 }
 
 /**
+ * Takes one decline from today's site-wide budget (DAILY_DECLINE_CAP). false = the budget is spent,
+ * or the store failed: we can't count, so no tx (the safe side). Never throws.
+ */
+export async function takeDecline({ store, day }) {
+  try {
+    return (await store.incrBy(`declines:${day}`, 1, DAY_TTL_S)) <= DAILY_DECLINE_CAP;
+  } catch {
+    return false;
+  }
+}
+
+/** Is the "NEAR AI is down" breaker set? A store failure reads as "not set" (probe as usual). */
+export async function teeDown(store) {
+  try {
+    return Number(await store.get(TEE_DOWN_KEY)) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Sets the breaker for TEE_DOWN_S, best effort (a store failure only means the next request probes). */
+export async function markTeeDown(store) {
+  try {
+    await store.setNx(TEE_DOWN_KEY, TEE_DOWN_S);
+  } catch {
+    // no breaker: the next request probes
+  }
+}
+
+/**
  * Takes one live review slot for `jobId`: job lock, daily, visitor (hashed IP) and buyer counts,
  * then the spend reservation. Returns { ok: false, reason } (job_busy | cap_daily | cap_visitor |
- * cap_buyer | cap_spend) with every counter rolled back, or { ok: true, release(), settle(actualMicro) }:
- * release() undoes it all (nothing was spent), settle() lowers the reservation to the actual
- * estimate once the review is done. Store failures throw CapStoreError (caller fails closed).
+ * cap_buyer | cap_spend) with every counter rolled back, or { ok: true, release(), releaseCounts(),
+ * settle(actualMicro) }: release() undoes it all (nothing was spent); releaseCounts() undoes the
+ * counters but keeps the job lock until its TTL (a decline whose outcome is unknown, security L-2);
+ * settle() lowers the reservation to the actual estimate once the review is done. Store failures throw CapStoreError (caller fails closed).
  */
 export async function reserveLive({ store, jobId, visitor, buyer, day, reserveMicro, floorMicro = 0 }) {
   const lockKey = `job:${jobId}`;
@@ -200,6 +244,9 @@ export async function reserveLive({ store, jobId, visitor, buyer, day, reserveMi
     async release() {
       await undo();
       await store.del(lockKey);
+    },
+    async releaseCounts() {
+      await undo();
     },
     async settle(actualMicro) {
       const target = Math.max(0, Math.min(reserved, Math.ceil(actualMicro)));
