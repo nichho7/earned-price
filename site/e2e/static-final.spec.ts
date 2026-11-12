@@ -110,6 +110,34 @@ test("CLS is 0 with JS (Chromium only: WebKit has no layout-shift entries)", asy
   expect(cls).toBe(0);
 });
 
+for (const width of [390, 1280]) {
+  test(`event log looks openable at ${width}px: marker visible closed and open, target >= 44 px (QA B1)`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width, height: 900 } });
+    const page = await ctx.newPage();
+    await page.goto("/");
+    const summary = page.locator("[data-event-log] summary");
+    const marker = summary.locator("[data-marker]");
+    for (const open of [false, true]) {
+      if (open) await summary.click();
+      await expect(page.locator("[data-event-log]")).toHaveJSProperty("open", open);
+      await expect(marker).toBeVisible();
+      const box = await marker.boundingBox();
+      expect(box!.width).toBeGreaterThan(4);
+      expect(box!.height).toBeGreaterThan(4);
+      expect((await summary.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      const t = await marker.evaluate((el) => getComputedStyle(el).transform);
+      expect(t === "none", open ? "open: marker turns down" : "closed: marker points right").toBe(!open);
+    }
+    await ctx.close();
+  });
+}
+
+test("stage headline keeps its heading role inside the live region (code review M-3)", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 2, name: "Holds." })).toBeVisible();
+  await expect(page.getByRole("status").getByRole("heading", { name: "Holds." })).toHaveCount(1);
+});
+
 test("keyboard: the event log opens from the keyboard and focus is visible", async ({ page, browserName }) => {
   test.skip(browserName === "webkit", "WebKit skips non-form controls on Tab by default (macOS setting)");
   await page.goto("/");

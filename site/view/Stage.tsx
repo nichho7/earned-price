@@ -3,7 +3,7 @@
 // Right: the receipt. Every figure comes from a run's events through the reducer; nothing is typed.
 // Test hooks (build spec 8.6): data-stage-state, data-seq, data-run on the stage.
 import type { RunView } from "./model.ts";
-import { stageStateOf } from "./model.ts";
+import { ledeKeyOf, registerMoveOf, stageStateOf } from "./model.ts";
 import { headlineOf } from "../stage/reducer.ts";
 import { nearOf, packLabel, signedNear } from "../stage/format.ts";
 import { Lock } from "./icons.tsx";
@@ -24,6 +24,7 @@ function MoveLine({ r }: { r: RunView }) {
     if (q.delta_mnear > 0) return <>{nearOf(q.prev_quote_mnear)} → <b>{nearOf(q.quote_mnear)}</b> NEAR · {signedNear(q.delta_mnear)} on a graded pass</>;
     if (q.delta_mnear < 0) return <>{nearOf(q.prev_quote_mnear)} → <b>{nearOf(q.quote_mnear)}</b> NEAR · {signedNear(q.delta_mnear)} on a graded fail · {nearOf(st.amount_mnear)} refunded</>;
     if (r.outcome === "holds") return <><b>{nearOf(q.quote_mnear)}</b> NEAR holds · repeat buyer · counted once</>;
+    if (r.outcome === "refunded-flat") return <><b>{nearOf(q.quote_mnear)}</b> NEAR holds at the floor · graded fail · {nearOf(st.amount_mnear)} refunded</>;
     return <><b>{nearOf(q.quote_mnear)}</b> NEAR holds</>;
   }
   if (qb) return <>Quote <b>{nearOf(qb.quote_mnear)}</b> NEAR · read from the record, nobody typed it</>;
@@ -34,6 +35,7 @@ const LEDE: Record<string, string> = {
   earned: "The record moved, so the quote moved. Nobody typed this number.",
   holds: "Same buyer, second pass. The seller is paid, but unique buyers stay at 1, so a repeat pass can’t pump the price.",
   refunded: "The grade failed, so the buyer gets the escrow back and the quote drops by the contract’s rule.",
+  "refunded-flat": "The grade failed, so the buyer gets the escrow back. The quote is already at the contract’s floor, so it stays.",
   "tx-failed": "The chain rejected the transaction, so no money moved and the record is unchanged.",
   ready: "A seller agent is paid from escrow only when a graded review passes. Every pass or fail moves its next quote.",
 };
@@ -55,7 +57,7 @@ function Ledger({ r }: { r: RunView }) {
       <div className={`${s.box} ${has ? s.hot : ""}`} data-box={key}>
         {label}
         <div className={`${s.amt} ${has ? "" : s.nil}`}>
-          {has ? <><span className={s.token}>{nearOf(amt!)}</span><small>{note}</small></> : "·"}
+          {has ? <><span className={s.token}>{nearOf(amt!)}</span><small>{note}</small></> : <span aria-hidden="true">·</span>}
         </div>
         {key === "esc" && <Lock className={s.lock} shackleClassName={s.shackle} open={lockOpen} />}
       </div>
@@ -114,11 +116,7 @@ function RunRegister({ runs }: { runs: RunView[] }) {
         const q = r.state.quoteAfter, st = r.state.settled, g = st?.grade;
         if (!q || !st || q.prev_quote_mnear === undefined) return null;
         const same = r.n > 1 && runs[0].fixture.buyer === r.fixture.buyer;
-        const move =
-          r.outcome === "earned" ? `${nearOf(q.prev_quote_mnear)} → ${nearOf(q.quote_mnear)}`
-          : r.outcome === "holds" ? `${nearOf(q.quote_mnear)} holds · counted once`
-          : r.outcome === "refunded" ? `${nearOf(q.prev_quote_mnear)} → ${nearOf(q.quote_mnear)} · refunded`
-          : `${nearOf(q.quote_mnear)} holds`;
+        const move = registerMoveOf(r.outcome, q);
         return (
           <li key={r.n} data-run-line={r.n}>
             <span>Run {r.n}{same ? " · same buyer" : ""} · {packLabel(r.fixture.pack_id)} · {g?.passed ? "pass" : "fail"} · {move}</span>
@@ -135,12 +133,15 @@ function RunRegister({ runs }: { runs: RunView[] }) {
 export function Stage({ runs, last }: { runs: RunView[]; last: RunView }) {
   const h = headlineOf(last.state);
   const state = stageStateOf(last);
-  const lede = LEDE[state] ?? LEDE.ready;
+  const lede = LEDE[ledeKeyOf(last)] ?? LEDE.ready;
   return (
     <section className={s.stage} aria-label="Earn moment" data-stage-state={state} data-seq={last.state.seq} data-run={last.n}>
       <div className={s.left}>
         <div className={s.kicker}>{kickerOf(last)}</div>
-        <h2 className={`${s.headline} ${h.waiting ? s.waiting : ""}`} id="stage-headline" tabIndex={-1} role="status">{h.text}</h2>
+        {/* The live region wraps the h2 so the heading keeps its role (code review M-3). */}
+        <div className={s.live} role="status">
+          <h2 className={`${s.headline} ${h.waiting ? s.waiting : ""}`} id="stage-headline" tabIndex={-1}>{h.text}</h2>
+        </div>
         <p className={s.move}><MoveLine r={last} /></p>
         <p className={s.lede}>{lede}</p>
         <Ledger r={last} />

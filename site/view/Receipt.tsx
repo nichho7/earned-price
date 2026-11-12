@@ -2,6 +2,7 @@
 // as markup sized for the final state (build spec 8, constraint 1). The price is the plain value here;
 // the odometer columns arrive with M1 (S-028).
 import type { RunView } from "./model.ts";
+import { isRefund } from "./model.ts";
 import type { Action } from "../stage/schema.ts";
 import { isPlaceholder, nearOf, packLabel, postmarkDate, quoteOf, rawQuoteOf, signedNear } from "../stage/format.ts";
 import { Check, Cross, Dash, Seal } from "./icons.tsx";
@@ -107,7 +108,7 @@ export function Receipt({ r }: { r: RunView }) {
           {grade ? (
             <div className={s.sum} data-sum="">
               <i className={s.sumHl} aria-hidden="true" />
-              <span>Plain grader, no AI · needs {grade.pass_min} of {grade.total}</span>
+              <span>Plain grader, no AI · <span className={s.nowrap}>needs {grade.pass_min} of {grade.total}</span></span>
               <b>{grade.found} / {grade.total} · {grade.passed ? "pass" : "fail"}</b>
             </div>
           ) : (
@@ -126,7 +127,7 @@ export function Receipt({ r }: { r: RunView }) {
             </div>
             {r.outcome === "earned" && qa && <Postmark uid={`r${r.n}`} mid="EARNED" sub={signedNear(qa.delta_mnear ?? 0)} bottom={bottom} />}
             {repeat && <Postmark uid={`r${r.n}`} mid="COUNTED" sub="ONCE" bottom={bottom} />}
-            {r.outcome === "refunded" && <span className={`stamp ${s.refundStamp}`}>REFUNDED</span>}
+            {isRefund(r.outcome) && <span className={`stamp ${s.refundStamp}`}>REFUNDED</span>}
             {q && <Formula r={r} repeat={repeat} />}
           </div>
 

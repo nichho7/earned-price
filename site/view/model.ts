@@ -2,6 +2,7 @@
 // spec 3). Each run is fold(all its events); the stage shows the last run, the register lists all.
 import type { LabFixture } from "../stage/schema.ts";
 import { findPlaceholders } from "../stage/schema.ts";
+import { nearOf } from "../stage/format.ts";
 import { fold, isPlaceholderFixture, outcomeOf, type Outcome, type StageState } from "../stage/reducer.ts";
 
 export interface RunView { n: number; fixture: LabFixture; state: StageState; outcome: Outcome }
@@ -30,6 +31,24 @@ export function finalModel(fixtures: readonly LabFixture[], env: Record<string, 
     eventCount: fixtures.reduce((n, f) => n + f.events.length, 0),
   };
 }
+
+/** The run register's move text (build spec 3). refunded-flat = a refund at the 25 floor (code review L-6). */
+export function registerMoveOf(outcome: Outcome, q: { quote_mnear: number; prev_quote_mnear?: number }): string {
+  const prev = q.prev_quote_mnear ?? q.quote_mnear;
+  switch (outcome) {
+    case "earned": return `${nearOf(prev)} → ${nearOf(q.quote_mnear)}`;
+    case "holds": return `${nearOf(q.quote_mnear)} holds · counted once`;
+    case "refunded": return `${nearOf(prev)} → ${nearOf(q.quote_mnear)} · refunded`;
+    case "refunded-flat": return `${nearOf(q.quote_mnear)} holds · refunded`;
+    default: return `${nearOf(q.quote_mnear)} holds`;
+  }
+}
+
+/** Refund stamps the receipt whether or not the quote moved (build spec 4.3, "Refund, no quote change"). */
+export const isRefund = (o: Outcome): boolean => o === "refunded" || o === "refunded-flat";
+
+/** Lede key: the stage state, except a refund at the floor, where the quote does not drop. */
+export const ledeKeyOf = (r: RunView): string => (r.outcome === "refunded-flat" ? "refunded-flat" : stageStateOf(r));
 
 /** data-stage-state hook (build spec 8.6). */
 export function stageStateOf(r: RunView): string {

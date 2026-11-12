@@ -9,13 +9,13 @@ export function Header({ railStep, placeholder, sandbox }: { railStep: number; p
     <header className={s.bar}>
       <Mark className={s.mark} />
       <span className={s.wordmark}>Earned Price</span>
-      <nav className={s.rail} aria-label="Demo steps">
+      <ol className={s.rail} aria-label="Demo steps">
         {STEPS.map((t, i) => {
           const n = i + 1;
           const cls = n < railStep ? s.done : n === railStep ? s.on : undefined;
-          return <span key={t} className={cls} aria-current={n === railStep ? "step" : undefined}>{t}</span>;
+          return <li key={t} className={cls} aria-current={n === railStep ? "step" : undefined}>{t}</li>;
         })}
-      </nav>
+      </ol>
       <span className={s.chips}>
         {sandbox
           ? <span className={`${s.chip} ${s.sandbox}`}>CONTRACT TEST · LOCAL SANDBOX</span>

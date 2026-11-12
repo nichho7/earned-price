@@ -12,7 +12,8 @@
 
 /* ---------- left column ---------- */
 .kicker { font: 500 var(--fs-micro)/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--cream-2); }
-.headline { margin: var(--s3) 0 0; padding-bottom: .08em; font: 400 var(--fs-stage)/.9 var(--serif); letter-spacing: -.035em; }
+.live { margin: var(--s3) 0 0; }
+.headline { margin: 0; padding-bottom: .08em; font: 400 var(--fs-stage)/.9 var(--serif); letter-spacing: -.035em; }
 .headline:focus { outline: none; }
 .waiting { font-family: var(--serif-italic); font-style: italic; color: var(--cream-2); }
 .move { margin: var(--s3) 0 0; font: 500 var(--fs-move)/1.4 var(--mono); }
@@ -32,6 +33,7 @@
 .amt { margin-top: var(--s3); font: 400 19px/1 var(--mono); letter-spacing: 0; color: var(--cream); }
 .amt small { display: block; margin-top: var(--s2); font: 400 10px/1.2 var(--mono); letter-spacing: .08em; color: var(--cream-2); }
 .nil { color: var(--line); }
+.nowrap { white-space: nowrap; }
 .token {
   display: inline-block; padding: 7px var(--s2); border-radius: 1px; font: 500 19px/1 var(--mono);
   background: var(--cream); color: var(--violet); box-shadow: 0 5px 0 -1px var(--slot);
@@ -168,7 +170,7 @@
 @container app (max-width: 760px) {
   .stage { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: var(--s5); }
   .left, .right { display: contents; }
-  .kicker { order: 1; } .headline { order: 2; } .move { order: 3; } .lede { order: 4; }
+  .kicker { order: 1; } .live { order: 2; } .move { order: 3; } .lede { order: 4; }
   .tilt { order: 6; margin-top: var(--s5); transform: rotate(var(--tilt-n)); }
   .ledger { order: 7; } .cap { order: 8; } .strip { order: 9; } .record { order: 10; } .register { order: 11; }
   .headline { font-size: var(--fs-stage-n); }

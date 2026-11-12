@@ -5,8 +5,8 @@
 }
 .mark { width: 22px; height: 22px; flex: none; }
 .wordmark { font: 400 var(--fs-wordmark)/1 var(--serif); letter-spacing: -.01em; white-space: nowrap; }
-.rail { margin: 0 auto; display: flex; gap: var(--s5); font: 400 var(--fs-small)/1 var(--mono); color: var(--cream-2); }
-.rail span { position: relative; padding: 7px 0; white-space: nowrap; }
+.rail { margin: 0 auto; padding: 0; list-style: none; display: flex; gap: var(--s5); font: 400 var(--fs-small)/1 var(--mono); color: var(--cream-2); }
+.rail li { position: relative; padding: 7px 0; white-space: nowrap; }
 .done::before { content: "✓ "; font-size: 10px; }
 .on { color: var(--cream); font-weight: 500; }
 .on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 2px; background: currentColor; }

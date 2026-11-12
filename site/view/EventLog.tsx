@@ -2,25 +2,27 @@
 // row 4). The real t_ms is shown as recorded; nothing is shortened here.
 import type { LabEvent } from "../stage/schema.ts";
 import type { RunView } from "./model.ts";
+import { nearOf } from "../stage/format.ts";
 import { Ref } from "./Ref.tsx";
 import s from "./eventlog.module.css";
 
 function detail(e: LabEvent): string {
   switch (e.type) {
-    case "quote": return `${e.data.phase} · ${(e.data.quote_mnear / 1000).toFixed(3)} NEAR`;
+    case "quote": return `${e.data.phase} · ${nearOf(e.data.quote_mnear)} NEAR`;
     case "tx_submitted": return `${e.data.action} · signed by the ${e.data.actor}`;
     case "tx_confirmed": return `${e.data.action} · ${e.data.status}`;
     case "accepted": return "seller accepted";
     case "attested": return `${e.data.findings_count} findings`;
     case "check_graded": return `${e.data.bug_id} ${e.data.hit ? "found" : "missed"}`;
-    case "settled": return `${e.data.outcome === "paid_seller" ? "paid seller" : "refunded buyer"} · ${(e.data.amount_mnear / 1000).toFixed(3)}`;
+    case "settled": return `${e.data.outcome === "paid_seller" ? "paid seller" : "refunded buyer"} · ${nearOf(e.data.amount_mnear)}`;
   }
 }
 
 export function EventLog({ runs, count }: { runs: RunView[]; count: number }) {
   return (
     <details className={s.log} data-event-log="">
-      <summary>Event log · {count} events</summary>
+      {/* A drawn marker (not the native one, which display:flex hides): QA loop 1, B1. */}
+      <summary><span className={s.marker} aria-hidden="true" data-marker="" />Event log · {count} events</summary>
       <div className={s.scroll}>
         <table>
           <thead><tr><th scope="col">run</th><th scope="col">seq</th><th scope="col">type</th><th scope="col">t_ms</th><th scope="col">what</th><th scope="col">tx</th></tr></thead>
