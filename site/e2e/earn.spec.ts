@@ -49,6 +49,14 @@ async function mount(page: Page) {
   await page.goto("/");
   await page.waitForSelector("[data-ep-mounted]");
 }
+/** T-085 / S-028 AC10: the final frame's CTA is README Tier 1's command (same string as the no-JS list). */
+async function expectCloserCta(page: Page) {
+  const cmd = page.locator(".ep .cls .cmd");
+  await expect(cmd).toBeVisible();
+  await expect(cmd).toHaveText("$node scripts/self-check.mjs");
+  await expect(page.locator(".ep .cls")).toContainText("Price earned, not claimed.");
+  await expect(page.locator(".ep .cls")).toContainText("NEAR Real-World Money");
+}
 const toHeadline = (page: Page) => page.locator(".ep .hd").evaluate((el) => el.scrollIntoView({ block: "start" }));
 
 /** Drives the fake clock until the timeline ends; returns every distinct snapshot in order. */
@@ -110,6 +118,7 @@ test("R7 + R1, full motion: every step is one real event group in order; odomete
   expect(holds.price).toBe("0.040 NEAR");
   expect(seen.filter((s) => s.run === "0").every((s) => s.rail === "3")).toBe(true);
   expect(holds.rail).toBe("4");
+  await expectCloserCta(page);
   const props = await page.evaluate(() => [...(window as unknown as { __kf: Set<string> }).__kf]);
   expect(props.filter((p) => !R1_KEYS.has(p)), "R1: only transform / opacity / clip-path may animate").toEqual([]);
   expect(props).toEqual(expect.arrayContaining(["transform", "clipPath", "opacity"]));
@@ -134,6 +143,39 @@ test("R6 amended: OS Reduce Motion plays the same story as opacity-only crossfad
   expect(css.filter((p) => !["offset", "easing", "composite", "computedOffset", "opacity"].includes(p))).toEqual([]);
   const end = seen[seen.length - 1];
   expect([end.state, end.price, end.closer]).toEqual(["holds", "0.040 NEAR", "1"]);
+  await expectCloserCta(page);
+  await ctx.close();
+});
+
+test("headline (Designer QA L2-2): the old-word layer animates only when the headline changes, so no stale word ever flashes", async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" });
+  const page = await ctx.newPage();
+  // Each .h-a animation is a headline swap. A swap is honest only if the headline (.h-b) changed in the same task,
+  // i.e. differs from what the last animation frame showed. Before the fix, an unchanged headline still swapped
+  // and painted the word from two steps back at full opacity for a frame (7 times per playback).
+  await page.addInitScript(() => {
+    const w = window as unknown as { __hd: { swaps: number; stale: string[]; frameB: string | null } };
+    w.__hd = { swaps: 0, stale: [], frameB: null };
+    const orig = Element.prototype.animate;
+    Element.prototype.animate = function (kf, opts) {
+      if (this.classList.contains("h-a")) {
+        const b = this.parentElement?.querySelector(".h-b")?.textContent ?? "";
+        w.__hd.swaps++;
+        if (b === w.__hd.frameB) w.__hd.stale.push(`"${this.textContent}" over unchanged "${b}"`);
+      }
+      return orig.call(this, kf, opts);
+    };
+    const tick = () => { w.__hd.frameB = document.querySelector(".ep .hd .h-b")?.textContent ?? null; requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+  await page.clock.install();
+  await mount(page);
+  await toHeadline(page);
+  const seen = await playAll(page);
+  expect(seen[seen.length - 1].state).toBe("holds");
+  const hd = await page.evaluate(() => (window as unknown as { __hd: { swaps: number; stale: string[] } }).__hd);
+  expect(hd.swaps, "headline swaps happen at all").toBeGreaterThan(5);
+  expect(hd.stale, "stale headline swaps").toEqual([]);
   await ctx.close();
 });
 
@@ -316,19 +358,39 @@ test("failsafe race (review O-2): JS that arrives after the 2.5 s failsafe keeps
 });
 
 for (const width of [390, 1280])
-  test(`tx links at ${width}: one line each (Designer QA note 2) and a hit area of at least 24 px (note 3)`, async ({ browser }) => {
+  test(`tx links at ${width}: one line each (Designer QA note 2), a text-tight box and focus ring, and a hittable 24 px (note 3, L2-1)`, async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await ctx.newPage();
     await mount(page);
     await page.locator('.ep [data-act="skip"]').click();
-    const links = await page.locator(".ep a.lnk").evaluateAll((as) => as.map((a) => {
-      const tops = new Set([...a.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
-      return { slot: a.closest<HTMLElement>("[data-slot]")?.dataset.slot ?? "", lines: tops.size, h: a.getBoundingClientRect().height };
-    }));
-    expect(links.length).toBeGreaterThan(0);
+    const n = await page.locator(".ep a.lnk").count();
+    expect(n).toBeGreaterThan(0);
+    const links: { slot: string; lines: number; h: number; pad: string; hit: number; left: number; right: number; cy: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      const a = page.locator(".ep a.lnk").nth(i);
+      await a.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      links.push(await a.evaluate((el) => {
+        const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+        const tops = new Set([...el.getClientRects()].filter((q) => q.width > 0).map((q) => Math.round(q.top)));
+        // hittable height: scan the centre line in 0.5 px steps; anything painted on top is excluded (Designer's method)
+        const x = r.left + r.width / 2;
+        let hit = 0;
+        for (let y = r.top - 20; y <= r.bottom + 20; y += 0.5) if (document.elementFromPoint(x, y)?.closest("a") === el) hit += 0.5;
+        return { slot: el.closest<HTMLElement>("[data-slot]")?.dataset.slot ?? "", lines: tops.size, h: r.height,
+          pad: `${cs.paddingTop} ${cs.paddingBottom}`, hit, left: r.left + scrollX, right: r.right + scrollX, cy: r.top + scrollY + r.height / 2 };
+      }));
+    }
     for (const l of links) {
-      if (l.slot === "reg") expect(l.lines, `register link wraps at ${width}`).toBe(1);
-      expect(l.h, `${l.slot} link hit area at ${width}`).toBeGreaterThanOrEqual(24);
+      expect(l.lines, `${l.slot} link wraps at ${width}`).toBe(1);
+      expect(l.pad, `${l.slot}: no padding, so the focus ring hugs the text (L2-1)`).toBe("0px 0px");
+      expect(l.h, `${l.slot}: text-tight box at ${width} (the 24 px comes from ::before, not the box)`).toBeLessThan(24);
+      expect(l.hit, `${l.slot} hittable height at ${width}`).toBeGreaterThanOrEqual(24);
+    }
+    // L2-1: the 24 px hit bands of links stacked in one column do not overlap
+    for (const p of links) for (const q of links) {
+      if (p === q || p.right <= q.left || q.right <= p.left || p.cy >= q.cy) continue;
+      const band = (l: typeof p) => Math.max(l.h, 24) / 2;
+      expect(q.cy - band(q), `${p.slot} / ${q.slot} hit areas overlap at ${width}`).toBeGreaterThanOrEqual(p.cy + band(p) - 0.5);
     }
     await ctx.close();
   });
