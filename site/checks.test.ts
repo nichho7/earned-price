@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // @ts-expect-error plain .mjs build scripts, no type declarations
-import { checkFile, checkPackage } from "../scripts/site-rules.mjs";
+import { checkFile, checkPackage, scanned } from "../scripts/site-rules.mjs";
 // @ts-expect-error plain .mjs build scripts, no type declarations
 import { codepointsOf, rangeHits, measure } from "../scripts/site-size-gate.mjs";
 
@@ -29,6 +29,34 @@ test("R4: wallet/RPC code only via import() under app/live/", () => {
   assert.equal(checkFile("app/live/a.ts", 'import { connect } from "near-api-js";').length, 1);
   assert.equal(checkFile("app/page.tsx", 'const m = await import("@near-js/accounts");').length, 1);
   assert.equal(checkFile("app/live/island.tsx", 'const m = await import("near-api-js");').length, 0);
+});
+
+test("scope: test files and e2e are not scanned (they hold the known-bad inputs); source is", () => {
+  assert.equal(scanned("site/checks.test.ts"), false);
+  assert.equal(scanned("site/stage/reducer.spec.tsx"), false);
+  assert.equal(scanned("site/e2e/shoot.mjs"), false);
+  assert.equal(scanned("site/view/Stage.tsx"), true);
+  assert.equal(scanned("app/tokens.css"), true);
+  assert.equal(scanned("site/view/latest.ts"), true); // "test" inside a name is still source
+});
+
+test("R4 transitive: wallet code reached through a repo module outside app/ and site/ fails", () => {
+  const files: Record<string, string> = {
+    "site-api/buyer-auth.js": 'import { PublicKey } from "near-api-js";\nexport const signReviewAuth = () => 1;',
+    "site-api/chain.js": 'import { viewFunction } from "../cli/quote.js";\nexport const f = async () => (await import("near-api-js")).KeyPair;',
+    "site-api/through.js": 'export { signReviewAuth } from "./buyer-auth.js";',
+    "cli/quote.js": "export const viewFunction = () => 1;",
+    "cli/names.js": 'export const CONTRACT = "x";',
+  };
+  const read = (rel: string) => files[rel] ?? null;
+  const from = (rel: string, src: string) => checkFile(rel, src, read);
+  assert.equal(from("app/page.tsx", 'import { signReviewAuth } from "../site-api/buyer-auth.js";').length, 1);
+  assert.equal(from("site/view/X.tsx", 'import { signReviewAuth } from "../../site-api/through.js";').length, 1); // two hops
+  assert.equal(from("site/view/X.tsx", 'import { f } from "../../site-api/chain.js";').length, 1); // reached file lazy-loads it
+  assert.equal(from("site/view/X.tsx", 'const m = await import("../../site-api/buyer-auth.js");').length, 1); // import() outside app/live/
+  assert.equal(from("app/live/island.tsx", 'const m = await import("../../site-api/buyer-auth.js");').length, 0); // the allowed path
+  assert.equal(from("app/live/a.ts", 'import { signReviewAuth } from "../../site-api/buyer-auth.js";').length, 1); // static, even in live
+  assert.equal(from("site/view/X.tsx", 'import { CONTRACT } from "../../cli/names.js";').length, 0); // wallet-free module is fine
 });
 
 test("size gate: unicode-range matching and script accounting", () => {
