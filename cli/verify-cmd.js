@@ -1,9 +1,11 @@
 // `earned verify <receipt.json> [--tamper] [--json]` (T-029 / S-024): the four offline checks of
 // verify/receipt.js, printed in order. Keyless, no network. --tamper verifies an in-memory copy
 // with one byte of the stored review text changed (the file is never modified): only check 2 fails.
-// Exit code: 0 all checks pass, 1 a check failed, 2 usage or unreadable / non-receipt file.
+// Exit code: 0 REVIEW AUTHENTIC (offline: all 4 checks pass for an official pack), 1 a check failed
+// or the pack is not official (the sample-0 fixture), 2 usage or unreadable / non-receipt file.
+// Every printed line goes through printable(): receipt text can't inject escapes or fake lines.
 import { readReceipt } from "./receipt-file.js";
-import { ReceiptError, tamperReceipt, verifyReceipt } from "../verify/receipt.js";
+import { ReceiptError, printable, tamperReceipt, verifyReceipt } from "../verify/receipt.js";
 
 const USAGE = "usage: earned verify <receipt.json> [--tamper] [--json]";
 
@@ -21,13 +23,14 @@ export function parseVerifyArgs(argv) {
 }
 
 /** Verifies the receipt at `path`, prints the result, returns verifyReceipt's result (+ tampered). */
-export async function runVerify({ path, tamper, json, out = (l) => console.log(l) }) {
+export async function runVerify({ path, tamper, json, out: write = (l) => console.log(l) }) {
+  const out = (l) => write(printable(l));
   let receipt = readReceipt(path);
   let edit = null;
   if (tamper) ({ receipt, edit } = tamperReceipt(receipt));
   const v = verifyReceipt(receipt);
   if (json) {
-    out(JSON.stringify(edit ? { ...v, tampered: edit } : v, null, 2));
+    write(JSON.stringify(edit ? { ...v, tampered: edit } : v, null, 2)); // JSON.stringify escapes control characters
     return v;
   }
   out(`Verifying ${path}: job ${receipt.job_id}, ${receipt.pack_id}, ${receipt.network} (offline, no key)`);
@@ -40,11 +43,8 @@ export async function runVerify({ path, tamper, json, out = (l) => console.log(l
     out(`         ${c.detail}`);
   }
   out(v.not_checked);
-  if (v.ok) {
-    out("VERIFIED: all 4 checks pass");
-    out("SEE: step 5 PASS");
-  } else {
-    for (const c of v.checks.filter((x) => !x.ok)) out(`FAIL: check ${c.n} ${c.title}`);
-  }
+  if (v.checks.every((c) => c.ok)) out(v.verdict); // REVIEW AUTHENTIC (offline) or NOT AN OFFICIAL PACK
+  else for (const c of v.checks.filter((x) => !x.ok)) out(`FAIL: check ${c.n} ${c.title}`);
+  out(v.not_proven);
   return v;
 }

@@ -58,7 +58,13 @@ test("verify/receipt.js runs in headless Chrome with the same results as Node", 
     const t = tamperReceipt(r);
     assert.equal(browser.env, "object", "ran with a real window object");
     assert.equal(browser.rebuilt_equal, true, "buildReceipt in the browser reproduces the file byte for byte");
-    assert.equal(browser.ok, true);
+    // The fixture is not an official pack: 4 checks pass, never authentic (trust anchors load in the browser too).
+    assert.equal(browser.ok, v.ok);
+    assert.equal(browser.ok, false);
+    assert.equal(browser.official, false);
+    assert.equal(browser.verdict, v.verdict);
+    assert.deepEqual(browser.proves, v.proves);
+    assert.equal(browser.chain_fields_checked, false);
     assert.deepEqual(browser.checks, v.checks.map((c) => [c.n, c.ok, c.detail]));
     assert.deepEqual(browser.tamper_edit, t.edit);
     assert.deepEqual(browser.tamper_checks, [[1, true], [2, false], [3, true], [4, true]]);
