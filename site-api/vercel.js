@@ -32,7 +32,8 @@
 //                              most $2 of credit (Nicho, A-003; security H-1). It is the real hard
 //                              spend stop: NEAR AI answers 402 (= replay) once it is empty, and
 //                              the pre-accept probe (T-084, check_api_key) then declines the open
-//                              job instead of accepting it. Never the main $5 key. Without it every request replays (not_configured).
+//                              job instead of accepting it. Never the main $5 key. Without it
+//                              every request replays (not_configured).
 //   EARNED_SELLER_PRIVATE_KEY  secret, ed25519:... A FUNCTION-CALL access key of
 //                              seller.earned-price.testnet limited to the escrow's accept, decline
 //                              and submit_review, with a gas allowance (security M-2). Never the
