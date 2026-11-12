@@ -3,7 +3,7 @@
 // recorded-shape FinalExecutionOutcome bodies.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -478,7 +478,11 @@ test("S-2: still unknown (lookup null or throws) -> refused with the explorer li
     const f = fakes({ dir });
     await assert.rejects(
       runPick({ ...f.deps, pack: "2", lookupCreate }),
-      (e) => e.code === "JOB_IN_PROGRESS" && e.message.includes("https://testnet.nearblocks.io/txns/LostTxHash333") && e.message.includes(`mv ${jobFilePath(dir)} ${join(dir, "jobs", "unsent.json")}`),
+      (e) => {
+        const target = e.message.match(/mv -n (\S+) (\S+)$/);
+        return e.code === "JOB_IN_PROGRESS" && e.message.includes("https://testnet.nearblocks.io/txns/LostTxHash333") &&
+          target?.[1] === jobFilePath(dir) && target[2].startsWith(join(dir, "jobs", "unsent-")) && target[2].endsWith(".json");
+      },
     );
     assert.equal(loadJob(dir).status, "unconfirmed");
     assert.equal(loadState(dir).spent_yocto, (30n * YOCTO_PER_MNEAR).toString());
@@ -498,6 +502,68 @@ test("L-1 lock: a second concurrent pick is refused before any network call; the
   const h = fakes({ dir: g.dir });
   await assert.rejects(runPick({ ...h.deps, pack: "1" }), { code: "JOB_IN_PROGRESS" });
   assert.equal(existsSync(join(g.dir, LOCK_FILE_NAME)), false, "released on error too");
+});
+
+test("O-2: each recovery mv targets a fresh timestamped name, never overwriting an earlier one", async () => {
+  const targets = [];
+  for (let i = 0; i < 2; i++) {
+    const dir = unconfirmedHome();
+    const f = fakes({ dir });
+    await assert.rejects(runPick({ ...f.deps, pack: "2" }), (e) => (targets.push(e.message.match(/mv -n \S+ (\S+)$/)?.[1]), true));
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.ok(targets.every(Boolean));
+  const names = targets.map((t) => t.split("/").at(-1));
+  assert.notEqual(names[0], names[1]);
+});
+
+test("N-1 stale lock: a lock left by a dead pid is removed and the pick runs", async () => {
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid; // already exited
+  const f = fakes();
+  writeFileSync(join(f.dir, LOCK_FILE_NAME), String(dead));
+  const res = await runPick({ ...f.deps, pack: "2" });
+  assert.equal(res.job.status, "open");
+  assert.match(f.lines.join("\n"), new RegExp(`removed a stale lock from pid ${dead}`));
+  assert.equal(existsSync(join(f.dir, LOCK_FILE_NAME)), false, "our own lock released after the run");
+});
+
+test("N-1 stale lock: a lock held by a live pid (ours) still gives PICK_LOCKED and is kept", async () => {
+  const f = fakes();
+  const lock = join(f.dir, LOCK_FILE_NAME);
+  writeFileSync(lock, String(process.pid));
+  await assert.rejects(runPick({ ...f.deps, pack: "2" }), { code: "PICK_LOCKED" });
+  assert.equal(readFileSync(lock, "utf8"), String(process.pid));
+  assert.equal(f.calls.views.length, 0);
+});
+
+test("N-1 stale lock: an empty or unparseable lock older than 2 min is removed; a fresh one is not", async () => {
+  for (const body of ["", "not-a-pid"]) {
+    const f = fakes();
+    const lock = join(f.dir, LOCK_FILE_NAME);
+    writeFileSync(lock, body);
+    await assert.rejects(runPick({ ...f.deps, pack: "2" }), { code: "PICK_LOCKED" }, `fresh ${JSON.stringify(body)}`);
+    const old = new Date(Date.now() - 3 * 60 * 1000);
+    utimesSync(lock, old, old);
+    const res = await runPick({ ...f.deps, pack: "2" });
+    assert.equal(res.job.status, "open");
+    assert.match(f.lines.join("\n"), /removed a stale lock/);
+  }
+});
+
+test("N-1 lock file: our pid, mode 0600", async () => {
+  const f = fakes();
+  let seen;
+  const res = await runPick({
+    ...f.deps,
+    pack: "2",
+    sendCreate: async (req) => {
+      const lock = join(f.dir, LOCK_FILE_NAME);
+      seen = { body: readFileSync(lock, "utf8"), mode: statSync(lock).mode & 0o777 };
+      return f.deps.sendCreate(req);
+    },
+  });
+  assert.equal(res.job.status, "open");
+  assert.deepEqual(seen, { body: String(process.pid), mode: 0o600 });
 });
 
 test("L-2: the seller and its source are shown; a non-demo seller needs --yes", async () => {
@@ -543,6 +609,10 @@ function fakeAccounts(script) {
         return (await signTx(step.nonce)).signedTransaction;
       },
       provider: {
+        viewTransactionStatus: async (q) => {
+          if (!step.viewTx) throw new Error("UNKNOWN_TRANSACTION");
+          return step.viewTx(q);
+        },
         sendTransactionUntil: async (signed, waitUntil) => {
           log.broadcasts.push({ url, waitUntil, nonce: signed.transaction.nonce });
           if (step.sendThrows) throw step.sendThrows;
@@ -602,6 +672,18 @@ test("sendCreateTx: InvalidNonce once -> re-signed with a fresh account and sent
 
   const b = fakeAccounts([{ sendThrows: nonceErr() }, { sendThrows: nonceErr() }]);
   await assert.rejects(sendCreateTx(sendReq(b.makeAccount)), (e) => e.notSent === true);
+});
+
+test("O-1: InvalidNonce, but the first tx is found on chain -> its outcome is returned, no second create", async () => {
+  const nonceErr = new rpcErrors.InvalidNonceError(9n, 5n, "", "");
+  const lookups = [];
+  const a = fakeAccounts([{ sendThrows: nonceErr, viewTx: (q) => (lookups.push(q), okOutcome("7", "FirstHash")) }, {}]);
+  const out = await sendCreateTx(sendReq(a.makeAccount));
+  assert.equal(out.status.SuccessValue, b64('"7"'));
+  assert.equal(a.log.broadcasts.length, 1, "not re-signed");
+  assert.equal(lookups.length, 1);
+  assert.equal(lookups[0].txHash, signedTxHash((await signTx()).signedTransaction, near));
+  assert.equal(lookups[0].accountId, BUYER);
 });
 
 test("sendCreateTx: timeout or a dropped connection after broadcast is an unknown outcome (not notSent)", async () => {

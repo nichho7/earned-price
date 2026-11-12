@@ -14,7 +14,7 @@
 // A finished job file is archived, never overwritten. T-031 hire must end a job with status "closed".
 // All network access is injected (fetch for views, sendCreate for the tx), so tests never touch it.
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONTRACT_ACCOUNT, NETWORK } from "./names.js";
 import { RPC_RETRIES, RPC_URLS, assertTestnet, assertTestnetRpc, loadState, redact, saveState, stateDir } from "./init.js";
@@ -167,16 +167,59 @@ export function archiveJob(dir, prior, now = new Date()) {
   return dest;
 }
 
-/** One pick at a time (security L-1): an exclusive lock file; returns the release function. */
-export function acquirePickLock(dir) {
-  const lock = join(dir, LOCK_FILE_NAME);
+export const STALE_LOCK_MS = 2 * 60 * 1000;
+
+/** True when the process that wrote this lock is gone (ESRCH), or the lock has no pid and is old. */
+function lockIsStale(lock, now) {
+  let body;
+  let mtimeMs;
   try {
-    closeSync(openSync(lock, "wx", 0o600));
+    body = readFileSync(lock, "utf8").trim();
+    mtimeMs = lstatSync(lock).mtimeMs;
   } catch (err) {
-    if (err?.code === "EEXIST") {
-      throw new PickError("PICK_LOCKED", `refused: another \`earned pick\` is running (${lock} exists). If none is, delete that file and retry. Nothing was sent.`);
-    }
+    if (err?.code === "ENOENT") return { stale: true, pid: null }; // released meanwhile
     throw err;
+  }
+  const pid = /^\d+$/.test(body) ? Number(body) : NaN;
+  if (Number.isSafeInteger(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0);
+      return { stale: false, pid };
+    } catch (err) {
+      return { stale: err?.code === "ESRCH", pid }; // EPERM: alive, not ours to judge
+    }
+  }
+  return { stale: now - mtimeMs > STALE_LOCK_MS, pid: null };
+}
+
+/**
+ * One pick at a time (security L-1): an exclusive lock file holding our pid (0600); returns the
+ * release function. Ctrl+C skips `finally`, so a lock whose pid is dead (or an empty, unreadable
+ * lock older than 2 min) is removed once, with a message, and acquisition retried (review N-1).
+ */
+export function acquirePickLock(dir, { say = () => {}, now = Date.now() } = {}) {
+  const lock = join(dir, LOCK_FILE_NAME);
+  const take = () => writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
+  try {
+    take();
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+    const { stale, pid } = lockIsStale(lock, now);
+    if (!stale) {
+      throw new PickError("PICK_LOCKED", `refused: another \`earned pick\` is running (${lock} exists${pid ? `, pid ${pid}` : ""}). If none is, delete that file and retry. Nothing was sent.`);
+    }
+    say(`removed a stale lock from pid ${pid ?? "unknown"} (${lock})`);
+    try {
+      unlinkSync(lock);
+    } catch (e) {
+      if (e?.code !== "ENOENT") throw e;
+    }
+    try {
+      take();
+    } catch (e) {
+      if (e?.code === "EEXIST") throw new PickError("PICK_LOCKED", `refused: another \`earned pick\` took ${lock} just now. Nothing was sent.`);
+      throw e;
+    }
   }
   return () => {
     try {
@@ -261,7 +304,7 @@ function jobInProgress(dir, prior, state) {
     const where = prior.create_tx ? `${EXPLORER}/txns/${prior.create_tx}` : `${EXPLORER}/address/${state.account_id}`;
     return new PickError(
       "JOB_IN_PROGRESS",
-      `the last create for ${prior.pack_id} is ${prior.status}: its outcome is not known yet. Check ${where}. If it shows a create to ${prior.contract ?? CONTRACT_ACCOUNT}, run \`earned hire\` (the salt in ${file} is needed to reveal). Only if no create from ${state.account_id} landed: mkdir -p ${join(dir, JOBS_ARCHIVE_DIR)} && mv ${file} ${join(dir, JOBS_ARCHIVE_DIR, "unsent.json")}`,
+      `the last create for ${prior.pack_id} is ${prior.status}: its outcome is not known yet. Check ${where}. If it shows a create to ${prior.contract ?? CONTRACT_ACCOUNT}, run \`earned hire\` (the salt in ${file} is needed to reveal). Only if no create from ${state.account_id} landed: mkdir -p ${join(dir, JOBS_ARCHIVE_DIR)} && mv -n ${file} ${join(dir, JOBS_ARCHIVE_DIR, `unsent-${new Date().toISOString().replace(/[:.]/g, "-")}.json`)}`,
     );
   }
   return new PickError(
@@ -307,7 +350,7 @@ export async function runPick(deps) {
   const dir = deps.dir ?? stateDir(deps.cwd ?? process.cwd(), deps.env ?? process.env);
   const buyer = loadState(dir);
   if (!buyer || buyer.status !== "created") throw new PickError("NO_BUYER", "no testnet buyer yet; run `earned init` first");
-  const release = acquirePickLock(dir);
+  const release = acquirePickLock(dir, { say: out });
   try {
     return await pickLocked({ n, fetchFn, urls, contractId, seller, sendCreate, lookupCreate, loadPack, salt, out, openingMilli, dir });
   } finally {
@@ -484,7 +527,15 @@ export async function sendCreateTx({ urls, makeAccount, state, contractId, metho
       return await account.provider.sendTransactionUntil(signed, "EXECUTED_OPTIMISTIC");
     } catch (err) {
       if (!isRejectedBeforeInclusion(err, rpcErrors)) throw err;
-      if (err instanceof rpcErrors.InvalidNonceError && attempt === 0) continue;
+      if (err instanceof rpcErrors.InvalidNonceError && attempt === 0) {
+        // Review O-1: a provider retry of send_tx may already have landed this exact tx (it used
+        // the nonce). If the chain knows it, that is our create: never re-sign a second one.
+        const landed = await account.provider
+          .viewTransactionStatus({ txHash: signedTxHash(signed, near), accountId: state.account_id, waitUntil: "EXECUTED_OPTIMISTIC" })
+          .catch(() => null);
+        if (landed) return landed;
+        continue;
+      }
       throw notSent(err);
     }
   }
