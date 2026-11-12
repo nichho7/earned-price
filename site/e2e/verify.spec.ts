@@ -44,7 +44,8 @@ test("no-JS HTML: the four checks in m001 order (not run), the honesty line and 
     expect(i, `"${t}" in order`).toBeGreaterThan(at);
     at = i;
   }
-  for (const s of [NOT_CHECKED, CLI, "needs JavaScript", "Check it yourself.", "NO KEY · NO SERVER CALL"]) expect(html, s).toContain(s);
+  const text = html.replace(/<[^>]+>/g, ""); // the CLI line is one unbreakable span per word
+  for (const s of [NOT_CHECKED, `$ ${CLI}`, "needs JavaScript", "Check it yourself.", "NO KEY · NO SERVER CALL"]) expect(text, s).toContain(s);
   expect(html).not.toContain("model_attestations"); // the 300 KB attestation ships in the JS chunk, not twice in HTML
   expect(html).not.toContain("innerHTML");
 });

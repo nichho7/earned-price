@@ -5,7 +5,7 @@
 // the page, and pressing Verify makes no network call (e2e). Renders only from the view model (verify-model.ts),
 // as React text nodes, never HTML. Motion: motion-spec M10 (checks print one by one, stamp lands) and M10b
 // (tampered: the receipt shakes, 420 ms); OS Reduce Motion gets opacity fades and no shake.
-import { useLayoutEffect, useRef, useState, type ChangeEvent } from "react";
+import { Fragment, useLayoutEffect, useRef, useState, type ChangeEvent } from "react";
 import pack2 from "../../recorded/pack-2.json";
 import {
   CHECKS, NOT_CHECKED_OFFLINE, RECORDED_NAME, ReceiptError, cliLine, loadFile, parseReceiptText, receiptJson, trustSummary, verifyView,
@@ -221,8 +221,15 @@ export function VerifyPanel() {
             <small>SAME CHECK, FROM THE CLI · README TIER 1</small>
             <div className={s.cmd}>
               <code ref={code} data-cli="">
-                <span aria-hidden="true">$ </span>
-                {cli}
+                <span className={s.pr} aria-hidden="true">
+                  ${" "}
+                </span>
+                {cli.split(" ").map((w, i) => (
+                  <Fragment key={i}>
+                    {i ? " " : ""}
+                    <span className={s.wd1}>{w}</span>
+                  </Fragment>
+                ))}
               </code>
               <button type="button" className={s.copy} onClick={copy} hidden={!mounted} data-act="copy">
                 {copied ? "Copied" : "Copy"}

@@ -72,7 +72,8 @@
   padding: var(--s2) var(--s2) var(--s2) var(--s4); box-shadow: var(--shadow-print-x) var(--shadow-print-y) 0 var(--slot);
 }
 .cmd code { flex: 1; min-width: 0; font: 500 var(--fs-data)/1.45 var(--mono); overflow-wrap: break-word; }
-.cmd code span { color: var(--ink-2); }
+.cmd .pr { color: var(--ink-2); }
+.cmd .wd1 { white-space: nowrap; } /* wrap only at spaces, never after the "--" of --tamper */
 .copy { flex: none; background: transparent; color: var(--violet); border: var(--hairline) solid var(--violet); }
 .copy:focus-visible { outline: var(--focus-on-sheet); outline-offset: var(--focus-offset); }
 .trust { margin: var(--s7) 0 0; max-width: 60ch; font: 400 var(--fs-row)/1.6 var(--mono); color: var(--cream-2); overflow-wrap: anywhere; }
