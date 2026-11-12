@@ -174,6 +174,8 @@ elif [ "$CODE_HASH" = "$NO_CODE" ]; then
 else
   # Different code is live. Replacing it keeps the old state: a changed
   # EarnedPrice/Job Borsh layout would brick it and strand open-job NEAR.
+  # New review pins (contract/src/pins.rs) go to a fresh account, never over
+  # live jobs: their honest reviews of the old request would be refused (T-048 L-2).
   [ "$REDEPLOY" = 1 ] || die "different code is live on $ACCOUNT ($CODE_HASH -> $NEW_HASH). Redeploying keeps the old state (no init call); if the state layout changed, add a migration first. Rerun with --redeploy to replace it" 7
   say "redeploy: $CODE_HASH -> $NEW_HASH (--redeploy given; old state is kept)"
 fi
@@ -238,15 +240,24 @@ say "quote($SMOKE_SELLER) = $QUOTE yocto (0.030 NEAR)"
 expect "get_record(unknown seller)" "$(retry view call "$ACCOUNT" get_record "$(json seller "$SMOKE_SELLER")")" \
   '{"passes":0,"fails":0,"unique_buyers":0,"jobs":0}'
 # T-048: the live code must pin exactly the review requests this repo builds.
+# A missing view (pre-T-048 code) or an RPC error is a smoke failure (exit 5).
+LIVE_PINS="$(retry view call "$ACCOUNT" review_pins '{}')" \
+  || { printf '[deploy] SMOKE FAIL review_pins: view missing or unreadable (pre-T-048 code?)\n' >&2; exit 5; }
 node -e '
-  const live = JSON.parse(process.argv[1]);
+  let live;
+  try { live = JSON.parse(process.argv[1]); } catch {
+    console.error("[deploy] SMOKE FAIL review_pins: view missing or unreadable (pre-T-048 code?)");
+    process.exit(5);
+  }
   const want = require("./test-vectors/review-pins.json");
+  // Packs compared field by field, so key order inside an entry does not matter.
+  const norm = (k, v) => (k === "packs" && Array.isArray(v) ? v.map((p) => [p?.pack_id, p?.request_sha256]) : v);
   for (const k of ["prompt_version", "model", "packs"]) {
-    if (JSON.stringify(live?.[k]) !== JSON.stringify(want[k])) {
+    if (JSON.stringify(norm(k, live?.[k])) !== JSON.stringify(norm(k, want[k]))) {
       console.error(`[deploy] SMOKE FAIL review_pins.${k}: got ${JSON.stringify(live?.[k])}, want ${JSON.stringify(want[k])} (test-vectors/review-pins.json)`);
       process.exit(5);
     }
-  }' "$(retry view call "$ACCOUNT" review_pins '{}')"
+  }' "$LIVE_PINS"
 say "review_pins match test-vectors/review-pins.json"
 
 # Leaves one open smoke job holding 0.030 NEAR; nobody accepts it, so anyone can

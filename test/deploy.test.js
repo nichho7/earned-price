@@ -36,6 +36,9 @@ function fakeRpc(state) {
           : { error: { name: "HANDLER_ERROR", cause: { name: "UNKNOWN_ACCOUNT" } } };
       } else if (state.failOnce?.delete(params.method_name)) {
         out = { error: { name: "HANDLER_ERROR", cause: { name: "NO_CONTRACT_CODE" } } };
+      } else if (state.views[params.method_name] === undefined) {
+        // What NEAR RPC answers for a method the live code doesn't export.
+        out = { error: { name: "HANDLER_ERROR", cause: { name: "CONTRACT_EXECUTION_ERROR", info: { vm_error: "MethodResolveError(MethodNotFound)" } } } };
       } else {
         const v = state.views[params.method_name];
         out = { result: { result: [...Buffer.from(JSON.stringify(v))] } };
@@ -271,7 +274,8 @@ for (const [label, views, msg] of [
   ["a job without its pack (pre-T-048 code)", { get_job: { ...goodJob(), pack_id: undefined } }, /SMOKE FAIL get_job.pack_id/],
   ["live code with other request pins", { review_pins: { ...LIVE_PINS, packs: LIVE_PINS.packs.map((p, i) => (i ? p : { ...p, request_sha256: "0".repeat(64) })) } }, /SMOKE FAIL review_pins.packs/],
   ["live code built for another prompt version", { review_pins: { ...LIVE_PINS, prompt_version: 2 } }, /SMOKE FAIL review_pins.prompt_version/],
-  ["pre-T-048 code with no review_pins view", { review_pins: null }, /SMOKE FAIL review_pins.prompt_version/],
+  ["pre-T-048 code with no review_pins view (MethodNotFound)", { review_pins: undefined }, /SMOKE FAIL review_pins: view missing or unreadable/],
+  ["a review_pins view that returns null", { review_pins: null }, /SMOKE FAIL review_pins.prompt_version/],
 ]) {
   test(`deploy.sh smoke fails (exit 5) on ${label}`, async () => {
     const state = { ...fresh(), views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, review_pins: LIVE_PINS, get_job: goodJob(), ...views } };
@@ -283,6 +287,16 @@ for (const [label, views, msg] of [
     });
   });
 }
+
+test("deploy.sh smoke accepts live review_pins whose pack entries list their keys in another order", async () => {
+  const reordered = { ...LIVE_PINS, packs: LIVE_PINS.packs.map((p) => ({ request_sha256: p.request_sha256, pack_id: p.pack_id })) };
+  const state = { ...fresh(), views: { name: "Earned Price", owner: "earned-price.testnet", signers: SIGNERS, quote: QUOTE, get_record: EMPTY_RECORD, review_pins: reordered, get_job: goodJob() } };
+  await withRpc(state, async (port) => {
+    const r = await run(sandbox(), [], { rpcPort: port });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /review_pins match test-vectors\/review-pins.json/);
+  });
+});
 
 // ---- fix 1: pinned hash ------------------------------------------------------
 test("wasm-info: base58 matches NEAR's empty code_hash and a known vector", () => {

@@ -43,7 +43,9 @@ by the `signing_address` the seller names, over the exact text
 contract's **TEE signer allowlist** (A-012), that the same signed review
 (`response_sha256`; every TEE call returns its own response body, with its own
 completion id) was never used for another job, and that the raw response body
-sent with it hashes to `response_sha256`. The contract does not store that body,
+sent with it hashes to `response_sha256`, and that the response's TEE-signed
+`created` time falls in the job's window (from acceptance to now, 2 minutes of
+clock skew either side). The contract does not store that body,
 but it stays public in the `submit_review` transaction's arguments, so a seller
 can't hide the findings the buyer needs to reveal. **The TEE attestation that
 binds a signer address to a real NEAR AI TEE is checked offline, by
@@ -87,9 +89,12 @@ and the buyer commits the answer key, so a fake buyer can commit any valid key
 for the pack (for example one keyed to what the reviewer is known to report).
 The real cost per fake buyer is one testnet account, gas, and one signed TEE
 review of the official request. Seven fake buyers take a new seller's quote from
-30 to the 100 milliNEAR cap. Since T-048 the review itself can't be gamed (the
-contract only accepts the pinned official request, so no key or extra text can
-reach the reviewer: that part of security review MED-1 is closed); farming
+30 to the 100 milliNEAR cap. Since T-048 the review's input is fixed and its
+timing is bounded: the contract only accepts the pinned official request (so no
+key or extra text can reach the reviewer: that part of security review MED-1 is
+closed) and only a review the TEE signed during the job (its signed `created`
+time must fall in the job's window). A signed review still doesn't name its job
+or seller; see "Public answer keys" below for what that leaves open. Farming
 through fake buyer accounts stays open in the threat model (decision A-014).
 Fails are not deduplicated: every graded fail lowers the quote.
 
@@ -106,7 +111,7 @@ tests and `npm test` check the same vectors (`test-vectors/quote.json`).
 The answer keys are public (`packs/pack-*/answer-key.json`, in this repo and the
 npm package), on purpose (decision A-016): the buyer's machine needs the key to
 commit and reveal it, and each pack's tests name its bugs anyway. So secrecy
-protects nothing; three on-chain checks do:
+protects nothing; four on-chain checks do:
 
 1. **The review request is pinned.** For each pack the contract holds the sha256
    of the one request it accepts: `seller/review-prompt.js`
@@ -121,17 +126,31 @@ protects nothing; three on-chain checks do:
    `seller/review-prompt.js`). The pins are constants of the deployed code: the
    owner can't change them; new code (a new prompt version) changes them, and the
    deploy smoke test checks the live pins against the repo.
-2. **The key can't change after the review.** The buyer commits
+2. **The review was made during the job.** The TEE's response carries its own
+   `created` time (Unix seconds) inside the signed body. `submit_review` refuses
+   the review unless that time is no earlier than the job's acceptance and no
+   later than the current block, each with 2 minutes of clock skew allowed
+   (`CLOCK_SKEW_NS`), and refuses a response without it. So a seller can't run
+   the pinned request ahead of time and keep only the passing reviews, and a
+   signed review left public in another job's failed `submit_review` (sent too
+   late, say) can't be reused on a later job.
+3. **The key can't change after the review.** The buyer commits
    `sha256(u32_be(len K) || K || salt)` at `create` with a fresh 32-byte salt and
    reveals only after the signed review is on-chain; the key must be for the
    job's pack.
-3. **The grade is on-chain.** `reveal` grades the signed response's findings with
+4. **The grade is on-chain.** `reveal` grades the signed response's findings with
    the on-chain grader; nobody can submit a verdict.
 
 What this does not stop: a seller paying for jobs from its own buyer accounts
-(the Sybil limit above), and a buyer committing a valid but wrong key for the
-pack to force a fail and get a free review (security review MED-2, decision
-A-014). The calibration runs (`packs/results/`) used exactly the pinned requests.
+(the Sybil limit above); a buyer committing a valid but wrong key for the pack
+to force a fail and get a free review (security review MED-2, decision A-014);
+and, because a signed review names no job or seller, reuse inside the skew: a
+review made within about 2 minutes of another job on the same pack being
+accepted can land on that job too, by any seller (once only: the replay guard
+burns each signed response on first use). Each pin is the request a calibration
+round actually measured (`packs/results/`): pack-1 rounds 1 and 3, pack-2 round
+1, pack-3 round 4. Pack-3 rounds 1 and 2 used older requests that predate the
+final pack-3 (`npm test` checks this list).
 
 ### Trust and owner powers
 
@@ -179,7 +198,7 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
 
 ## Layout
 
-- `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash for one official pack), `accept`, `decline`, `submit_review` (pinned request + on-chain signature + allowlist + replay check), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `review_pins` (the pinned request per pack, `contract/src/pins.rs`), `owner` / `signers` / `add_signer` / `remove_signer`.
+- `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash for one official pack), `accept`, `decline`, `submit_review` (pinned request + on-chain signature + allowlist + replay check + signed `created` inside the job window), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `review_pins` (the pinned request per pack, `contract/src/pins.rs`), `owner` / `signers` / `add_signer` / `remove_signer`.
 - `cli/`: the `earned` CLI (Node, ESM): `earned init` creates a throwaway testnet buyer account; `earned quote` prints a seller's record-driven quote. `cli/quote.js` is the shared, browser-safe quote module (CLI and website).
 - `grader/`: the commit-reveal code grader (`findingsFromResponse` reads a TEE response the same way the contract does).
 - `packs/`: exam bug packs 1-3 (Python, written from scratch, MIT), 5 planted bugs each, see "Exam packs" below.
@@ -275,6 +294,9 @@ Safety rails:
   test checks `owner` and `signers`. A redeploy never calls init.
 - Refuses to replace different live code unless `--redeploy` is given (old state is kept,
   so a changed state layout needs a migration first).
+- **Deploy new pins (a new prompt version or pack) to a fresh account; never `--redeploy`
+  pins over live jobs:** an accepted job's honest review of the old request would be
+  refused and the job would end in an unfair `no_review` fail.
 - Each full run leaves one open smoke job holding 0.030 NEAR; nobody accepts it, so
   `timeout(job_id)` refunds it after 2 minutes. If a create tx was sent but
   its job id could not be read, the script writes `target/near/smoke-unconfirmed.txt` and

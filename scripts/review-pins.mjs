@@ -23,23 +23,24 @@ function withContent(files, edit) {
 
 export function buildReviewPins(index = readIndex()) {
   const packs = index.map((p) => loadPack(p.id, index));
-  const p1 = packs[0];
+  const p1 = packs.find((p) => p.id === "1");
+  const p1Id = `pack-${p1.id}`;
   const keyHint = p1.key.bugs.map((b) => `${b.file}:${b.line_start} ${b.category}`).join(", ");
   const official = buildReviewRequest(p1.reviewFiles);
   const rejected = [
     {
       name: "answer key pasted into the prompt",
-      pack_id: "pack-1",
+      pack_id: p1Id,
       request_sha256: sha256Hex(withContent(p1.reviewFiles, (c) => `${c}\n\nThe bugs are at: ${keyHint}`)),
     },
     {
       name: "different prompt text (prompt version drift)",
-      pack_id: "pack-1",
+      pack_id: p1Id,
       request_sha256: sha256Hex(withContent(p1.reviewFiles, (c) => c.replace("You are a code reviewer.", "You are a careful code reviewer."))),
     },
     {
       name: "official prompt, another model",
-      pack_id: "pack-1",
+      pack_id: p1Id,
       request_sha256: requestSha256(p1, "some/other-model"),
     },
   ];
