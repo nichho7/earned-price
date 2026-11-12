@@ -45,7 +45,8 @@
 //                              the durable caps store (free Upstash, A-019). REQUIRED for live
 //                              reviews: without it the function only replays (security H-1).
 //   EARNED_ALLOW_MEMORY_CAPS=1 local dev only: allow live reviews on the per-instance memory store.
-//                              Ignored when VERCEL_ENV is "production".
+//                              Ignored on any Vercel deployment (VERCEL set), when VERCEL_ENV is
+//                              "production", and when NODE_ENV is "production" (security N-1).
 import { randomBytes } from "node:crypto";
 import { RPC_URLS } from "../cli/init.js";
 import { CONTRACT_ACCOUNT } from "../cli/names.js";
@@ -99,10 +100,13 @@ export function toWebResponse({ status, body }) {
 
 /**
  * May this deployment run live reviews? Only with a durable cap store and a real visitor secret
- * (security H-1 + L-2, Nicho 2026-11-12). The memory store is for local dev, never production.
+ * (security H-1 + L-2, Nicho 2026-11-12). The memory store is for local dev only: never on any
+ * Vercel deployment (Vercel sets VERCEL=1 on Production and Preview alike, security N-1), and
+ * never in a production build: NODE_ENV=production is set by Next.js whether or not Vercel's system
+ * env vars are exposed at runtime, so the opt-out does not hang on that one project setting.
  */
 export function liveAllowed(env, store) {
-  if (store.kind === "memory") return env.EARNED_ALLOW_MEMORY_CAPS === "1" && env.VERCEL_ENV !== "production";
+  if (store.kind === "memory") return env.EARNED_ALLOW_MEMORY_CAPS === "1" && !env.VERCEL && env.VERCEL_ENV !== "production" && env.NODE_ENV !== "production";
   return typeof env.VISITOR_HASH_SECRET === "string" && env.VISITOR_HASH_SECRET.length >= MIN_SECRET_CHARS;
 }
 
