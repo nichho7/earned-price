@@ -49,6 +49,14 @@ async function mount(page: Page) {
   await page.goto("/");
   await page.waitForSelector("[data-ep-mounted]");
 }
+/** T-085 / S-028 AC10: the final frame's CTA is README Tier 1's command (same string as the no-JS list). */
+async function expectCloserCta(page: Page) {
+  const cmd = page.locator(".ep .cls .cmd");
+  await expect(cmd).toBeVisible();
+  await expect(cmd).toHaveText("$node scripts/self-check.mjs");
+  await expect(page.locator(".ep .cls")).toContainText("Price earned, not claimed.");
+  await expect(page.locator(".ep .cls")).toContainText("NEAR Real-World Money");
+}
 const toHeadline = (page: Page) => page.locator(".ep .hd").evaluate((el) => el.scrollIntoView({ block: "start" }));
 
 /** Drives the fake clock until the timeline ends; returns every distinct snapshot in order. */
@@ -110,6 +118,7 @@ test("R7 + R1, full motion: every step is one real event group in order; odomete
   expect(holds.price).toBe("0.040 NEAR");
   expect(seen.filter((s) => s.run === "0").every((s) => s.rail === "3")).toBe(true);
   expect(holds.rail).toBe("4");
+  await expectCloserCta(page);
   const props = await page.evaluate(() => [...(window as unknown as { __kf: Set<string> }).__kf]);
   expect(props.filter((p) => !R1_KEYS.has(p)), "R1: only transform / opacity / clip-path may animate").toEqual([]);
   expect(props).toEqual(expect.arrayContaining(["transform", "clipPath", "opacity"]));
@@ -134,6 +143,7 @@ test("R6 amended: OS Reduce Motion plays the same story as opacity-only crossfad
   expect(css.filter((p) => !["offset", "easing", "composite", "computedOffset", "opacity"].includes(p))).toEqual([]);
   const end = seen[seen.length - 1];
   expect([end.state, end.price, end.closer]).toEqual(["holds", "0.040 NEAR", "1"]);
+  await expectCloserCta(page);
   await ctx.close();
 });
 
