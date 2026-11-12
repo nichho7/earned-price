@@ -26,12 +26,17 @@
 //   - Call the contract's timeout(job_id) with the buyer key once accept_by has passed (job_state
 //     "open") or review_by has passed (job_state "accepted_no_review"). Nothing refunds otherwise.
 //
+// depsFromEnv must keep wiring teeProbe (T-084): handleReview skips the pre-accept NEAR AI probe
+// when it is missing, and our own outage would then cost the seller a fail (code review N-3).
+//
 // Environment (Vercel project settings, never in code or the repo). Set the secrets for the
 // PRODUCTION environment only (not Preview / Development):
 //   NEAR_AI_API_KEY            secret. A DEDICATED NEAR AI key for this function only, loaded with at
 //                              most $2 of credit (Nicho, A-003; security H-1). It is the real hard
-//                              spend stop: NEAR AI answers 402 (= replay) once it is empty. Never the
-//                              main $5 key. Without it every request replays (not_configured).
+//                              spend stop: NEAR AI answers 402 (= replay) once it is empty, and
+//                              the pre-accept probe (T-084, check_api_key) then declines the open
+//                              job instead of accepting it. Never the main $5 key. Without it
+//                              every request replays (not_configured).
 //   EARNED_SELLER_PRIVATE_KEY  secret, ed25519:... A FUNCTION-CALL access key of
 //                              seller.earned-price.testnet limited to the escrow's accept, decline
 //                              and submit_review, with a gas allowance (security M-2). Never the
@@ -45,7 +50,8 @@
 //                              the durable caps store (free Upstash, A-019). REQUIRED for live
 //                              reviews: without it the function only replays (security H-1).
 //   EARNED_ALLOW_MEMORY_CAPS=1 local dev only: allow live reviews on the per-instance memory store.
-//                              Ignored when VERCEL_ENV is "production".
+//                              Ignored on any Vercel deployment (VERCEL set), when VERCEL_ENV is
+//                              "production", and when NODE_ENV is "production" (security N-1).
 import { randomBytes } from "node:crypto";
 import { RPC_URLS } from "../cli/init.js";
 import { CONTRACT_ACCOUNT } from "../cli/names.js";
@@ -55,6 +61,7 @@ import { reviewJob } from "../seller/review.js";
 import { storeFromEnv } from "./caps.js";
 import { nearSend, sellerChain, sellerKeyScope, viewAccessKey } from "./chain.js";
 import { INTERNAL_REPLAY, MAX_BODY_BYTES, handleReview } from "./review.js";
+import { probeNearAi } from "./tee-probe.js";
 
 export const maxDuration = 300;
 const MIN_SECRET_CHARS = 32;
@@ -99,10 +106,13 @@ export function toWebResponse({ status, body }) {
 
 /**
  * May this deployment run live reviews? Only with a durable cap store and a real visitor secret
- * (security H-1 + L-2, Nicho 2026-11-12). The memory store is for local dev, never production.
+ * (security H-1 + L-2, Nicho 2026-11-12). The memory store is for local dev only: never on any
+ * Vercel deployment (Vercel sets VERCEL=1 on Production and Preview alike, security N-1), and
+ * never in a production build: NODE_ENV=production is set by Next.js whether or not Vercel's system
+ * env vars are exposed at runtime, so the opt-out does not hang on that one project setting.
  */
 export function liveAllowed(env, store) {
-  if (store.kind === "memory") return env.EARNED_ALLOW_MEMORY_CAPS === "1" && env.VERCEL_ENV !== "production";
+  if (store.kind === "memory") return env.EARNED_ALLOW_MEMORY_CAPS === "1" && !env.VERCEL && env.VERCEL_ENV !== "production" && env.NODE_ENV !== "production";
   return typeof env.VISITOR_HASH_SECRET === "string" && env.VISITOR_HASH_SECRET.length >= MIN_SECRET_CHARS;
 }
 
@@ -132,6 +142,8 @@ export function depsFromEnv(env = process.env, fetch = globalThis.fetch) {
     liveEnabled: liveAllowed(env, store),
     chain: sellerChain({ fetch, urls, contractId: CONTRACT_ACCOUNT, sellerId: DEMO_SELLER, send: nearSend({ urls, sellerId: DEMO_SELLER, privateKey }) }),
     store,
+    // T-084: POST /v1/check_api_key before each accept; down / 401 / 402 declines the open job.
+    teeProbe: ({ timeoutMs } = {}) => probeNearAi({ apiKey, fetch, timeoutMs }),
     review: (args) => reviewJob({ ...args, fetch, log: () => {} }), // module logs stay out of Vercel logs
     loadPack,
     visitorSecret: env.VISITOR_HASH_SECRET || randomBytes(32).toString("hex"),

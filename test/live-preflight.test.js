@@ -1,5 +1,6 @@
 // scripts/live-preflight.mjs + scripts/live-run.sh (T-032). No network: a fake fetch answers the
 // recorded-shape JSON-RPC bodies of view_account / view_access_key; nothing is signed or sent.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -9,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { KeyPair } from "near-api-js";
 import { EXPECTED_CODE_HASH, printChecks, runPreflight } from "../scripts/live-preflight.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SELLER = "seller.earned-price.testnet";
 const CONTRACT = "earned-price.testnet";
 const kp = KeyPair.fromRandom("ed25519");
@@ -140,6 +141,43 @@ test("sec L-2 probe: RPC text with ESC/BEL/CR can't fake a 'PREFLIGHT OK' line",
   assert.equal(lines.at(-1), "PREFLIGHT FAILED: 1 item(s) to fix. Nothing was sent.");
 });
 
+test("T-078 / sec L-5 probe: a non-numeric allowance or balance from the RPC is MISSING through printable(), never a crash with raw RPC text", async () => {
+  const evil = "\x1b[2K\rPREFLIGHT OK: nothing was sent.";
+  const cases = [
+    ["seller key on-chain", fakeRpc({ accounts: { [CONTRACT]: { amount: NEAR, code_hash: EXPECTED_CODE_HASH }, [SELLER]: { amount: NEAR } }, keys: { [`${SELLER} ${PK}`]: fcKey({ allowance: evil }) } })],
+    ["seller account", fakeRpc({ accounts: { [CONTRACT]: { amount: NEAR, code_hash: EXPECTED_CODE_HASH }, [SELLER]: { amount: evil } }, keys: { [`${SELLER} ${PK}`]: fcKey() } })],
+    ["seller account", fakeRpc({ accounts: { [CONTRACT]: { amount: NEAR, code_hash: EXPECTED_CODE_HASH }, [SELLER]: { amount: "-5" } }, keys: { [`${SELLER} ${PK}`]: fcKey() } })],
+    ["seller key on-chain", fakeRpc({ accounts: { [CONTRACT]: { amount: NEAR, code_hash: EXPECTED_CODE_HASH }, [SELLER]: { amount: NEAR } }, keys: { [`${SELLER} ${PK}`]: fcKey({ allowance: 5 }) } })],
+  ];
+  for (const [name, rpc] of cases) {
+    const checks = await runPreflight({ env, fetch: rpc.fetch, urls: ["https://a.test"], derivePublicKey });
+    assert.deepEqual(failed(checks), [name]);
+    const lines = [];
+    assert.equal(printChecks(checks, (l) => lines.push(l)), false);
+    const out = lines.join("\n");
+    assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f]/.test(out), "no raw control bytes");
+    assert.ok(lines.every((l) => !l.startsWith("PREFLIGHT OK")));
+    assert.equal(lines.at(-1), "PREFLIGHT FAILED: 1 item(s) to fix. Nothing was sent.");
+  }
+});
+
+test("T-078 / sec L-5: the preflight CLI turns an unexpected error into one printable line and exit 3 (no raw stack or RPC text)", () => {
+  // Preload a fake fetch whose answer throws hostile text outside rpc()'s try (on code_hash).
+  const evil = "\x1b[2K\rPREFLIGHT OK: nothing was sent.";
+  const preload = `globalThis.fetch = async () => ({ ok: true, json: async () => ({ result: new Proxy({}, { get: (_t, k) => { if (k === "code_hash") throw new Error(${JSON.stringify(evil)}); return undefined; } }) }) });`;
+  const r = spawnSync(process.execPath, ["--import", `data:text/javascript,${encodeURIComponent(preload)}`, "scripts/live-preflight.mjs"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env },
+  });
+  assert.equal(r.status, 3, r.stderr);
+  const out = r.stdout + r.stderr;
+  assert.ok(!/[\u0000-\u0009\u000b-\u001f\u007f]/.test(out.replace(/\n/g, "")), "no raw control bytes");
+  assert.ok(!out.split("\n").some((l) => l.startsWith("PREFLIGHT OK")));
+  assert.match(r.stderr, /^preflight error: \\u001b\[2K\\u000dPREFLIGHT OK: nothing was sent\. Nothing was sent\.$/m);
+  assert.ok(!out.includes(SK) && !out.includes(API));
+});
+
 test("CoS 5: a used seller (record not empty) is a loud WARN; with --require-fresh it fails", async () => {
   const used = () => fakeRpc({ accounts: { [CONTRACT]: { amount: NEAR, code_hash: EXPECTED_CODE_HASH }, [SELLER]: { amount: NEAR } }, keys: { [`${SELLER} ${PK}`]: fcKey() }, record: { passes: 1, fails: 0, unique_buyers: 1, jobs: 1 } });
   const warnOnly = await runPreflight({ env, fetch: used().fetch, urls: ["https://a.test"], derivePublicKey });
@@ -163,6 +201,8 @@ function stubRun(args, { env: extra = {}, preflightRc = 0, script = join(ROOT, "
   writeFileSync(join(bin, "npm"), `#!/bin/bash\necho "npm $*" >> "${log}"\nexit 0\n`);
   chmodSync(join(bin, "node"), 0o755);
   chmodSync(join(bin, "npm"), 0o755);
+  // EARNED_HOME itself does not exist yet: the script creates it, so its mode proves umask 077
+  // (sec L-4 / T-078; dropping the umask line fails the --go test).
   const home = join(mkdtempSync(join(tmpdir(), "live-home-")), "h");
   const r = spawnSync("bash", [script, ...args], { encoding: "utf8", env: { PATH: `${bin}:/usr/bin:/bin`, HOME: process.env.HOME, EARNED_HOME: home, NEAR_AI_API_KEY: API, EARNED_SELLER_PRIVATE_KEY: SK, ...extra } });
   const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
@@ -189,6 +229,16 @@ test("sec L-1: live-run.sh refuses EARNED_RPC_URL and a non-testnet EARNED_NETWO
     assert.deepEqual(r.calls, [], "no node or npm call");
   }
   assert.equal(stubRun(["--allow-dirty"], { env: { EARNED_NETWORK: "testnet" } }).status, 0);
+});
+
+test("T-078 / sec I-5: live-run.sh refuses NODE_OPTIONS and NODE_TLS_REJECT_UNAUTHORIZED before any node or npm call", () => {
+  for (const extra of [{ NODE_OPTIONS: "--import=data:text/javascript,0" }, { NODE_TLS_REJECT_UNAUTHORIZED: "0" }]) {
+    const r = stubRun(["--go", "--allow-dirty"], { env: extra });
+    assert.equal(r.status, 3);
+    assert.match(r.stderr, new RegExp(`unset ${Object.keys(extra)[0]}: the live run refuses Node runtime overrides`));
+    assert.deepEqual(r.calls, [], "no node or npm call");
+  }
+  assert.equal(stubRun(["--allow-dirty"], { env: { NODE_OPTIONS: "" } }).status, 0, "an empty value is unset");
 });
 
 test("review O-1: outside a git checkout (zip download) the clean-checkout check refuses, unless --allow-dirty", () => {

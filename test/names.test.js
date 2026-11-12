@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -43,6 +44,6 @@ test("deploy script reads the pinned wasm path from names.json", () => {
 });
 
 test("CLI runs and prints the names", () => {
-  const out = execFileSync("node", [new URL("../cli/earned.js", import.meta.url).pathname, "names"], { encoding: "utf8" });
+  const out = execFileSync("node", [fileURLToPath(new URL("../cli/earned.js", import.meta.url)), "names"], { encoding: "utf8" });
   assert.deepEqual(JSON.parse(out), names);
 });

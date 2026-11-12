@@ -171,13 +171,17 @@ test("depsFromEnv sellerKeyCheck: derives the public key, reads it on the seller
 });
 
 // ---- H-1 / L-2: live reviews need a durable store and a real visitor secret ----
-test("liveAllowed: memory store never in production; Upstash needs VISITOR_HASH_SECRET >= 32 chars", () => {
+test("liveAllowed: memory store never on Vercel (production or preview); Upstash needs VISITOR_HASH_SECRET >= 32 chars", () => {
   const mem = memoryStore();
   const up = { kind: "upstash" };
   const secret = "s".repeat(32);
   assert.equal(liveAllowed({}, mem), false, "memory store = not configured");
   assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1" }, mem), true, "local dev opt-in");
   assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", VERCEL_ENV: "production" }, mem), false, "opt-in ignored in production");
+  assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", VERCEL: "1", VERCEL_ENV: "preview" }, mem), false, "opt-in ignored on a Preview deployment (N-1)");
+  assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", VERCEL: "1" }, mem), false, "opt-in ignored on any Vercel deployment (N-1)");
+  assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", NODE_ENV: "production" }, mem), false, "opt-in ignored in a production build even with no Vercel system env exposed (N-1)");
+  assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", NODE_ENV: "development" }, mem), true, "next dev keeps the local opt-in");
   assert.equal(liveAllowed({ VISITOR_HASH_SECRET: secret }, up), true);
   assert.equal(liveAllowed({ VISITOR_HASH_SECRET: "short" }, up), false);
   assert.equal(liveAllowed({}, up), false);
@@ -199,7 +203,7 @@ test("seller-fc-key: near CLI command adds a function-call key for the escrow's 
   assert.deepEqual(argv.slice(0, 5), ["near", "account", "add-key", SELLER, "grant-function-call-access"]);
   assert.equal(at("--contract-account-id"), CONTRACT);
   assert.equal(at("--function-names"), "accept, decline, submit_review");
-  assert.equal(at("--allowance"), "5 NEAR");
+  assert.equal(at("--allowance"), "10 NEAR", "A-028: the 10 NEAR-allowance key");
   assert.equal(at("use-manually-provided-public-key"), PK);
   assert.ok(!argv.includes("grant-full-access"));
   assert.equal(at("network-config"), "testnet");

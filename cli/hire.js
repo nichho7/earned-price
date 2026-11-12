@@ -27,6 +27,7 @@ import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, defa
 import { STEP4_PACK, step4Report } from "./step4.js";
 import { REVEAL_GAS, TIMEOUT_GAS, TxError, parseTxOutcome } from "./tx.js";
 import { makeLocalSeller } from "./seller-local.js";
+import { fileURLToPath } from "node:url";
 import { readReceipt, writeReceipt } from "./receipt-file.js";
 import { loadPack as loadPackDefault } from "../packs/packs.js";
 import { findingsFromResponse, grade, sha256Hex } from "../grader/grade.js";
@@ -34,7 +35,7 @@ import { buildReceipt, printable, verifyReceipt } from "../verify/receipt.js";
 import { TRUST } from "../verify/trust-anchors.js";
 
 export const RECEIPTS_DIR_NAME = "receipts";
-export const RECORDED_DIR = new URL("../recorded/", import.meta.url).pathname; // past live runs (T-032)
+export const RECORDED_DIR = fileURLToPath(new URL("../recorded/", import.meta.url)); // past live runs (T-032); fileURLToPath, not .pathname (T-064 R-1)
 export const JOB_ID_RE = /^\d{1,20}$/;
 const U64_MAX = 2n ** 64n - 1n;
 export const POLL_MS = 2000; // view lag after a tx: final trails optimistic by a block or two
@@ -339,10 +340,14 @@ class Hire {
     this.say(`Job ${this.jobId} (${job.pack_id}) on ${this.contractId}: ${formatNear(BigInt(job.price_yocto))} NEAR in escrow, seller ${job.seller}`);
 
     // Closing txs sent by an earlier run whose result we never saw: look them up first (M-1).
+    // Both kinds are looked up before giving up, so a reveal hash that never landed cannot hide a
+    // timeout that did (T-031 sec F-1).
+    const unseen = [];
     for (const kind of ["reveal", "timeout"]) {
-      const r = await this.resumeClosing(kind);
+      const r = await this.resumeClosing(kind, unseen);
       if (r) return r;
     }
+    if (unseen.length) throw this.closeTxUnconfirmed(unseen);
 
     let sellerTried = false;
     let replayShown = false;
@@ -407,10 +412,10 @@ class Hire {
    * Finishes from a closing tx (reveal or timeout) an earlier run signed but never saw land. Every
    * saved hash is looked up, LOOKUP_TRIES times. Landed: finish from its events. All refused:
    * forget them and carry on. Unknown while get_job is null: our tx probably closed the job, so
-   * throw CLOSE_TX_UNCONFIRMED and leave job.json as it is (never close it blind, never re-send).
+   * push {kind, hashes} onto `unseen` for the caller to throw CLOSE_TX_UNCONFIRMED once every kind
+   * has been looked up (never close blind, never re-send).
    */
-  async resumeClosing(kind) {
-    const status = kind === "reveal" ? "revealing" : "timing_out";
+  async resumeClosing(kind, unseen) {
     const hashes = pendingTxs(this.job, kind);
     // Any unclosed job holding a pending hash is looked up, whatever its status (re-check R-1).
     if (hashes.length === 0 || REUSABLE_STATUSES.has(this.job.status)) return null;
@@ -437,18 +442,25 @@ class Hire {
       this.save({ ...this.job, status: back, [`${kind}_tx`]: null, [`${kind}_txs`]: [] });
       return null;
     }
-    if ((await this.readLiveJob()) === null) throw this.closeTxUnconfirmed(kind, left);
+    if ((await this.readLiveJob()) === null) {
+      unseen.push({ kind, hashes: left });
+      return null;
+    }
     // The job is still live, so none of them has landed yet; keep the hashes and carry on.
     this.save({ ...this.job, status: back });
     return null;
   }
 
-  closeTxUnconfirmed(kind, hashes) {
-    // State never moves backward (re-check sec N-1): the job waits on this close tx again.
-    this.save({ ...this.job, status: kind === "reveal" ? "revealing" : "timing_out" });
+  /** `pending` = [{kind, hashes}], in send order (reveal before timeout). */
+  closeTxUnconfirmed(pending) {
+    // State never moves backward (re-check sec N-1): the job waits on its latest close tx again.
+    const last = pending.at(-1).kind;
+    this.save({ ...this.job, status: last === "reveal" ? "revealing" : "timing_out" });
+    const txs = pending.map(({ kind, hashes }) => `${kind} tx ${hashes.join(", ")}`).join(" and ");
+    const many = pending.length > 1 || pending[0].hashes.length > 1;
     return new HireError(
       "CLOSE_TX_UNCONFIRMED",
-      `job ${this.jobId} is closed on-chain and your ${kind} tx ${hashes.join(", ")} is not visible on the RPC yet. Nothing was changed: run \`earned hire\` again in a minute to read its outcome (and write the receipt). Check ${EXPLORER}/txns/${hashes[0]}. Only if the explorer shows that tx never landed: move ${jobFilePath(this.dir)} into ${join(this.dir, "jobs")}/.`,
+      `job ${this.jobId} is closed on-chain and your ${txs} ${many ? "are" : "is"} not visible on the RPC yet. Nothing was changed: run \`earned hire\` again in a minute to read its outcome (and write the receipt). Check ${EXPLORER}/txns/${pending[0].hashes[0]}. Only if the explorer shows ${many ? "none of those txs" : "that tx never"} landed: move ${jobFilePath(this.dir)} into ${join(this.dir, "jobs")}/.`,
     );
   }
 
@@ -552,7 +564,7 @@ class Hire {
       if (/no open job with that id/.test(p.failure) && earlier.length) {
         // An earlier reveal of ours probably closed the job: keep its hash and look it up next run.
         this.save({ ...this.job, status: "revealing", ...this.dropTx("reveal", p.txHash) });
-        throw this.closeTxUnconfirmed("reveal", earlier);
+        throw this.closeTxUnconfirmed([{ kind: "reveal", hashes: earlier }]);
       }
       this.save({ ...this.job, status: "reviewed", ...this.dropTx("reveal", p.txHash) });
       throw new HireError(
@@ -610,10 +622,8 @@ class Hire {
   /** The job is gone from get_job and we never saw its closing tx (another caller closed it). */
   closedUnseen() {
     // One of ours may be the closing tx: never close blind over it (M-1 / sec L-2).
-    for (const kind of ["reveal", "timeout"]) {
-      const mine = pendingTxs(this.job, kind);
-      if (mine.length) throw this.closeTxUnconfirmed(kind, mine);
-    }
+    const mine = ["reveal", "timeout"].map((kind) => ({ kind, hashes: pendingTxs(this.job, kind) })).filter((p) => p.hashes.length);
+    if (mine.length) throw this.closeTxUnconfirmed(mine);
     this.save({ ...this.job, status: "closed", outcome: "closed_elsewhere" });
     this.say(`Job ${this.jobId} is closed on-chain (get_job returns null), but this CLI did not see the closing tx. Find the outcome at ${EXPLORER}/address/${this.contractId}.`);
     this.say(`If it was a refund (decline or timeout), the ${formatNear(BigInt(this.job.price_yocto))} NEAR still counts against your 0.2 NEAR cap in this CLI.`);

@@ -62,8 +62,11 @@ const RETRY_MIN_MS = 30_000; // less than this for a retry: submit the first att
 const SIGNATURE_TRIES = 6; // the signature can take a few seconds to be stored (T-003: 404 first)
 const UNAVAILABLE_4XX = new Set([401, 402, 403, 408, 429]); // key expired / out of credit / rate limited / timeout
 
+/** Does this NEAR AI HTTP status mean "down, or our key can't pay"? Shared with site-api/tee-probe.js. */
+export const nearAiUnavailable = (status) => status >= 500 || UNAVAILABLE_4XX.has(status);
+
 /** HTTP status of the attestation or chat call -> code (see the table at the top). */
-const httpCode = (status) => (status >= 500 || UNAVAILABLE_4XX.has(status) ? "TEE_UNAVAILABLE" : "TEE_HTTP_ERROR");
+const httpCode = (status) => (nearAiUnavailable(status) ? "TEE_UNAVAILABLE" : "TEE_HTTP_ERROR");
 
 /** Every failure the caller must handle. `code` is stable; `status` is the HTTP status if any. */
 export class ReviewError extends Error {

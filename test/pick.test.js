@@ -1,6 +1,7 @@
 // earned pick N (S-021 / T-030). No live chain calls: views are recorded-shape nearcore
 // JSON-RPC bodies from a fake fetch, and the create tx goes to a fake sender that returns
 // recorded-shape FinalExecutionOutcome bodies.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
@@ -35,7 +36,7 @@ import { loadPack } from "../packs/packs.js";
 import { verifyReveal } from "../grader/grade.js";
 import { requestSha256 } from "../seller/review-prompt.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PINS = JSON.parse(readFileSync(join(ROOT, "test-vectors/review-pins.json"), "utf8"));
 const CONTRACT = "earned-price.testnet";
 const URLS = ["https://a.test.example"];
