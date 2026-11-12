@@ -17,9 +17,9 @@ can supply tests, not answers.
 
 | Tier | Who | Needs | Proves | Time |
 |---|---|---|---|---|
-| **1. Keyless** | anyone, an AI screener | Node 20+, git (Python 3 and Rust for 2 of the 13 steps) | the real recorded run is authentic, the contract is live with the approved code, the quote follows the record, a fail refunds and drops the price | ~1 min with `--quick`, ~5-10 min in full |
+| **1. Keyless** | anyone, an AI screener | Node 20+, git (Python 3 and Rust for 2 of the 13 steps) | the real recorded run is authentic, the contract is live with the approved code, the quote follows the record, a fail refunds and drops the price (local sandbox) | ~1 min with `--quick`, ~5-10 min in full |
 | **2. Your own job** | anyone with network | Tier 1 + the public testnet faucet (no key from us) | your own throwaway buyer, a sealed key, a haggle and real escrow on testnet; your job is refunded by timeout | ~4 min |
-| **3. Full live loop** | the team | the seller's key + a NEAR AI Cloud key | a live TEE review, reveal, settle and the quote moving, on a fresh seller | ~2 min |
+| **3. Full live loop** | the team | the seller's key + a NEAR AI Cloud key | a live TEE review, reveal and settle on the demo seller; today its quote goes 0.040 -> 0.050 -> 0.050 (not fresh, needs `--used-seller`) | ~2 min |
 
 **Live numbers move; recorded numbers don't.** The demo story (quote 0.030 -> 0.040 after a
 pass, then held at 0.040 after a repeat pass) happened live on testnet on 2026-11-12 and ships in
@@ -47,12 +47,17 @@ node scripts/self-check.mjs           # all 13 steps (npm test and the Rust cont
 node scripts/self-check.mjs --quick   # 11 steps, leaves out the two slow ones
 ```
 
-See: one block per step (`do`, `see`, `got`), then
-`SELF-CHECK: 13/13 steps PASS (100%), 0 FAIL` (with `--quick`:
-`SELF-CHECK: 11/11 steps PASS (100%), 0 FAIL, 2 not run (--quick)`). Exit code 0 only when every
-step that ran passed. A step whose tool is missing (Python 3, Rust) prints SKIP and counts as not
-passing. `--json` prints the same result as JSON; `--only 4,11` runs single steps. Steps 9-11
-read testnet through public RPCs; nothing is signed or sent.
+See: one block per step (`do`, `see`, `got`), then `SELF-CHECK: 13/13 steps PASS (100%), 0 FAIL`.
+Exit code 0 only when every step that ran passed. A step whose tool is missing (Python 3, Rust)
+prints SKIP and counts as not passing. Only a full run is the pass rate of this README: `--quick`
+and `--only 4,11` (single steps) print `SELF-CHECK (partial, not a north-star number)`, and
+`--quick` ends `11/13 steps PASS (84%), 0 FAIL, 2 not run (--quick)`. `--json` prints the same
+result as JSON (`"partial": true` for a partial run; `pct` is always over all 13 steps). To make a
+missing Chrome fail step 12 instead of skipping its two browser tests, run with `REQUIRE_BROWSER=1`.
+
+The self-check signs and sends nothing. It runs each step with a trimmed environment: no key
+variables, and no `EARNED_RPC_URL` / `EARNED_NETWORK` / `EARNED_HOME` (it says so when it ignores
+one), so steps 9-11 always read testnet through the public RPCs.
 
 The same steps by hand:
 
@@ -105,8 +110,11 @@ The same steps by hand:
     Refused 0.020 NEAR: below my cost floor 0.025 NEAR. My price is 0.040 NEAR.
     ```
 
-    If someone has run jobs since, the numbers differ, but the formula line always equals the quote.
+    If someone has run jobs since, the numbers differ, but the formula line always explains the quote
+    (at the floor or cap it ends `→ floor 0.025 NEAR` or `→ cap 0.100 NEAR`).
 12. **Unit and integration tests** (no network, no keys; slow). Do: `npm test`. See: `ℹ fail 0`.
+    The self-check also prints the `skipped` count: without Chrome the two headless-browser tests skip
+    (with `REQUIRE_BROWSER=1` they fail instead).
 13. **Contract test: a fail refunds the buyer and drops the price** (Rust; slow; the first run
     downloads near-sandbox). The live run only shows passes, so the fail path is proven on a local
     sandbox chain with real balances.
@@ -121,6 +129,12 @@ The same steps by hand:
 
     Needs Rust stable, the `wasm32-unknown-unknown` target and cargo-near 0.23.x (see
     [Prerequisites](#prerequisites)).
+
+    **macOS note.** With the newest Command Line Tools SDK the build can fail to link
+    (`tapi error: unknown architecture arm64e...` or ``linking with `cc` failed``). Point `SDKROOT`
+    at an older SDK and rerun, for example:
+    `SDKROOT="$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX26*.sdk | tail -1)" node scripts/self-check.mjs --only 13`.
+    The self-check prints this hint when step 13 fails that way.
 
 ### Tier 2: your own job on testnet (no key from us)
 
@@ -142,7 +156,9 @@ public faucet funds it; testnet NEAR has no value). The key stays in `.earned/bu
    `RECORDED REVIEW AUTHENTIC (offline): ...`. Then a countdown to `accept_by` (2 minutes after
    `pick`), `accept_by has passed: calling timeout(<N>)` and
    `Timed out: the seller did not accept by accept_by. You were refunded; the seller's record is unchanged.`
-   with its timeout tx. Exit code 1 (no pass) and no receipt: nothing reviewed your job.
+   with its timeout tx. **Exit code 1 is expected here:** it means "no pass", because no seller
+   reviewed your job (there is no hosted seller), not that the step failed. No receipt is written.
+   Tier 2 is an honest partial: it is not counted in the Tier 1 pass rate.
 
 Why no live review of your job: the reference seller signs as `seller.earned-price.testnet` and
 pays NEAR AI Cloud per review, and neither key can ship in a public repo. There is no hosted
@@ -155,8 +171,11 @@ show it on-chain.
 `scripts/live-run.sh --go` runs `init`, `quote`, `pick 2`, `hire --local-seller` (step 3),
 `verify` (plus `--tamper`), then `hire --pack 3 --local-seller` (step 4, same buyer) and `verify`
 of that receipt. It needs `EARNED_SELLER_PRIVATE_KEY` and `NEAR_AI_API_KEY`; see
-[Live CLI run](#live-cli-run-team-tier-3) for the guards. On a fresh seller each step prints its
-`SEE: step N PASS` and the quote goes 0.030 -> 0.040 -> 0.040, as in `recorded/`.
+[Live CLI run](#live-cli-run-team-tier-3) for the guards. The script always uses the demo seller
+`seller.earned-price.testnet`, which is **no longer fresh**: `--go` refuses it, and with
+`--go --used-seller` a new buyer's pass moves its quote 0.040 -> 0.050 and the repeat pass holds
+0.050. The 0.030 -> 0.040 -> 0.040 story needs a brand-new seller account (and a change to `SELLER`
+in `live-run.sh`); that run happened once, on 2026-11-12, and `recorded/` holds its canonical numbers.
 
 ## Built with
 
@@ -181,6 +200,11 @@ of that receipt. It needs `EARNED_SELLER_PRIVATE_KEY` and `NEAR_AI_API_KEY`; see
 - **One registered verifier:** the escrow's allowlist holds one TEE signer, the NEAR AI Cloud
   address `0xfe0071895500a9755c18044948ab4f4e1a7f337e` (`contract/tee-signers.json`, `signers`
   view), managed by the contract owner (see "Trust and owner powers").
+- **We hold the contract account's full-access key.** We can still redeploy new code to
+  `earned-price.testnet`, which is a bigger power than the owner role; trusting the escrow means
+  trusting us (see "Trust and owner powers").
+- **A buyer can force a fail** by committing a valid but wrong answer key, and keep a free signed
+  review (decision A-014; see "Threat model and known limits").
 - **Attestation is checked for binding only** (`earned verify` check 3); the Intel DCAP chain, the
   NVIDIA GPU evidence and the image measurements are not verified by our code.
 - **The demo seller is not fresh** (see "Live numbers move" above), and there is no hosted seller
@@ -596,7 +620,8 @@ Each step must print its `SEE:` line or the script stops, names the step's log a
 the commands to resume with the same buyer (`EARNED_HOME`); do not rerun the script after a
 failed step. `--go` refuses `EARNED_RPC_URL` and any network but testnet, and refuses a seller
 whose record is not empty (the demo's 0.030 -> 0.040 -> 0.040 needs a fresh seller) unless
-`--used-seller` is given.
+`--used-seller` is given. Since the 2026-11-12 run, `seller.earned-price.testnet` is not fresh, so
+`--go` alone stops at the preflight (see Tier 3).
 
 The first `--go` run (2026-11-12, jobs 1 and 2) is shipped in `recorded/`: both receipts, the
 console output and every tx hash with its explorer link. `earned hire` replays it, labelled

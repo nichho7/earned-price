@@ -7,10 +7,15 @@
 //   node scripts/self-check.mjs --only 4,11  just those steps (numbers as printed)
 //   node scripts/self-check.mjs --json       one JSON summary on stdout instead of the table
 //
-// Keyless and read-only: no account, no key, no transaction, no NEAR AI call, writes nothing outside
-// the repo's own build folders. Steps 9-11 read testnet through the public RPCs (or EARNED_RPC_URL,
-// which the tools only accept from their testnet allowlist). A step whose tool is missing (python3,
-// cargo, cargo-near) is a SKIP, and a SKIP counts as not passing.
+// Keyless: no account, no key, no transaction, no NEAR AI call. Child commands get an allowlisted
+// environment (CHILD_ENV_KEYS below): no key variables (NEAR_AI_API_KEY, EARNED_SELLER_PRIVATE_KEY),
+// and no EARNED_* overrides, so steps 9-11 always read testnet through the CLI's default public RPCs
+// (an EARNED_RPC_URL left in the shell could otherwise point `earned quote` anywhere). Steps 1-11
+// write nothing; step 12 (npm test) writes to OS temp folders, step 13 (cargo) to target/, the cargo
+// caches and the near-sandbox download.
+// A step whose tool is missing (python3, cargo, cargo-near) is a SKIP, and a SKIP counts as not
+// passing. Only a full run (no --quick, no --only) is a north-star number: a partial run says so
+// ("partial": true) and its pct is still over all steps.
 // Exit code: 0 when every step that ran passed and none was skipped, 1 otherwise, 2 on bad usage.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -23,6 +28,11 @@ const SELLER = "seller.earned-price.testnet";
 const CONTRACT = "earned-price.testnet";
 const LOG = "recorded/live-run-2026-11-12.log";
 const MIN = 60_000;
+// Step 13 on macOS: the newest Command Line Tools SDK can fail to link the near-workspaces build
+// script ("tapi error: unknown architecture arm64e..."). Pointing SDKROOT at an older SDK fixes it.
+export const MACOS_LINK_ERROR = /tapi error|unknown architecture arm64e|linking with `cc` failed/;
+export const MACOS_SDK_HINT =
+  "macOS linker error: rerun with an older Command Line Tools SDK, e.g. SDKROOT=\"$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX26*.sdk | tail -1)\" node scripts/self-check.mjs --only 13 (README step 13, macOS note)";
 
 const authentic = (pack) =>
   `REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official ${pack} request (prompt v1), regrade PASS.`;
@@ -32,11 +42,44 @@ const fail = (detail) => ({ ok: false, detail });
 const pass = (detail) => ({ ok: true, detail });
 const tail = (r) => lines(`${r.stdout ?? ""}\n${r.stderr ?? ""}`).filter(Boolean).slice(-3).join(" | ");
 
+// What a child command may see of the caller's environment (sec L-1, L-2): tool paths, locale, temp,
+// proxies, the Rust toolchain and the browser-test switches. Everything else is dropped, including
+// every key variable and every EARNED_* override (EARNED_RPC_URL, EARNED_NETWORK, EARNED_HOME).
+export const CHILD_ENV_KEYS = [
+  "PATH", "Path", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMPDIR", "TMP", "TEMP",
+  "SystemRoot", "SYSTEMROOT", "COMSPEC", "PATHEXT", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+  "SDKROOT", "DEVELOPER_DIR", "RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN", "CARGO_TARGET_DIR", "NEAR_SANDBOX_BIN_PATH",
+  "CHROME_PATH", "REQUIRE_BROWSER", "CI",
+];
+export const DROPPED_OVERRIDES = ["EARNED_RPC_URL", "EARNED_NETWORK", "EARNED_HOME"];
+
+export function childEnv(env = process.env) {
+  const out = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v !== undefined && (CHILD_ENV_KEYS.includes(k) || k.startsWith("LC_") || k.startsWith("XDG_"))) out[k] = v;
+  }
+  return out;
+}
+
 /** Default runner: a child process in the repo root, output captured. Injected in tests. */
 export function run(cmd, args, { timeout = 2 * MIN } = {}) {
-  const r = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024, env: process.env });
+  const r = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024, env: childEnv() });
   if (r.error?.code === "ENOENT") return { missing: true, status: null, stdout: "", stderr: "" };
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", timedOut: r.error?.code === "ETIMEDOUT" };
+}
+
+/**
+ * True when a `formula:` line explains quote q (code review O-2): 30 + 10P - 5F milliNEAR is the raw
+ * sum, and the quote is that sum, or the floor 0.025 / cap 0.100 the line names when it clamps.
+ */
+export function formulaExplains(line, q) {
+  const m = line.match(/^ {2}formula: 0\.030 \+ 0\.010×(\d+) − 0\.005×(\d+) = (-?\d+\.\d{3})(?: → (floor|cap) (\d+\.\d{3}))? NEAR$/);
+  if (!m) return false;
+  const raw = 30 + 10 * Number(m[1]) - 5 * Number(m[2]);
+  if (Math.round(Number(m[3]) * 1000) !== raw) return false;
+  if (!m[4]) return raw >= 25 && raw <= 100 && m[3] === q;
+  return m[5] === q && (m[4] === "floor" ? raw < 25 && q === "0.025" : raw > 100 && q === "0.100");
 }
 
 function verifyStep(r, pack) {
@@ -165,8 +208,8 @@ export const STEPS = [
       if (r.status !== 0) return fail(`exit ${r.status}: ${tail(r)}`);
       const q = lines(r.stdout).map((l) => l.match(/^Quote: (0\.\d{3}) NEAR \(testnet\)$/)).find(Boolean)?.[1];
       if (!q) return fail(`no 'Quote: 0.0NN NEAR (testnet)' line: ${tail(r)}`);
-      if (!lines(r.stdout).some((l) => /^ {2}formula: 0\.030 \+ 0\.010×\d+ − 0\.005×\d+ = /.test(l) && l.endsWith(`= ${q} NEAR`))) return fail("formula line missing or does not equal the quote");
-      return has(r.stdout, `Refused 0.020 NEAR: below my cost floor 0.025 NEAR. My price is ${q} NEAR.`) ? pass(`quote ${q} NEAR, formula matches, 0.020 refused`) : fail("no 'Refused 0.020 NEAR' line");
+      if (!lines(r.stdout).some((l) => formulaExplains(l, q))) return fail("formula line missing or does not explain the quote");
+      return has(r.stdout, `Refused 0.020 NEAR: below my cost floor 0.025 NEAR. My price is ${q} NEAR.`) ? pass(`quote ${q} NEAR, the formula explains it, 0.020 refused`) : fail("no 'Refused 0.020 NEAR' line");
     },
   },
   {
@@ -176,7 +219,9 @@ export const STEPS = [
       const r = run(process.platform === "win32" ? "npm.cmd" : "npm", ["test"], { timeout: 15 * MIN });
       if (r.missing) return { skip: "npm not found" };
       const count = (k) => lines(r.stdout).map((l) => l.match(new RegExp(`^ℹ ${k} (\\d+)$`))).find(Boolean)?.[1];
-      return r.status === 0 && count("fail") === "0" ? pass(`${count("pass")} pass, 0 fail`) : fail(`exit ${r.status}${r.timedOut ? " (timed out)" : ""}, fail ${count("fail") ?? "?"}`);
+      const skipped = count("skipped") ?? "?";
+      const note = skipped !== "0" ? ` (skips include the headless-Chrome tests when no Chrome is found; REQUIRE_BROWSER=1 makes that a FAIL)` : "";
+      return r.status === 0 && count("fail") === "0" ? pass(`${count("pass")} pass, 0 fail, ${skipped} skipped${note}`) : fail(`exit ${r.status}${r.timedOut ? " (timed out)" : ""}, fail ${count("fail") ?? "?"}, ${skipped} skipped`);
     },
   },
   {
@@ -196,7 +241,10 @@ export const STEPS = [
         "test balances_follow_the_escrow_rules ... ok",
       ];
       const missing = want.filter((w) => !has(out, w));
-      return r.status === 0 && !missing.length ? pass("repeat pass 0.040 -> 0.040; fail + refund 0.040 -> 0.035; ok") : fail(`exit ${r.status}${r.timedOut ? " (timed out)" : ""}; missing: ${missing.join(" / ") || "none"}: ${tail(r)}`);
+      if (r.status === 0 && !missing.length) return pass("repeat pass 0.040 -> 0.040; fail + refund 0.040 -> 0.035; ok");
+      const res = fail(`exit ${r.status}${r.timedOut ? " (timed out)" : ""}; missing: ${missing.join(" / ") || "none"}: ${tail(r)}`);
+      if (MACOS_LINK_ERROR.test(out)) res.hint = MACOS_SDK_HINT;
+      return res;
     },
   },
 ];
@@ -232,9 +280,9 @@ export async function runSelfCheck({ steps = STEPS, quick = false, only = null, 
       r = fail(`error: ${err?.message ?? err}`);
     }
     const status = r.skip ? "SKIP" : r.ok ? "PASS" : "FAIL";
-    const res = { n, id: step.id, status, detail: r.skip ?? r.detail, ms: now() - t0 };
+    const res = { n, id: step.id, status, detail: r.skip ?? r.detail, ms: now() - t0, ...(r.hint ? { hint: r.hint } : {}) };
     results.push(res);
-    say(`[${String(n).padStart(2)}/${steps.length}] ${status.padEnd(4)}  ${step.title}\n         do:  ${step.do}\n         see: ${step.see}\n         got: ${res.detail}`);
+    say(`[${String(n).padStart(2)}/${steps.length}] ${status.padEnd(4)}  ${step.title}\n         do:  ${step.do}\n         see: ${step.see}\n         got: ${res.detail}${res.hint ? `\n         hint: ${res.hint}` : ""}`);
   }
   const ran = results.filter((r) => r.status !== "NOT RUN");
   const count = (s) => ran.filter((r) => r.status === s).length;
@@ -251,14 +299,21 @@ export async function runSelfCheck({ steps = STEPS, quick = false, only = null, 
     not_run: results.length - ran.length,
     steps: results,
   };
-  summary.pct = summary.total ? Math.floor((100 * summary.pass) / summary.total) : 0;
+  // pct is always over ALL steps (the north-star denominator); a partial run can't report 100%.
+  summary.steps_all = results.length;
+  summary.partial = summary.not_run > 0;
+  summary.pct = Math.floor((100 * summary.pass) / results.length);
+  summary.pct_of_run = summary.total ? Math.floor((100 * summary.pass) / summary.total) : 0;
   summary.ok = summary.total > 0 && summary.pass === summary.total;
   return summary;
 }
 
 export function summaryLine(s) {
   const extra = [s.skip ? `${s.skip} SKIP (counted as not passing)` : "", s.not_run ? `${s.not_run} not run (${s.quick ? "--quick" : "--only"})` : ""].filter(Boolean).join(", ");
-  return `SELF-CHECK: ${s.pass}/${s.total} steps PASS (${s.pct}%), ${s.fail} FAIL${extra ? `, ${extra}` : ""}`;
+  const head = s.partial
+    ? `SELF-CHECK (partial, not a north-star number): ${s.pass}/${s.steps_all} steps PASS (${s.pct}%)`
+    : `SELF-CHECK: ${s.pass}/${s.steps_all} steps PASS (${s.pct}%)`;
+  return `${head}, ${s.fail} FAIL${extra ? `, ${extra}` : ""}`;
 }
 
 async function main(argv) {
@@ -269,8 +324,14 @@ async function main(argv) {
     console.error(err.message);
     return 2;
   }
-  if (!opts.json) console.log(`Earned Price README self-check, Tier 1 (keyless, read-only): ${STEPS.length} steps${opts.quick ? ", --quick" : ""}\n`);
+  const dropped = DROPPED_OVERRIDES.filter((k) => process.env[k] !== undefined);
+  if (!opts.json) {
+    console.log(`Earned Price README self-check, Tier 1 (keyless): ${STEPS.length} steps${opts.quick ? ", --quick" : ""}`);
+    if (dropped.length) console.log(`Ignoring ${dropped.join(", ")}: child commands read testnet through the default public RPCs.`);
+    console.log("");
+  }
   const s = await runSelfCheck({ ...opts, say: opts.json ? () => {} : (l) => console.log(l) });
+  s.env_ignored = dropped;
   if (opts.json) console.log(JSON.stringify(s, null, 2));
   else console.log(`\n${summaryLine(s)}`);
   return s.ok ? 0 : 1;
