@@ -14,7 +14,7 @@
 //
 // Allowance (estimate): each job prepays 30 Tgas (accept) + 300 Tgas (submit_review). At testnet's
 // minimum gas price (1e-4 NEAR per Tgas) that is ~0.033 NEAR of allowance per job, and the
-// allowance is charged on prepaid gas. 5 NEAR covers ~150 jobs (the cap is 100 a day). When it runs
+// allowance is charged on prepaid gas. 5 NEAR covers ~150 jobs (the cap is 35 a day, A-028). When it runs
 // out, txs are refused (the site replays); add a fresh key with this script.
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

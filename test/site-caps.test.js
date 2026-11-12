@@ -21,8 +21,8 @@ const day = "2026-11-12";
 const base = { day, reserveMicro: 10_000, floorMicro: 0 };
 const take = (store, over = {}) => reserveLive({ store, jobId: "1", visitor: "v1", buyer: "b1.testnet", ...base, ...over });
 
-test("caps match the approved numbers: 100/day, 3 per visitor, stop at $1.75", () => {
-  assert.equal(DAILY_LIVE_CAP, 100);
+test("caps match the approved numbers: 35/day (A-028), 3 per visitor, stop at $1.75", () => {
+  assert.equal(DAILY_LIVE_CAP, 35);
   assert.equal(VISITOR_DAILY_CAP, 3);
   assert.equal(SPEND_STOP_MICRO_USD, 1_750_000);
 });
@@ -59,12 +59,12 @@ test("a new buyer account from the same visitor does not reset the cap (cap_visi
   assert.equal((await take(store2, { jobId: "9", visitor: "ip-new" })).reason, "cap_buyer");
 });
 
-test("site-wide 100 live reviews a day, then cap_daily", async () => {
+test("site-wide 35 live reviews a day, then cap_daily", async () => {
   const store = memoryStore();
-  for (let i = 0; i < 100; i++) assert.equal((await take(store, { jobId: `j${i}`, visitor: `v${i}`, buyer: `b${i}` })).ok, true);
+  for (let i = 0; i < 35; i++) assert.equal((await take(store, { jobId: `j${i}`, visitor: `v${i}`, buyer: `b${i}` })).ok, true);
   const r = await take(store, { jobId: "x", visitor: "vx", buyer: "bx" });
   assert.deepEqual([r.ok, r.reason], [false, "cap_daily"]);
-  assert.equal(await store.get(`day:${day}`), 100);
+  assert.equal(await store.get(`day:${day}`), 35, "the refused 36th leaves no count");
 });
 
 test("spend stop: refused once reserved spend would pass $1.75 (lifetime, not daily)", async () => {

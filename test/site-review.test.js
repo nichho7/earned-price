@@ -10,7 +10,7 @@ import { ReviewError, reviewJob, DEFAULT_BUDGET_MS } from "../seller/review.js";
 import { ethAddress } from "../verify/nearai-verify.js";
 import { KeyPair } from "near-api-js";
 import { signReviewAuth } from "../site-api/buyer-auth.js";
-import { memoryStore, reviewReserveMicro, CapStoreError, SPEND_STOP_MICRO_USD } from "../site-api/caps.js";
+import { memoryStore, reviewReserveMicro, CapStoreError, DAILY_LIVE_CAP, SPEND_STOP_MICRO_USD } from "../site-api/caps.js";
 import { COPY, GLOBAL_REFUSALS, INTERNAL_REPLAY, handleReview, MAX_BODY_BYTES, REPLAY_REASONS } from "../site-api/review.js";
 import { visitorId } from "../site-api/visitor.js";
 import { depsFromEnv, maxDuration, toWebResponse, fromWebRequest, handleWebRequest } from "../site-api/vercel.js";
@@ -377,7 +377,7 @@ for (const [name, prep, reason] of [
 }
 
 for (const [name, prep, reason] of [
-  ["daily cap", async (d) => d.store.incrBy("day:2026-11-12", 100), "cap_daily"],
+  ["daily cap", async (d) => d.store.incrBy("day:2026-11-12", DAILY_LIVE_CAP), "cap_daily"],
   ["spend stop", async (d) => d.store.incrBy("spend:micro", SPEND_STOP_MICRO_USD), "cap_spend"],
 ]) {
   test(`replay ${reason} (${name}, any caller) before accept: the open job is declined (buyer refunded), no TEE call`, async () => {
@@ -977,4 +977,15 @@ test("integration (T-084): real probe ok, then the chat call 402s -> the residua
   assert.equal(r.body.job_state, "accepted_no_review");
   assert.ok(fc.calls.some((c) => c[0] === "accept"));
   noSecrets(r.body, logs);
+});
+
+test("T-079: the 35th live review of the day runs, the 36th replays cap_daily and declines the open job", async () => {
+  const s35 = setup();
+  await s35.deps.store.incrBy("day:2026-11-12", 34);
+  assert.equal((await handleReview(req(), s35.deps)).body.mode, "live");
+  const s36 = setup();
+  await s36.deps.store.incrBy("day:2026-11-12", 35);
+  const r = await handleReview(req(), s36.deps);
+  assertReplay(r, "cap_daily", s36.calls);
+  assert.equal(r.body.job_state, "declined");
 });

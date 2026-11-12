@@ -1,5 +1,6 @@
-// T-028: spend and fairness caps for the live review function (Nicho-approved T-003 numbers):
-//   100 live reviews a day site-wide, 3 per visitor a day, and a lifetime stop at $1.75 estimated
+// T-028: spend and fairness caps for the live review function (Nicho-approved T-003 numbers,
+// daily cap lowered by A-028 / T-079):
+//   35 live reviews a day site-wide, 3 per visitor a day, and a lifetime stop at $1.75 estimated
 //   NEAR AI spend (of the $2.00 this project may use from the $5 key).
 //
 // Where the counters live (Vercel Hobby, $0, no paid KV):
@@ -24,7 +25,7 @@ import { worstRunUsd } from "../scripts/review-spend.mjs";
 import { buildReviewRequest } from "../seller/review-prompt.js";
 import { DEFAULT_MAX_ATTEMPTS } from "../seller/review.js";
 
-export const DAILY_LIVE_CAP = 100;
+export const DAILY_LIVE_CAP = 35; // A-028 (Nicho, 2026-11-12): was 100
 export const VISITOR_DAILY_CAP = 3;
 export const SPEND_STOP_MICRO_USD = 1_750_000; // $1.75, in micro-USD so counters stay integers
 // NEAR AI catalog price for deepseek-ai/DeepSeek-V4.1-Flash-1017 (cloud-api.near.ai/v1/model/list,
