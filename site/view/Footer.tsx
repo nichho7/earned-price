@@ -1,27 +1,7 @@
-// [CTO] T-033 · closer (the timeline's final frame) + footer (build spec 3, rows 5-6). REPO_URL is a
-// build-time value; empty = a marked placeholder here, and a ship build refuses it (data gate).
+// [CTO] T-033 / S-028 · footer (build spec 3, row 6). The closer moved into the earn stage (it is the
+// timeline's final frame), so this file keeps only the footer.
 import type { LabFixture } from "../stage/schema.ts";
-import s from "./closer.module.css";
-
-export function Closer({ repoUrl }: { repoUrl: string }) {
-  return (
-    <section className={s.closer} aria-labelledby="closer-heading" data-closer="">
-      <div>
-        <h2 id="closer-heading" className={s.heading}>Earned Price.<em>Price earned, not claimed.</em></h2>
-      </div>
-      <div>
-        <p className={s.cmd}><span aria-hidden="true">$</span><code>npx earned-price init</code></p>
-        <p className={s.meta}>
-          Repo{" "}
-          {repoUrl
-            ? <a href={repoUrl}><b>{repoUrl.replace(/^https?:\/\//, "")}</b></a>
-            : <><b>not public yet</b> <span className="ph">PLACEHOLDER URL</span></>}
-          <br />Sister project: <b>NEAR Real-World Money</b> (realworld track)
-        </p>
-      </div>
-    </section>
-  );
-}
+import s from "./footer.module.css";
 
 export function Footer({ last, placeholder }: { last: LabFixture; placeholder: boolean }) {
   const settledAt = [...last.events].reverse().find((e) => e.type === "settled")?.at;
@@ -29,9 +9,8 @@ export function Footer({ last, placeholder }: { last: LabFixture; placeholder: b
     <footer className={s.foot}>
       {placeholder && (
         <p data-placeholder-notice="">
-          <span className="ph">PLACEHOLDER DATA</span> No recorded testnet run of the demo is on this page yet. Every tx
-          hash, job id, seller and TEE field marked PLACEHOLDER is not real, and the timings are estimates. Only the buyer
-          account is real.
+          <span className="ph">PLACEHOLDER DATA</span> This build shows placeholder runs (test fixtures). Every value
+          marked PLACEHOLDER is not real, and the timings are estimates. A ship build refuses them.
         </p>
       )}
       <p>

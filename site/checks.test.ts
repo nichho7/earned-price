@@ -79,3 +79,8 @@ test("size gate: unicode-range matching and script accounting", () => {
   assert.ok(r.jsInlineGzip > 0);
   assert.deepEqual(r.missing, ["/_next/static/none.js"]); // a missing asset fails the gate
 });
+
+test("R4: an import binding with $ in its name is still caught (code review L-8)", () => {
+  assert.equal(checkFile("site/view/X.tsx", 'import $w from "near-api-js";').length, 1);
+  assert.equal(checkFile("site/view/X.tsx", 'import { $a, b$ } from "@near-js/accounts";').length, 1);
+});

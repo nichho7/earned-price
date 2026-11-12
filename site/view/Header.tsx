@@ -1,31 +1,34 @@
-// [CTO] T-033 · header: wordmark, 5-step demo rail, honesty chips (build spec 3, row 1). No motion.
+// [CTO] T-033 · header: wordmark, 5-step demo rail, PLACEHOLDER DATA chip (build spec 3, row 1).
+// S-028: the network chip moved into the stage's top row, next to the run it describes (Designer M-025 §4);
+// the page-wide PLACEHOLDER DATA chip stays here. The rail follows the stage through data-state, which the
+// client player sets (site/earn/EarnPlayer.tsx); the server renders the final state's step.
 import { Mark } from "./icons.tsx";
 import s from "./header.module.css";
 
 const STEPS = ["1 Start", "2 Pick & haggle", "3 Hire", "4 Repeat buyer", "5 Verify"];
 
-export function Header({ railStep, placeholder, sandbox }: { railStep: number; placeholder: boolean; sandbox: boolean }) {
+export function Header({ railStep, placeholder }: { railStep: number; placeholder: boolean }) {
   return (
     <header className={s.bar}>
       <Mark className={s.mark} />
       <span className={s.wordmark}>Earned Price</span>
-      <ol className={s.rail} aria-label="Demo steps">
+      <ol className={s.rail} aria-label="Demo steps" data-rail="">
         {STEPS.map((t, i) => {
           const n = i + 1;
-          const cls = n < railStep ? s.done : n === railStep ? s.on : undefined;
-          return <li key={t} className={cls} aria-current={n === railStep ? "step" : undefined}>{t}</li>;
+          return (
+            <li key={t} data-step={n} data-state={n < railStep ? "done" : n === railStep ? "on" : ""} aria-current={n === railStep ? "step" : undefined}>
+              {t}
+            </li>
+          );
         })}
       </ol>
-      <span className={s.chips}>
-        {sandbox
-          ? <span className={`${s.chip} ${s.sandbox}`}>CONTRACT TEST · LOCAL SANDBOX</span>
-          : <span className={s.chip} data-chip="network">TESTNET · RECORDED</span>}
-        {placeholder && (
+      {placeholder && (
+        <span className={s.chips}>
           <span className={`${s.chip} ${s.placeholder}`} title="This page shows placeholder values. They can never ship." data-chip="placeholder">
             PLACEHOLDER DATA
           </span>
-        )}
-      </span>
+        </span>
+      )}
     </header>
   );
 }

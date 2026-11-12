@@ -67,6 +67,20 @@
   --ease-stamp: cubic-bezier(.3, 1.4, .5, 1);
   --ease-heavy: cubic-bezier(.7, 0, .2, 1);
   --ease-travel: cubic-bezier(.5, 0, .2, 1);
+  /* durations the earn player reads by name (site/earn/earn-player.js readTokens; Designer M-025 §5) */
+  --t-fade: 200ms;          /* reduced-motion crossfade per changed slot */
+  --t-hold-chain: 1100ms;   /* longest replayed wait for a chain / seller-side step (the real wait is always labelled) */
+  --t-hold-client: 400ms;   /* longest replayed wait for a client-side step */
+  --t-run-break: 1400ms;    /* pause between run 1 and run 2 */
+  --t-still-waiting: 30s;   /* live: "Still waiting" line after this long */
+
+  /* earn stage: tracking, perforation, layers (M-025 §5) */
+  --track-label: .12em;
+  --track-wide: .14em;
+  --perf: 9px;              /* receipt perforation depth */
+  --z-stage: 3;
+  --z-takeover: 60;
+  --z-ring: 61;
 
   /* focus: canary on violet / deep / slot, violet on the sheet */
   --focus-on-violet: 2px solid var(--canary);

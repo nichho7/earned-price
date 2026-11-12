@@ -49,7 +49,7 @@ function walk(dir, out = []) {
   return out;
 }
 
-const STATIC_IMPORT = /\bimport\s+(?:type\s+)?(?:[\w*{}\s,]+\s+from\s+)?["']([^"']+)["']|\bexport\s+[^;]*?\bfrom\s+["']([^"']+)["']|\brequire\(\s*["']([^"']+)["']/g;
+const STATIC_IMPORT = /\bimport\s+(?:type\s+)?(?:[\w$*{}\s,]+\s+from\s+)?["']([^"']+)["']|\bexport\s+[^;]*?\bfrom\s+["']([^"']+)["']|\brequire\(\s*["']([^"']+)["']/g;
 const DYNAMIC_IMPORT = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
 const inScope = (rel) => ["app", "site"].some((d) => rel.startsWith(d + sep));
 const RESOLVE_EXT = ["", ".ts", ".tsx", ".js", ".mjs", ".cjs", "/index.ts", "/index.js"];

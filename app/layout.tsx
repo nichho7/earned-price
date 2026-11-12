@@ -4,11 +4,13 @@
 // (sans) on a cold load, which breaks the CLS 0 gate (B5, S-029 AC 3). So they use display "optional"
 // (never swap after first paint) and are preloaded so they usually make the ~100 ms window. Change
 // logged in ADR-001 B5 (2026-11-12).
-// No head script yet: the `.motion` class arrives with M1 (S-028), so this stage ships no motion code.
+// S-028 (M1): one inline head script adds `ep-js`, so the server's final stage stays hidden until the
+// player mounts and starts at READY (no flash of the final state). No JS = the final state, as is (R6).
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, IBM_Plex_Sans, Instrument_Serif } from "next/font/google";
 import "./tokens.css";
 import "./base.css";
+import "../site/earn/earn-stage.css";
 
 const serif = Instrument_Serif({ weight: "400", style: "normal", subsets: ["latin"], display: "swap", variable: "--font-serif" });
 const serifItalic = Instrument_Serif({ weight: "400", style: "italic", subsets: ["latin"], display: "optional", variable: "--font-serif-italic" });
@@ -26,7 +28,10 @@ export const viewport: Viewport = { width: "device-width", initialScale: 1, view
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${serif.variable} ${serifItalic.variable} ${sans.variable} ${mono.variable}`}>
+    <html lang="en" className={`${serif.variable} ${serifItalic.variable} ${sans.variable} ${mono.variable}`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: "document.documentElement.classList.add('ep-js')" }} />
+      </head>
       <body>{children}</body>
     </html>
   );
