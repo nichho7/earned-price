@@ -13,7 +13,8 @@ import { signReviewAuth } from "../site-api/buyer-auth.js";
 import { memoryStore, reviewReserveMicro, CapStoreError, SPEND_STOP_MICRO_USD } from "../site-api/caps.js";
 import { COPY, GLOBAL_REFUSALS, INTERNAL_REPLAY, handleReview, MAX_BODY_BYTES, REPLAY_REASONS } from "../site-api/review.js";
 import { visitorId } from "../site-api/visitor.js";
-import { maxDuration, toWebResponse, fromWebRequest, handleWebRequest } from "../site-api/vercel.js";
+import { depsFromEnv, maxDuration, toWebResponse, fromWebRequest, handleWebRequest } from "../site-api/vercel.js";
+import { probeNearAi } from "../site-api/tee-probe.js";
 
 const SELLER = "seller.earned-price.testnet";
 const KEY = "sk-test-DO-NOT-LEAK-91c2";
@@ -730,7 +731,7 @@ test("L-4: submit_review not_sent once, then landed -> live with two submit atte
 // ---- copy and reasons ----
 test("COPY covers exactly REPLAY_REASONS; only every-caller refusals may decline", () => {
   assert.deepEqual(Object.keys(COPY).sort(), [...REPLAY_REASONS].sort());
-  assert.deepEqual([...GLOBAL_REFUSALS].sort(), ["cap_daily", "cap_spend", "cap_store_unavailable", "not_configured"]);
+  assert.deepEqual([...GLOBAL_REFUSALS].sort(), ["cap_daily", "cap_spend", "cap_store_unavailable", "not_configured", "tee_unavailable"]);
 });
 
 test("code review M-2: replay copy never claims the escrow refunds by itself", async () => {
@@ -776,4 +777,204 @@ test("adapter: a chunked body (no content-length) over the limit is cut off whil
   });
   const out = await fromWebRequest(new Request("https://x.test/api/review", { method: "POST", headers: { "content-type": "application/json" }, body: stream, duplex: "half" }));
   assert.equal(out.bodyText.length, MAX_BODY_BYTES + 1);
+});
+
+// ---- T-084: pre-accept NEAR AI probe ----
+/** A probe dep that records its calls into the chain's call list (so order vs accept is visible). */
+function probeDep(calls, answer) {
+  const seen = [];
+  const teeProbe = async (opts) => {
+    calls.push(["teeProbe"]);
+    seen.push(opts);
+    return typeof answer === "function" ? answer(opts) : answer;
+  };
+  return { teeProbe, seen };
+}
+const withProbe = (answer, over = {}) => {
+  const s = setup(over);
+  const p = probeDep(s.calls, answer);
+  s.deps.teeProbe = p.teeProbe;
+  return { ...s, probeSeen: p.seen };
+};
+
+for (const [name, answer] of [
+  ["401 (key revoked)", { verdict: "unavailable", status: 401 }],
+  ["402 (out of credit)", { verdict: "unavailable", status: 402 }],
+  ["503 (gateway outage)", { verdict: "unavailable", status: 503 }],
+  ["network / timeout", { verdict: "unavailable", status: null }],
+  ["a probe that throws", () => {
+    throw new Error(`boom ${KEY}`);
+  }],
+  ["a probe that never answers", () => new Promise(() => {})],
+  ["a malformed verdict", { verdict: "maybe", status: "x" }],
+]) {
+  test(`T-084: probe ${name} on an open job -> decline (buyer refunded now), no accept, no TEE call, slot released`, async () => {
+    const { deps, calls, logs, reviewCalls } = withProbe(answer, { deps: { maxDurationMs: 12_000, now: () => T0 } });
+    const r = await handleReview(req(), deps);
+    assertReplay(r, "tee_unavailable", calls);
+    assert.equal(r.body.job_state, "declined");
+    assert.equal(r.body.decline_tx, "DECLINE_TX");
+    assert.match(r.body.message, /declined and your deposit refunded/);
+    assert.ok(!calls.some((c) => c[0] === "accept"), "never accepted");
+    assert.equal(reviewCalls.length, 0, "no TEE review");
+    const order = calls.map((c) => c[0]);
+    assert.ok(order.indexOf("teeProbe") < order.indexOf("decline"));
+    assert.equal(await deps.store.get("spend:micro"), 0, "reservation given back");
+    assert.equal(await deps.store.get("day:2026-11-12"), 0, "not counted against the daily cap");
+    assert.equal(await deps.store.get("job:7"), 0, "job lock released");
+    const line = JSON.parse(logs.at(-1));
+    assert.equal(line.tee_probe, "unavailable");
+    noSecrets(r.body, logs);
+  });
+}
+
+test("T-084: probe ok -> live as before; probed once, after the caps and before accept, with a bounded timeout", async () => {
+  const { deps, calls, probeSeen, logs } = withProbe({ verdict: "ok", status: 200 });
+  const r = await handleReview(req(), deps);
+  assert.equal(r.body.mode, "live");
+  assert.equal(r.body.review_submitted, true);
+  const order = calls.map((c) => c[0]);
+  assert.equal(order.filter((c) => c === "teeProbe").length, 1);
+  assert.ok(order.indexOf("getRecord") < order.indexOf("teeProbe"), "after the caps");
+  assert.ok(order.indexOf("teeProbe") < order.indexOf("accept"), "before accept");
+  assert.ok(!order.includes("decline"));
+  assert.ok(probeSeen[0].timeoutMs > 0 && probeSeen[0].timeoutMs <= 8_000);
+  noSecrets(r.body, logs);
+});
+
+test("T-084: a resumed accepted job (no review yet) is never probed or declined, even with NEAR AI down", async () => {
+  const job = openJob({ status: "accepted", accepted_at_ns: ns(T0 - 10_000) });
+  const { deps, calls, reviewCalls } = withProbe({ verdict: "unavailable", status: 402 }, { chainOpts: { job } });
+  const r = await handleReview(req(), deps);
+  assert.equal(r.body.mode, "live");
+  assert.ok(!calls.some((c) => c[0] === "teeProbe" || c[0] === "decline" || c[0] === "accept"));
+  assert.equal(reviewCalls.length, 1);
+});
+
+test("T-084: a resumed accepted job whose review then hits the outage replays accepted_no_review (unchanged)", async () => {
+  const job = openJob({ status: "accepted", accepted_at_ns: ns(T0 - 10_000) });
+  const { deps, calls } = withProbe({ verdict: "unavailable", status: 402 }, {
+    chainOpts: { job },
+    review: () => {
+      throw new ReviewError("TEE_UNAVAILABLE", "x", 402);
+    },
+  });
+  const r = await handleReview(req(), deps);
+  assertReplay(r, "tee_unavailable", calls);
+  assert.equal(r.body.job_state, "accepted_no_review");
+  assert.ok(!calls.some((c) => c[0] === "decline"));
+});
+
+test("T-084: probe inconclusive (e.g. the deprecated endpoint moved: 404) -> proceed live, logged", async () => {
+  const { deps, logs } = withProbe({ verdict: "inconclusive", status: 404 });
+  const r = await handleReview(req(), deps);
+  assert.equal(r.body.mode, "live");
+  const line = logs.map((l) => JSON.parse(l)).find((l) => l.tee_probe);
+  assert.deepEqual({ tee_probe: line.tee_probe, status: line.tee_probe_status }, { tee_probe: "inconclusive", status: 404 });
+  noSecrets(r.body, logs);
+});
+
+test("T-084: probe down but the decline doesn't land -> replay tee_unavailable, job_state open, slot released for a retry", async () => {
+  const { deps, calls } = withProbe({ verdict: "unavailable", status: 402 }, { chainOpts: { decline: async () => ({ status: "not_sent", txHash: null }) } });
+  const r = await handleReview(req(), deps);
+  assertReplay(r, "tee_unavailable", calls);
+  assert.equal(r.body.job_state, "open");
+  assert.equal(r.body.decline_tx, null);
+  assert.match(r.body.message, /calling the escrow's timeout/);
+  assert.ok(!calls.some((c) => c[0] === "accept"));
+  assert.equal(await deps.store.get("job:7"), 0);
+});
+
+test("T-084: a per-caller cap refuses before the probe (no probe, no decline, job left open)", async () => {
+  const { deps, calls } = withProbe({ verdict: "unavailable", status: 402 });
+  await deps.store.incrBy("buyer:2026-11-12:judge1.testnet", 3);
+  const r = await handleReview(req(), deps);
+  assertReplay(r, "cap_buyer", calls);
+  assert.ok(!calls.some((c) => c[0] === "teeProbe" || c[0] === "decline"));
+});
+
+test("T-084: the probe's decline happens before the job lock is released (a retry can't accept meanwhile)", async () => {
+  let lockAtDecline;
+  const s = withProbe({ verdict: "unavailable", status: 402 });
+  const origDecline = s.deps.chain.decline;
+  s.deps.chain.decline = async (id) => {
+    lockAtDecline = await s.deps.store.get("job:7");
+    return origDecline(id);
+  };
+  await handleReview(req(), s.deps);
+  assert.equal(lockAtDecline, 1);
+});
+
+test("T-084: depsFromEnv wires the probe to POST check_api_key with the env key; nothing else", async () => {
+  const seen = [];
+  const fetch = async (url, init = {}) => {
+    seen.push({ url: String(url), init });
+    return { status: 402, ok: false, json: async () => ({ error: { message: "Insufficient credits" } }), body: { cancel: async () => {} } };
+  };
+  const deps = depsFromEnv({ NEAR_AI_API_KEY: ` ${KEY} ` }, fetch);
+  assert.equal(typeof deps.teeProbe, "function");
+  assert.deepEqual(await deps.teeProbe({ timeoutMs: 5_000 }), { verdict: "unavailable", status: 402 });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url, "https://cloud-api.near.ai/v1/check_api_key");
+  assert.equal(seen[0].init.headers.Authorization, `Bearer ${KEY}`);
+});
+
+test("integration (T-084): real probe + real reviewJob, NEAR AI out of credit -> declined before accept; attestation and chat never called; key never leaks", async () => {
+  const ai = nearAi({ chatStatus: 402 });
+  const fetch = async (url, init = {}) => {
+    if (new URL(url).pathname === "/v1/check_api_key") {
+      ai.seen.push({ url: String(url), headers: init.headers });
+      return { status: 402, ok: false, json: async () => ({ error: { message: `Insufficient credits for ${KEY}` } }), body: { cancel: async () => {} } };
+    }
+    return ai.fetch(url, init);
+  };
+  const logs = [];
+  const fc = fakeChain();
+  fc.chain.signers = async () => [SIGNER];
+  const deps = {
+    sellerId: SELLER,
+    apiKey: KEY,
+    sellerKeyConfigured: true,
+    chain: fc.chain,
+    store: memoryStore(),
+    teeProbe: ({ timeoutMs }) => probeNearAi({ apiKey: KEY, fetch, timeoutMs }),
+    review: (args) => reviewJob({ ...args, fetch, log: (l) => logs.push(l), sleep: async () => {}, now: () => T0 }),
+    loadPack,
+    visitorSecret: "s",
+    now: () => T0,
+    log: (l) => logs.push(l),
+  };
+  const r = await handleReview(req(), deps);
+  assertReplay(r, "tee_unavailable", fc.calls);
+  assert.equal(r.body.job_state, "declined");
+  assert.ok(!fc.calls.some((c) => c[0] === "accept"));
+  assert.deepEqual(ai.seen.map((c) => new URL(c.url).pathname), ["/v1/check_api_key"]);
+  noSecrets(r.body, logs);
+});
+
+test("integration (T-084): real probe ok, then the chat call 402s -> the residual window: accepted_no_review", async () => {
+  const ai = nearAi({ chatStatus: 402 });
+  const fetch = async (url, init = {}) =>
+    new URL(url).pathname === "/v1/check_api_key" ? { status: 200, ok: true, json: async () => ({ valid: true }) } : ai.fetch(url, init);
+  const fc = fakeChain();
+  fc.chain.signers = async () => [SIGNER];
+  const logs = [];
+  const deps = {
+    sellerId: SELLER,
+    apiKey: KEY,
+    sellerKeyConfigured: true,
+    chain: fc.chain,
+    store: memoryStore(),
+    teeProbe: ({ timeoutMs }) => probeNearAi({ apiKey: KEY, fetch, timeoutMs }),
+    review: (args) => reviewJob({ ...args, fetch, log: (l) => logs.push(l), sleep: async () => {}, now: () => T0 }),
+    loadPack,
+    visitorSecret: "s",
+    now: () => T0,
+    log: (l) => logs.push(l),
+  };
+  const r = await handleReview(req(), deps);
+  assertReplay(r, "tee_unavailable", fc.calls);
+  assert.equal(r.body.job_state, "accepted_no_review");
+  assert.ok(fc.calls.some((c) => c[0] === "accept"));
+  noSecrets(r.body, logs);
 });

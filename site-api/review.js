@@ -20,7 +20,12 @@
 // pre-recorded is ever submitted on-chain (the escrow's freshness check + replay guard would
 // refuse it anyway). Refusals that hold for EVERY caller (GLOBAL_REFUSALS) and happen before accept
 // also decline the open job, so the buyer is refunded at once and the seller's record is untouched;
-// per-caller refusals (cap_visitor, cap_buyer) never decline. Nothing refunds by itself: an open job
+// per-caller refusals (cap_visitor, cap_buyer) never decline. T-084: tee_unavailable is one of them
+// when the pre-accept NEAR AI probe (site-api/tee-probe.js, deps.teeProbe) says NEAR AI is down or our
+// key can't pay (401/402/403/408/429/5xx/network/timeout): our own outage then declines the open job
+// instead of accepting it into a review that can't happen. Residual window: NEAR AI (or just the
+// review model's backend, which the probe does not reach) can still fail between the probe and the
+// review, and that job ends accepted_no_review. Nothing refunds by itself: an open job
 // past accept_by, or an accepted job with no review past review_by, stays in the escrow until
 // someone calls the contract's timeout(job_id). The site (T-033) calls it with the buyer key; for
 // "accepted_no_review" that timeout also records a fail for the seller (A-008).
@@ -31,6 +36,7 @@
 import { DEFAULT_BUDGET_MS, DEFAULT_MAX_ATTEMPTS, ReviewError } from "../seller/review.js";
 import { authShapeOk, checkReviewAuth } from "./buyer-auth.js";
 import { CapStoreError, reserveLive, reviewReserveMicro, utcDay } from "./caps.js";
+import { PROBE_TIMEOUT_MS } from "./tee-probe.js";
 import { header, visitorId } from "./visitor.js";
 
 export const MAX_DURATION_MS = 300_000; // Vercel Hobby maximum (maxDuration 300)
@@ -43,6 +49,7 @@ const ACCEPT_POLL_MS = 1_000;
 const ACCEPT_POLL_TOTAL_MS = 10_000; // stop re-reading after this, however slow the reads are
 const SUBMIT_RETRY_MIN_MS = 10_000; // retry a never-sent submit_review only with this much time left
 const SUBMIT_TRIES = 3;
+const PROBE_GRACE_MS = 1_000; // the probe's own timeout fires first; this only backs it up
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 export const MAX_BODY_BYTES = 1024;
 const U64_MAX = 18446744073709551615n;
@@ -66,7 +73,9 @@ export const REPLAY_REASONS = [
 ];
 
 // Refusals that would hit any caller for this job: only these may decline an open job (M-1).
-export const GLOBAL_REFUSALS = new Set(["cap_daily", "cap_spend", "cap_store_unavailable", "not_configured"]);
+// T-084: tee_unavailable joins them only through the pre-accept probe (step 6a); after accept the
+// same reason replays with job_state accepted_no_review, as before.
+export const GLOBAL_REFUSALS = new Set(["cap_daily", "cap_spend", "cap_store_unavailable", "not_configured", "tee_unavailable"]);
 
 export const COPY = {
   tee_unavailable: "The TEE reviewer is unavailable right now (NEAR AI Cloud refused, ran out of credit or timed out).",
@@ -118,13 +127,16 @@ const error = (status, code, message) => ({ status, body: { mode: "error", code,
 const nsToMs = (ns) => Number(BigInt(ns) / 1_000_000n);
 
 /**
- * deps: { sellerId, apiKey, sellerKeyConfigured, liveEnabled?, sellerKeyCheck?, chain, store, review,
- * loadPack, visitorSecret, now?, log?, sleep?, maxDurationMs?, chainTimeoutMs? }.
+ * deps: { sellerId, apiKey, sellerKeyConfigured, liveEnabled?, sellerKeyCheck?, teeProbe?, chain, store,
+ * review, loadPack, visitorSecret, now?, log?, sleep?, maxDurationMs?, chainTimeoutMs? }.
  * chain: { getJob(id), hasAccessKey(account, publicKey), signers(), getRecord(seller), accept(id),
  * decline(id), submitReview(args) }; tx methods resolve to
  * { status: landed | failed | not_sent | unknown, txHash, message? } and never throw.
  * liveEnabled === false: the deployment may not run live reviews (no durable cap store, H-1).
  * sellerKeyCheck(): "ok" | "full_access" | "wrong_scope" | "missing" (M-2); anything but "ok" = no tx.
+ * teeProbe({ timeoutMs }) -> { verdict: "ok" | "unavailable" | "inconclusive", status } (T-084), run
+ * once before accepting an open job; "unavailable" (or a throw / no answer in time) declines it.
+ * Without teeProbe there is no probe (site-api/vercel.js always wires one).
  *
  * Never throws: an unexpected error becomes a fixed replay body (S-1 / L-3).
  */
@@ -224,11 +236,11 @@ async function handle(req, deps) {
 
   // Refused before accept: decline an open job (buyer refunded now) only when the refusal would hit
   // any caller; a per-caller cap leaves the job open (M-1).
-  const declineOrReplay = async (reason) => {
-    if (job.status !== "open") return replay(reason, "accepted_no_review");
-    if (!GLOBAL_REFUSALS.has(reason)) return replay(reason, "open");
+  const declineOrReplay = async (reason, logExtra = {}) => {
+    if (job.status !== "open") return replay(reason, "accepted_no_review", {}, logExtra);
+    if (!GLOBAL_REFUSALS.has(reason)) return replay(reason, "open", {}, logExtra);
     const d = await tx(deps.chain.decline(jobId), chainMs());
-    return d.status === "landed" ? replay(reason, "declined", { decline_tx: d.txHash }) : replay(reason, "open", { decline_tx: null });
+    return d.status === "landed" ? replay(reason, "declined", { decline_tx: d.txHash }, logExtra) : replay(reason, "open", { decline_tx: null }, logExtra);
   };
   // H-1: no durable cap store (or no dedicated NEAR AI key) means no live review.
   if (!deps.apiKey || deps.liveEnabled === false) return declineOrReplay("not_configured");
@@ -237,7 +249,7 @@ async function handle(req, deps) {
   const windowLeft = (j) => nsToMs(j.review_by_ns) - SUBMIT_RESERVE_MS - now();
   if (job.status === "accepted" && windowLeft(job) < MIN_REVIEW_MS) return replay("timeout", "accepted_no_review");
 
-  // 5. Caps: job lock, 100/day, 3 per visitor and per buyer, $1.75 spend stop (with the on-chain floor).
+  // 5. Caps: job lock, 35/day (A-028), 3 per visitor and per buyer, $1.75 spend stop (with the on-chain floor).
   const pack = deps.loadPack(packId.slice(5));
   const reserveMicro = reviewReserveMicro(pack);
   let floorMicro = 0;
@@ -266,6 +278,30 @@ async function handle(req, deps) {
       // the daily keys and the job lock expire on their own
     }
   };
+
+  // 6a. T-084: before accepting, is NEAR AI up and can our key pay? If not, decline the open job now
+  // (buyer refunded, seller record untouched) rather than accept a review that can't happen and
+  // leave the job to timeout as accepted_no_review, a fail on our seller's record (A-008). Declined
+  // before the slot is released, so a retry can't take the lock and accept meanwhile. A resumed,
+  // already accepted job is past that point: it is never probed or declined here.
+  if (job.status === "open" && deps.teeProbe) {
+    const probeMs = Math.max(1, Math.min(PROBE_TIMEOUT_MS, deadline - now()));
+    let probe;
+    try {
+      probe = await within(Promise.resolve(deps.teeProbe({ timeoutMs: probeMs })), probeMs + PROBE_GRACE_MS);
+    } catch {
+      probe = { verdict: "unavailable", status: null };
+    }
+    const verdict = ["ok", "unavailable", "inconclusive"].includes(probe?.verdict) ? probe.verdict : "unavailable";
+    const status = Number.isInteger(probe?.status) ? probe.status : null;
+    if (verdict === "unavailable") {
+      const res = await declineOrReplay("tee_unavailable", { tee_probe: verdict, tee_probe_status: status });
+      await free();
+      return res;
+    }
+    // Inconclusive (e.g. the deprecated endpoint moved): proceed as before T-084, but say so in the logs.
+    if (verdict === "inconclusive") log(JSON.stringify({ at: "review-fn", tee_probe: verdict, tee_probe_status: status, job_id: jobId }));
+  }
 
   // 6. Accept (A-010: before the review; the escrow's freshness window starts here).
   let acceptTx = null;
