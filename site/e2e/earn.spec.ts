@@ -358,19 +358,39 @@ test("failsafe race (review O-2): JS that arrives after the 2.5 s failsafe keeps
 });
 
 for (const width of [390, 1280])
-  test(`tx links at ${width}: one line each (Designer QA note 2) and a hit area of at least 24 px (note 3)`, async ({ browser }) => {
+  test(`tx links at ${width}: one line each (Designer QA note 2), a text-tight box and focus ring, and a hittable 24 px (note 3, L2-1)`, async ({ browser }) => {
     const ctx = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await ctx.newPage();
     await mount(page);
     await page.locator('.ep [data-act="skip"]').click();
-    const links = await page.locator(".ep a.lnk").evaluateAll((as) => as.map((a) => {
-      const tops = new Set([...a.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
-      return { slot: a.closest<HTMLElement>("[data-slot]")?.dataset.slot ?? "", lines: tops.size, h: a.getBoundingClientRect().height };
-    }));
-    expect(links.length).toBeGreaterThan(0);
+    const n = await page.locator(".ep a.lnk").count();
+    expect(n).toBeGreaterThan(0);
+    const links: { slot: string; lines: number; h: number; pad: string; hit: number; left: number; right: number; cy: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      const a = page.locator(".ep a.lnk").nth(i);
+      await a.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      links.push(await a.evaluate((el) => {
+        const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+        const tops = new Set([...el.getClientRects()].filter((q) => q.width > 0).map((q) => Math.round(q.top)));
+        // hittable height: scan the centre line in 0.5 px steps; anything painted on top is excluded (Designer's method)
+        const x = r.left + r.width / 2;
+        let hit = 0;
+        for (let y = r.top - 20; y <= r.bottom + 20; y += 0.5) if (document.elementFromPoint(x, y)?.closest("a") === el) hit += 0.5;
+        return { slot: el.closest<HTMLElement>("[data-slot]")?.dataset.slot ?? "", lines: tops.size, h: r.height,
+          pad: `${cs.paddingTop} ${cs.paddingBottom}`, hit, left: r.left + scrollX, right: r.right + scrollX, cy: r.top + scrollY + r.height / 2 };
+      }));
+    }
     for (const l of links) {
-      if (l.slot === "reg") expect(l.lines, `register link wraps at ${width}`).toBe(1);
-      expect(l.h, `${l.slot} link hit area at ${width}`).toBeGreaterThanOrEqual(24);
+      expect(l.lines, `${l.slot} link wraps at ${width}`).toBe(1);
+      expect(l.pad, `${l.slot}: no padding, so the focus ring hugs the text (L2-1)`).toBe("0px 0px");
+      expect(l.h, `${l.slot}: text-tight box at ${width} (the 24 px comes from ::before, not the box)`).toBeLessThan(24);
+      expect(l.hit, `${l.slot} hittable height at ${width}`).toBeGreaterThanOrEqual(24);
+    }
+    // L2-1: the 24 px hit bands of links stacked in one column do not overlap
+    for (const p of links) for (const q of links) {
+      if (p === q || p.right <= q.left || q.right <= p.left || p.cy >= q.cy) continue;
+      const band = (l: typeof p) => Math.max(l.h, 24) / 2;
+      expect(q.cy - band(q), `${p.slot} / ${q.slot} hit areas overlap at ${width}`).toBeGreaterThanOrEqual(p.cy + band(p) - 0.5);
     }
     await ctx.close();
   });
