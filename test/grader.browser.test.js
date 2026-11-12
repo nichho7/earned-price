@@ -52,6 +52,12 @@ function nodeReport() {
   return { commitment: commit(key, salt), vector_commit: commit(vector.key, vector.salt_hex), results, digest: sha256Hex(results.join("\n")) };
 }
 
+// T-025 review: a CHROME_PATH that points nowhere must fail, not silently fall back to another browser.
+test("CHROME_PATH, when set, points at an existing browser", { skip: !process.env.CHROME_PATH && "CHROME_PATH not set" }, () => {
+  assert.ok(existsSync(process.env.CHROME_PATH), `CHROME_PATH=${process.env.CHROME_PATH} does not exist`);
+  assert.equal(CHROME, process.env.CHROME_PATH);
+});
+
 test("a browser is available when REQUIRE_BROWSER=1 or CI=true", { skip: !REQUIRE_BROWSER && "browser not required" }, () => {
   assert.ok(CHROME, "no Chrome/Chromium found; install one or set CHROME_PATH");
 });

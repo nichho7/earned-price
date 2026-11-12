@@ -1,12 +1,227 @@
-# Earned Price
+# Earned Price: testnet escrow that pays agents only when a TEE grade passes.
 
-A seller agent that haggles its price, is paid from testnet escrow only when a commit-reveal code grade passes its TEE-signed (NEAR AI Cloud) review, and every pass or fail moves its next quote.
+A seller agent haggles its price, is paid from testnet escrow only when a commit-reveal code
+grade passes its TEE-signed (NEAR AI Cloud) review, and every pass or fail moves its next quote.
 
 *Price earned, not claimed.*
 
-- **Track:** NEAR Hackathon, Agent Economy (`agents`)
-- **Sister project:** NEAR Real-World Money (Near_Hackathon_II, track realworld)
-- **Status:** work in progress. Setup and usage instructions will land here.
+- **Track:** NEAR Hackathon, Agent Economy (`agents`).
+- **Sister project:** NEAR Real-World Money (`Near_Hackathon_II`, track `realworld`), by the same team.
+- **Status:** hackathon build, **testnet only**. No real funds, no mainnet.
+- **Website:** not live yet. This README covers the CLI and the contract.
+
+Graded jobs (exams with sealed answers) build the record; real jobs pay the earned price; buyers
+can supply tests, not answers.
+
+## Try it: three tiers
+
+| Tier | Who | Needs | Proves | Time |
+|---|---|---|---|---|
+| **1. Keyless** | anyone, an AI screener | Node 20+, git (Python 3 and Rust for 2 of the 13 steps) | the real recorded run is authentic, the contract is live with the approved code, the quote follows the record, a fail refunds and drops the price | ~1 min with `--quick`, ~5-10 min in full |
+| **2. Your own job** | anyone with network | Tier 1 + the public testnet faucet (no key from us) | your own throwaway buyer, a sealed key, a haggle and real escrow on testnet; your job is refunded by timeout | ~4 min |
+| **3. Full live loop** | the team | the seller's key + a NEAR AI Cloud key | a live TEE review, reveal, settle and the quote moving, on a fresh seller | ~2 min |
+
+**Live numbers move; recorded numbers don't.** The demo story (quote 0.030 -> 0.040 after a
+pass, then held at 0.040 after a repeat pass) happened live on testnet on 2026-11-12 and ships in
+[`recorded/`](recorded/README.md): both receipts, the console log and all 9 tx links. The demo
+seller `seller.earned-price.testnet` is no longer fresh, so a live read today starts from its
+current record (0.040 on 2026-11-12), not from 0.030. Every live step below says so where it
+matters; use `recorded/` for the canonical numbers.
+
+### Setup (all tiers)
+
+```sh
+git clone <repo URL> earned-price && cd earned-price
+npm ci
+```
+
+The CLI is not published to npm yet, so run it as `node cli/earned.js` from the clone (it is the
+`earned` binary of the `earned-price` package).
+
+### Tier 1: keyless (no account, no key, no transaction)
+
+One command runs every Tier 1 step and prints PASS, FAIL or SKIP for each, then the pass rate:
+
+```sh
+node scripts/self-check.mjs           # all 13 steps (npm test and the Rust contract test take a few minutes)
+node scripts/self-check.mjs --quick   # 11 steps, leaves out the two slow ones
+```
+
+See: one block per step (`do`, `see`, `got`), then
+`SELF-CHECK: 13/13 steps PASS (100%), 0 FAIL` (with `--quick`:
+`SELF-CHECK: 11/11 steps PASS (100%), 0 FAIL, 2 not run (--quick)`). Exit code 0 only when every
+step that ran passed. A step whose tool is missing (Python 3, Rust) prints SKIP and counts as not
+passing. `--json` prints the same result as JSON; `--only 4,11` runs single steps. Steps 9-11
+read testnet through public RPCs; nothing is signed or sent.
+
+The same steps by hand:
+
+1. **Node.js 20 or newer.** Do: `node --version`. See: `v20 or newer`.
+2. **Dependencies.** Do: `npm ci`. See: `no npm error; node_modules holds near-api-js 7.4.0, @noble/curves 2.4.0, @noble/hashes 2.4.0`.
+3. **The CLI runs.** Do: `node cli/earned.js`. See: `Earned Price (earned)  contract earned-price.testnet on testnet`, then the usage lines.
+4. **Offline verify of the recorded pack-2 job (job 1, 5/5).** Do: `node cli/earned.js verify recorded/pack-2.json`.
+   See: four lines `PASS  1` .. `PASS  4`, then
+   `REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-2 request (prompt v1), regrade PASS.` (exit 0).
+5. **Offline verify of the recorded pack-3 job (job 2, 4/5, B5 missed).** Do: `node cli/earned.js verify recorded/pack-3.json`.
+   See: `REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-3 request (prompt v1), regrade PASS.` (exit 0).
+6. **A tampered copy fails, naming the check.** Do: `node cli/earned.js verify recorded/pack-2.json --tamper`
+   (changes one byte of the review in memory; the file is untouched).
+   See: `FAIL  2 TEE signature covers this review` as the only failing check, then
+   `FAIL: check 2 TEE signature covers this review` (exit 1).
+7. **The recorded live run.** Do: `grep -E '^(SEE:|Next quote|Quote held)' recorded/live-run-2026-11-12.log`.
+   See: `SEE: step 1..4 PASS, Next quote (get_record): 0.030 -> 0.040 NEAR, Quote held: 0.040 -> 0.040 NEAR`, that is:
+
+   ```text
+   SEE: step 1 PASS
+   SEE: step 2 PASS
+   Next quote (get_record): 0.030 -> 0.040 NEAR
+   SEE: step 3 PASS
+   Next quote (get_record): 0.040 -> 0.040 NEAR
+   Quote held: 0.040 -> 0.040 NEAR (P = 1 unique buyer, 2 passes, F = 0). A repeat pass pays the seller but can't pump the price.
+   SEE: step 4 PASS
+   ```
+
+   The self-check also confirms that the settle txs in the log are the ones in the two receipts.
+   Every tx hash, with its explorer link, is in [`recorded/README.md`](recorded/README.md).
+8. **The exam packs.** Do: `python3 packs/check_packs.py`.
+   See: `pack 1: OK (16 tests; 5 planted-bug tests fail as designed; ...), same for packs 2 and 3`.
+9. **The escrow is live with the approved code** (testnet read). Do: `node scripts/testnet-view.mjs account earned-price.testnet`.
+   See: `"code_hash":"3j1YYcy6bDSMyN2bUEnE8uQc4s3HbHWfc4dAs3NC9byG"` (and
+   `node scripts/testnet-view.mjs call earned-price.testnet name '{}'` prints `"Earned Price"`).
+10. **The seller's record holds the recorded run** (testnet read).
+    Do: `node scripts/testnet-view.mjs call earned-price.testnet get_record '{"seller":"seller.earned-price.testnet"}'`.
+    See: `{"passes":2,"fails":0,"unique_buyers":1,"jobs":2} on 2026-11-12; later jobs only add to passes, fails and jobs`.
+    The self-check passes when `passes >= 2` and `jobs = passes + fails`.
+11. **The quote follows the record, and an offer below the floor is refused** (testnet read).
+    Do: `node cli/earned.js quote seller.earned-price.testnet --offer 0.02`.
+    See: `Quote: 0.040 NEAR (testnet) on 2026-11-12 (moves with the record), the formula line with its inputs, Refused 0.020 NEAR: below my cost floor 0.025 NEAR.`
+    On 2026-11-12 that was:
+
+    ```text
+    Quote: 0.040 NEAR (testnet)
+      formula: 0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR
+      P = 1 unique buyers with a pass (2 passes, 1 counted: one per buyer), F = 0 fails, 2 graded jobs
+      rule: 0.030 + 0.010×P − 0.005×F, clamped to 0.025..0.100 NEAR
+    Refused 0.020 NEAR: below my cost floor 0.025 NEAR. My price is 0.040 NEAR.
+    ```
+
+    If someone has run jobs since, the numbers differ, but the formula line always equals the quote.
+12. **Unit and integration tests** (no network, no keys; slow). Do: `npm test`. See: `ℹ fail 0`.
+13. **Contract test: a fail refunds the buyer and drops the price** (Rust; slow; the first run
+    downloads near-sandbox). The live run only shows passes, so the fail path is proven on a local
+    sandbox chain with real balances.
+    Do: `cargo test -p earned-price --features sandbox-test --test sandbox balances_follow_the_escrow_rules -- --nocapture`.
+    See: `fail + refund: quote 0.040 -> 0.035 (buyer refunded 0.040 NEAR in full)`, with these lines in the output:
+
+    ```text
+    repeat pass (same buyer): seller paid, quote 0.040 -> 0.040
+    fail + refund: quote 0.040 -> 0.035 (buyer refunded 0.040 NEAR in full)
+    test balances_follow_the_escrow_rules ... ok
+    ```
+
+    Needs Rust stable, the `wasm32-unknown-unknown` target and cargo-near 0.23.x (see
+    [Prerequisites](#prerequisites)).
+
+### Tier 2: your own job on testnet (no key from us)
+
+This creates a throwaway testnet account on your machine and spends testnet NEAR from it (the
+public faucet funds it; testnet NEAR has no value). The key stays in `.earned/buyer.json` (mode
+0600, gitignored); set `EARNED_HOME` to keep it elsewhere.
+
+1. Do: `node cli/earned.js init`. See: `Created testnet buyer earned-price-buyer-<8 hex>.testnet`,
+   its create tx, `spend cap: 0.2 NEAR`, the three packs with their sha256, then `SEE: step 1 PASS`.
+2. Do: `node cli/earned.js pick 2`. See: the sealed key's commit hash, today's quote, the buyer's
+   0.020 offer refused (`Refused 0.020 NEAR: below my cost floor 0.025 NEAR.`), the quote accepted,
+   `Escrow create: job <N>, <quote> NEAR locked`, its create tx, then `SEE: step 2 PASS`. The price
+   is today's quote (0.040 on 2026-11-12), not the demo's 0.030.
+3. Do: `node cli/earned.js hire`. See:
+   ``No live seller in this run (live reviews need `--local-seller` with the seller and NEAR AI keys).``,
+   then the recorded run, every line labelled RECORDED:
+   `RECORDED (a past run, job 1; not your job, and no receipt is written for your job)`,
+   `RECORDED grade: 5/5 PASS; settle tx 9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB` and
+   `RECORDED REVIEW AUTHENTIC (offline): ...`. Then a countdown to `accept_by` (2 minutes after
+   `pick`), `accept_by has passed: calling timeout(<N>)` and
+   `Timed out: the seller did not accept by accept_by. You were refunded; the seller's record is unchanged.`
+   with its timeout tx. Exit code 1 (no pass) and no receipt: nothing reviewed your job.
+
+Why no live review of your job: the reference seller signs as `seller.earned-price.testnet` and
+pays NEAR AI Cloud per review, and neither key can ship in a public repo. There is no hosted
+seller yet that would pick up a stranger's job. The live review path ran end to end on
+2026-11-12: Tier 1 steps 4-7 check it offline, and the explorer links in `recorded/README.md`
+show it on-chain.
+
+### Tier 3: the full live loop (team, with keys)
+
+`scripts/live-run.sh --go` runs `init`, `quote`, `pick 2`, `hire --local-seller` (step 3),
+`verify` (plus `--tamper`), then `hire --pack 3 --local-seller` (step 4, same buyer) and `verify`
+of that receipt. It needs `EARNED_SELLER_PRIVATE_KEY` and `NEAR_AI_API_KEY`; see
+[Live CLI run](#live-cli-run-team-tier-3) for the guards. On a fresh seller each step prints its
+`SEE: step N PASS` and the quote goes 0.030 -> 0.040 -> 0.040, as in `recorded/`.
+
+## Built with
+
+| Tool | Used for |
+|---|---|
+| NEAR testnet | the escrow contract `earned-price.testnet`, every job and payment |
+| near-sdk 5.30.0 (Rust) | the escrow contract (`contract/`) |
+| cargo-near 0.23 | building the contract wasm |
+| near-workspaces 0.24 + near-sandbox | the contract's sandbox tests (Tier 1 step 13) |
+| near-cli-rs 0.31 | deploying the contract (`scripts/deploy.sh`) |
+| near-api-js 7.4.0 | the CLI's signed transactions (`create`, `reveal`, `timeout`) |
+| NEAR AI Cloud | the seller's private, TEE-signed code review, with its attestation report |
+| NEAR testnet faucet helper | creating the throwaway buyer account in `earned init` |
+| Public testnet RPCs (FastNEAR, rpc.testnet.near.org) | keyless reads: quote, record, jobs |
+| NearBlocks testnet explorer | the tx links in receipts and `recorded/` |
+
+## Limits (read before judging)
+
+- **Testnet only.** No mainnet, no real money, no fee. A hackathon build.
+- **Sybil limit:** each buyer account can raise a seller's quote at most once; a seller that runs
+  its own buyer accounts can still farm its quote (see "Record and quote" below, decision A-014).
+- **One registered verifier:** the escrow's allowlist holds one TEE signer, the NEAR AI Cloud
+  address `0xfe0071895500a9755c18044948ab4f4e1a7f337e` (`contract/tee-signers.json`, `signers`
+  view), managed by the contract owner (see "Trust and owner powers").
+- **Attestation is checked for binding only** (`earned verify` check 3); the Intel DCAP chain, the
+  NVIDIA GPU evidence and the image measurements are not verified by our code.
+- **The demo seller is not fresh** (see "Live numbers move" above), and there is no hosted seller
+  for strangers' jobs (Tier 2).
+- **Business line: our guess.** Agent Market already takes a fee on jobs; proven-price jobs could
+  carry it, and we would earn a cut as the pricing module. Not validated with NEAR or Agent
+  Market; no pricing decided.
+
+The full threat model is in "Threat model and known limits" below.
+
+## Offline verify: what it proves
+
+The checks: 1 commit hash matches the revealed key, and the key is the pack's
+official answer key; 2 TEE signature covers this review: the model is the pinned
+review model, the signer is on the escrow's deploy-time allowlist
+(`contract/tee-signers.json`), and the request is the pack's pinned request;
+3 attestation binds the signer and nonce (binding only, see "Threat model and
+known limits");
+4 regrade gives the same score. Offline verify trusts only the code and
+`verify/trust-anchors.js`, never a value the receipt names itself.
+
+A receipt for an official pack that passes all four prints `REVIEW AUTHENTIC
+(offline)`: a genuine NEAR AI TEE review of the official pack request, regraded
+against the official key. That is all offline can prove. Every run also prints
+`Not proven offline: job, buyer, seller, quote, payment, tx hashes, freshness,
+review reuse`; check those on-chain (`txs.submit_review` and `txs.reveal` on the
+testnet explorer). Exit code 0 means authentic, 1 means a check failed or the
+pack is not official.
+
+`test/fixtures/receipt-t003-sample-0.json` wraps a real recorded NEAR AI Cloud
+review from the T-003 spike (real signature from an allowlisted signer, real
+attestation, no on-chain job, so its chain fields say `fixture.not-on-chain`). It
+uses the `sample-0` practice pack, which has no request pin or official key, so
+`node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json` passes all
+four checks but prints `NOT AN OFFICIAL PACK (fixture)` and exits 1: it never
+counts as an authentic Earned Price review. Its prompt asked for no category, so
+the grade is the fixed fail `malformed_finding`.
+
+Each receipt's `tee.attestation` is NEAR AI's public attestation report, exactly as
+the API returned it (offline verify needs it). The `${VAR}` names inside it are
+NEAR AI's own placeholders, not values; a secret scanner may flag them.
 
 ## Names
 
@@ -19,7 +234,7 @@ if they drift.
 | Brand | Earned Price |
 | Repo / npm package / Cargo package | `earned-price` |
 | Rust crate (lib) | `earned_price` |
-| CLI binary | `earned` (also `npx earned-price`; never `ep`) |
+| CLI binary | `earned` (also `npx earned-price` once published to npm; until then `node cli/earned.js`; never `ep`) |
 | Contract account | `earned-price.testnet` |
 | Network | `testnet` |
 | Contract wasm (pinned) | `target/near/earned_price.wasm` |
@@ -274,7 +489,9 @@ Other limits:
 - `seller/review-prompt.js`: the exact TEE review request (comments stripped, line numbers kept, rules from the UI contract section 7).
 - `scripts/deploy.sh`: testnet-only deploy of the pinned wasm, then a smoke test (see below).
 - `scripts/testnet-view.mjs`: keyless, read-only testnet RPC views. `scripts/wasm-info.mjs`: a wasm's sha256, NEAR code hash and exports.
-- `test/`: `npm test` (names, grader, CLI, deploy script; no network, no keys).
+- `recorded/`: the first live testnet run (2026-11-12): two receipts, the console log, every tx link. `earned hire` replays it, labelled RECORDED, when no live seller can review.
+- `scripts/self-check.mjs`: runs every Tier 1 README step and prints PASS / FAIL / SKIP per step and the pass rate.
+- `test/`: `npm test` (names, grader, CLI, deploy script, recorded run, self-check; no network, no keys).
 
 ## Exam packs
 
@@ -318,68 +535,20 @@ and two cross-function bugs). Each pack folder holds the code under review, its 
 | Rust | stable (tested 1.99) + `wasm32-unknown-unknown` | building the wasm | https://rustup.rs, then `rustup target add wasm32-unknown-unknown` |
 | cargo-near | 0.23.x | building the wasm | `cargo install --locked cargo-near` |
 | near-cli-rs | 0.31.x | a real deploy only | `cargo install --locked near-cli-rs` |
+| Python | 3 (tested 3.14) | Tier 1 step 8 (`packs/check_packs.py`, standard library only) | https://python.org |
 
 `near` must be **near-cli-rs**, not the legacy JS near-cli (different syntax); the
 script checks `near --version` and every tool above before it builds.
 
 ### If you are judging or just checking (no keys needed)
 
-A full deploy signs with the `earned-price.testnet` key, which only the team has.
-You can check everything else:
+A full deploy signs with the `earned-price.testnet` key, which only the team has. Tier 1 steps 9
+and 13 check the live contract and the contract logic without it. To build the wasm and run every
+deploy check without signing or sending anything (Node + Rust + cargo-near):
 
 ```sh
-# Read-only: is the contract live, and what does it answer? (Node only)
-node scripts/testnet-view.mjs account earned-price.testnet
-node scripts/testnet-view.mjs call earned-price.testnet name '{}'
-
-# Build + every check, signs and sends nothing (Node + Rust + cargo-near)
 scripts/deploy.sh --dry-run
-
-# Offline receipt check, no key, no network: 4 checks in order, then a tampered copy
-node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json           # see: PASS 1-4, then NOT AN OFFICIAL PACK (fixture)
-node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json --tamper  # see: FAIL: check 2 TEE signature covers this review
-
-# The real receipt from our first live testnet run (tx hashes + explorer links: recorded/README.md)
-node cli/earned.js verify recorded/pack-2.json   # see: REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-2 request (prompt v1), regrade PASS.
 ```
-
-#### Contract test: a fail refunds the buyer and drops the price
-
-`earned hire --pack 3` (step 4) is a repeat pass by the same buyer, so the quote holds at
-0.040 (P counts unique buyers). The fail path is proven here, on a local sandbox chain with
-real balances (Rust + cargo-near; the first run downloads near-sandbox):
-
-```sh
-cargo test -p earned-price --features sandbox-test --test sandbox balances_follow_the_escrow_rules -- --nocapture
-# see: repeat pass (same buyer): seller paid, quote 0.040 -> 0.040
-# see: fail + refund: quote 0.040 -> 0.035 (buyer refunded 0.040 NEAR in full)
-# see: test balances_follow_the_escrow_rules ... ok
-```
-
-The checks: 1 commit hash matches the revealed key, and the key is the pack's
-official answer key; 2 TEE signature covers this review: the model is the pinned
-review model, the signer is on the escrow's deploy-time allowlist
-(`contract/tee-signers.json`), and the request is the pack's pinned request;
-3 attestation binds the signer and nonce (binding only, see "Threat model and
-known limits");
-4 regrade gives the same score. Offline verify trusts only the code and
-`verify/trust-anchors.js`, never a value the receipt names itself.
-
-A receipt for an official pack that passes all four prints `REVIEW AUTHENTIC
-(offline)`: a genuine NEAR AI TEE review of the official pack request, regraded
-against the official key. That is all offline can prove. Every run also prints
-`Not proven offline: job, buyer, seller, quote, payment, tx hashes, freshness,
-review reuse`; check those on-chain (`txs.submit_review` and `txs.reveal` on the
-testnet explorer). Exit code 0 means authentic, 1 means a check failed or the
-pack is not official.
-
-`test/fixtures/receipt-t003-sample-0.json` wraps a real recorded NEAR AI Cloud
-review from the T-003 spike (real signature from an allowlisted signer, real
-attestation, no on-chain job, so its chain fields say `fixture.not-on-chain`). It
-uses the `sample-0` practice pack, which has no request pin or official key, so
-all four checks pass but it prints `NOT AN OFFICIAL PACK (fixture)` and exits 1:
-it never counts as an authentic Earned Price review. Its prompt asked for no
-category, so the grade is the fixed fail `malformed_finding`.
 
 The `code_hash` printed by `testnet-view.mjs account` is base58(sha256(wasm)).
 `scripts/deploy.sh --dry-run` prints the same `code_hash` for the wasm it builds,
@@ -416,7 +585,7 @@ Safety rails:
   its job id could not be read, the script writes `target/near/smoke-unconfirmed.txt` and
   refuses to smoke again until you have checked the explorer and deleted that file.
 
-### Live CLI run (team)
+### Live CLI run (team, Tier 3)
 
 `scripts/live-run.sh` runs the judge's CLI path against `earned-price.testnet` from a clean
 checkout: `init`, `quote`, `pick 2`, `hire` (step 3), `verify` (plus `--tamper`), then
