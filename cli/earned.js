@@ -43,11 +43,21 @@ if (cmd === "names") {
     console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "pick failed; check `earned pick` usage and retry"}`);
     process.exitCode = 1;
   }
+} else if (cmd === "verify") {
+  const { parseVerifyArgs, runVerify } = await import("./verify-cmd.js");
+  try {
+    const v = await runVerify(parseVerifyArgs(args.slice(1)));
+    process.exitCode = v.ok ? 0 : 1;
+  } catch (err) {
+    console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "verify failed; check the receipt file"}`);
+    process.exitCode = 2;
+  }
 } else {
   console.log(`${BRAND} (${CLI_BIN})  contract ${CONTRACT_ACCOUNT} on ${NETWORK}`);
   console.log(`usage: ${CLI_BIN} init     create or reuse a throwaway testnet buyer (0.2 NEAR cap)`);
   console.log(`       ${CLI_BIN} quote <seller.testnet> [--offer 0.02]   seller's quote from its on-chain record`);
   console.log(`       ${CLI_BIN} pick <1|2|3> [--offer 0.02] [--seller s.testnet --yes]   seal the pack's key, haggle, lock the price in escrow`);
+  console.log(`       ${CLI_BIN} verify <receipt.json> [--tamper] [--json]   four offline checks of a receipt (no key, no network)`);
   console.log(`       ${CLI_BIN} names    print the naming set`);
   if (cmd && cmd !== "help" && cmd !== "--help") process.exitCode = 1;
 }

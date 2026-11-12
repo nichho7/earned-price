@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Receipt verify in the browser</title>
+<script type="importmap">{ "imports": { "@noble/hashes/": "/node_modules/@noble/hashes/", "@noble/curves/": "/node_modules/@noble/curves/" } }</script>
+<pre id="out">pending</pre>
+<script type="module">
+  // Loads the exact verify/receipt.js file Node uses (T-039 imports the same): rebuilds the real
+  // T-003 receipt with buildReceipt, verifies it, then verifies a tampered copy.
+  import { canonicalJson } from "/grader/grade.js";
+  import { buildReceipt, receiptJson, tamperReceipt, verifyReceipt } from "/verify/receipt.js";
+  const out = document.getElementById("out");
+  try {
+    const text = await (await fetch("/test/fixtures/receipt-t003-sample-0.json")).text();
+    const r = JSON.parse(text);
+    const { tee } = r;
+    const rebuilt = buildReceipt({
+      job: { network: r.network, contract: r.contract, job_id: r.job_id, pack_id: r.pack_id, buyer: r.buyer, seller: r.seller, commit_hash: r.commit_hash },
+      reveal: { K: canonicalJson(r.reveal.key), salt: r.reveal.salt },
+      review: { request_body: tee.request_body, response_body: tee.response_body, created: tee.created, tee },
+      quote: r.quote,
+      txs: r.txs,
+    });
+    const v = verifyReceipt(r);
+    const t = tamperReceipt(r);
+    const tv = verifyReceipt(t.receipt);
+    const report = {
+      env: typeof window,
+      rebuilt_equal: receiptJson(rebuilt) === text,
+      ok: v.ok,
+      checks: v.checks.map((c) => [c.n, c.ok, c.detail]),
+      tamper_edit: t.edit,
+      tamper_checks: tv.checks.map((c) => [c.n, c.ok]),
+    };
+    out.textContent = "RESULT " + JSON.stringify(report);
+  } catch (e) {
+    out.textContent = "ERROR " + e.message;
+  }
+</script>

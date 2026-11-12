@@ -215,6 +215,7 @@ comparing the account's code hash with the sha256 of a wasm you build yourself.
 
 - `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash for one official pack), `accept`, `decline`, `submit_review` (pinned request + on-chain signature + allowlist + replay check + signed `created` inside the job window), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `review_pins` (the pinned request per pack, `contract/src/pins.rs`), `owner` / `signers` / `add_signer` / `remove_signer`.
 - `cli/`: the `earned` CLI (Node, ESM): `earned init` creates a throwaway testnet buyer account; `earned quote` prints a seller's record-driven quote. `cli/quote.js` is the shared, browser-safe quote module (CLI and website).
+- `verify/`: browser-safe (no `node:` imports) receipt writer and offline verify. `verify/receipt.js` builds the version 1 receipt and runs the four checks of `earned verify`; `verify/nearai-verify.js` holds the NEAR AI signature and attestation-binding helpers.
 - `grader/`: the commit-reveal code grader (`findingsFromResponse` reads a TEE response the same way the contract does).
 - `packs/`: exam bug packs 1-3 (Python, written from scratch, MIT), 5 planted bugs each, see "Exam packs" below.
 - `seller/review-prompt.js`: the exact TEE review request (comments stripped, line numbers kept, rules from the UI contract section 7).
@@ -280,7 +281,18 @@ node scripts/testnet-view.mjs call earned-price.testnet name '{}'
 
 # Build + every check, signs and sends nothing (Node + Rust + cargo-near)
 scripts/deploy.sh --dry-run
+
+# Offline receipt check, no key, no network: 4 checks in order, then a tampered copy
+node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json           # see: SEE: step 5 PASS
+node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json --tamper  # see: FAIL: check 2 TEE signature covers this review
 ```
+
+The checks: 1 commit hash matches the revealed key, 2 TEE signature covers this
+review, 3 attestation binds the signer and nonce (binding only, see "Known limits"),
+4 regrade gives the same score. `test/fixtures/receipt-t003-sample-0.json` wraps a
+real recorded NEAR AI Cloud review from the T-003 spike (real signature and
+attestation, no on-chain job, so its chain fields say `fixture.not-on-chain`); its
+prompt asked for no category, so the grade is the fixed fail `malformed_finding`.
 
 The `code_hash` printed by `testnet-view.mjs account` is base58(sha256(wasm)).
 `scripts/deploy.sh --dry-run` prints the same `code_hash` for the wasm it builds,
