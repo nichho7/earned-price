@@ -1,13 +1,24 @@
 // [CTO] T-033 · the page model for the static final state: one stage, one timeline, two runs (build
 // spec 3). Each run is fold(all its events); the stage shows the last run, the register lists all.
 import type { LabFixture } from "../stage/schema.ts";
+import { findPlaceholders } from "../stage/schema.ts";
 import { fold, isPlaceholderFixture, outcomeOf, type Outcome, type StageState } from "../stage/reducer.ts";
 
 export interface RunView { n: number; fixture: LabFixture; state: StageState; outcome: Outcome }
 export interface PageModel { runs: RunView[]; last: RunView; placeholder: boolean; eventCount: number }
 
-export function finalModel(fixtures: readonly LabFixture[]): PageModel {
+/** Vercel sets VERCEL=1 in its builds; EARNED_SHIP=1 marks any other build meant to ship. */
+export const isShipBuild = (env: Record<string, string | undefined>): boolean => env.VERCEL === "1" || env.EARNED_SHIP === "1";
+
+/**
+ * Builds the page model. In a ship build it refuses placeholder data, so the static prerender fails
+ * inside `next build` itself even if the npm build script (and its data gate) is bypassed (code review M-1).
+ */
+export function finalModel(fixtures: readonly LabFixture[], env: Record<string, string | undefined> = process.env): PageModel {
   if (fixtures.length === 0) throw new Error("finalModel: no runs");
+  const placeholder = fixtures.some((f) => isPlaceholderFixture(f) || findPlaceholders(f).length > 0);
+  if (placeholder && isShipBuild(env))
+    throw new Error("finalModel: placeholder run data in a ship build (VERCEL=1 or EARNED_SHIP=1). Record a real testnet run first.");
   const runs = fixtures.map((fixture, i) => {
     const state = fold(fixture);
     return { n: i + 1, fixture, state, outcome: outcomeOf(state) };
@@ -15,7 +26,7 @@ export function finalModel(fixtures: readonly LabFixture[]): PageModel {
   return {
     runs,
     last: runs[runs.length - 1],
-    placeholder: fixtures.some(isPlaceholderFixture),
+    placeholder,
     eventCount: fixtures.reduce((n, f) => n + f.events.length, 0),
   };
 }
