@@ -37,7 +37,7 @@ if (cmd === "names") {
   try {
     const opts = parsePickArgs(args.slice(1)); // usage errors before any network or file access
     const deps = await defaultPickDeps();
-    await runPick({ ...deps, ...opts, seller: opts.seller ?? deps.seller });
+    await runPick({ ...deps, ...opts, seller: opts.seller ?? deps.seller, yes: opts.yes });
   } catch (err) {
     // Errors never carry the private key (pick redacts it from every message).
     console.error(`error ${err.code ?? "UNEXPECTED"}: ${err.code ? err.message : "pick failed; check `earned pick` usage and retry"}`);
@@ -47,7 +47,7 @@ if (cmd === "names") {
   console.log(`${BRAND} (${CLI_BIN})  contract ${CONTRACT_ACCOUNT} on ${NETWORK}`);
   console.log(`usage: ${CLI_BIN} init     create or reuse a throwaway testnet buyer (0.2 NEAR cap)`);
   console.log(`       ${CLI_BIN} quote <seller.testnet> [--offer 0.02]   seller's quote from its on-chain record`);
-  console.log(`       ${CLI_BIN} pick <1|2|3> [--offer 0.02]   seal the pack's key, haggle, lock the price in escrow`);
+  console.log(`       ${CLI_BIN} pick <1|2|3> [--offer 0.02] [--seller s.testnet --yes]   seal the pack's key, haggle, lock the price in escrow`);
   console.log(`       ${CLI_BIN} names    print the naming set`);
   if (cmd && cmd !== "help" && cmd !== "--help") process.exitCode = 1;
 }

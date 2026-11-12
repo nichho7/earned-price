@@ -3,23 +3,32 @@
 // recorded-shape FinalExecutionOutcome bodies.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
   CREATE_GAS,
   DEMO_SELLER,
+  LOCK_FILE_NAME,
+  REUSABLE_STATUSES,
   OPENING_OFFER_MILLI,
   assertKeyMatchesPack,
   haggle,
   jobFilePath,
   loadJob,
   parseCreateOutcome,
+  defaultPickDeps,
+  isRejectedBeforeInclusion,
   parsePickArgs,
   runPick,
+  saveJob,
   sealPick,
+  sendCreateTx,
+  signedTxHash,
 } from "../cli/pick.js";
+import * as near from "near-api-js";
+import * as rpcErrors from "near-api-js/rpc-errors";
 import { keyFilePath, loadState, saveState } from "../cli/init.js";
 import { YOCTO_PER_MNEAR } from "../cli/quote.js";
 import { loadPack } from "../packs/packs.js";
@@ -67,7 +76,7 @@ function buyerHome(spent = "0") {
   return dir;
 }
 
-function fakes({ record = { passes: 0, fails: 0, unique_buyers: 0, jobs: 0 }, quoteYocto, pins = PINS, outcome = okOutcome(), sendThrows, dir = buyerHome() } = {}) {
+function fakes({ record = { passes: 0, fails: 0, unique_buyers: 0, jobs: 0 }, quoteYocto, pins = PINS, outcome = okOutcome(), sendThrows, onSend, dir = buyerHome() } = {}) {
   const calls = { views: [], sends: [] };
   const lines = [];
   const q = quoteYocto ?? (BigInt(Math.min(100, Math.max(25, 30 + 10 * record.unique_buyers - 5 * record.fails))) * YOCTO_PER_MNEAR).toString();
@@ -91,6 +100,7 @@ function fakes({ record = { passes: 0, fails: 0, unique_buyers: 0, jobs: 0 }, qu
     },
     sendCreate: async (req) => {
       calls.sends.push(req);
+      if (onSend) await onSend(req);
       if (sendThrows) throw sendThrows;
       return outcome;
     },
@@ -101,8 +111,10 @@ function fakes({ record = { passes: 0, fails: 0, unique_buyers: 0, jobs: 0 }, qu
 // ---- args ----
 
 test("parsePickArgs: pack 1-3, optional --offer and --seller; anything else is USAGE", () => {
-  assert.deepEqual(parsePickArgs(["2"]), { pack: "2", offer: undefined, seller: undefined });
-  assert.deepEqual(parsePickArgs(["3", "--offer", "0.027", "--seller", "s.testnet"]), { pack: "3", offer: "0.027", seller: "s.testnet" });
+  assert.deepEqual(parsePickArgs(["2"]), { pack: "2", offer: undefined, seller: undefined, yes: false });
+  assert.deepEqual(parsePickArgs(["3", "--offer", "0.027", "--seller", "s.testnet"]), { pack: "3", offer: "0.027", seller: "s.testnet", yes: false });
+  assert.deepEqual(parsePickArgs(["1", "--seller", "s.testnet", "--yes"]), { pack: "1", offer: undefined, seller: "s.testnet", yes: true });
+  assert.throws(() => parsePickArgs(["1", "--yes", "--yes"]), { code: "USAGE" });
   for (const bad of [[], ["0"], ["4"], ["02"], ["pack-2"], ["2", "3"], ["2", "--bogus"], ["--offer", "0.02"]]) {
     assert.throws(() => parsePickArgs(bad), { code: "USAGE" }, JSON.stringify(bad));
   }
@@ -358,4 +370,256 @@ test("earned pick: usage error and NO_BUYER exit 1 without touching the network"
   assert.match(nobuyer.stderr, /error NO_BUYER: .*earned init/);
   const help = spawnSync(process.execPath, [join(ROOT, "cli/earned.js")], { env, encoding: "utf8" });
   assert.match(help.stdout, /earned pick <1\|2\|3>/);
+});
+
+// ---- review fixes (code review M-1/M-2/S-1/S-2/S-3, security M-1/L-1/L-2) ----
+
+test("M-1: a send that never reached the chain (notSent) releases the spend, marks the job failed, and the next pick runs", async () => {
+  const f = fakes({ sendThrows: Object.assign(new Error("Failed to fetch access key from https://test.rpc.fastnear.com"), { notSent: true }) });
+  await assert.rejects(runPick({ ...f.deps, pack: "2" }), (e) => e.code === "CREATE_NOT_SENT" && /No funds moved/.test(e.message) && /released/.test(e.message));
+  assert.equal(loadState(f.dir).spent_yocto, "0");
+  assert.equal(loadJob(f.dir).status, "failed");
+
+  const g = fakes({ dir: f.dir });
+  await runPick({ ...g.deps, pack: "2" });
+  assert.equal(loadJob(f.dir).status, "open");
+  assert.equal(loadState(f.dir).spent_yocto, (30n * YOCTO_PER_MNEAR).toString(), "only the live job is counted");
+});
+
+test("M-2: any status other than failed/closed blocks a new pick and leaves K + salt untouched", async () => {
+  assert.deepEqual([...REUSABLE_STATUSES].sort(), ["closed", "failed"]);
+  for (const status of ["open", "sending", "unconfirmed", "accepted", "reviewed", "revealing", "reveal_failed", "settled", "Closed", "typo"]) {
+    const dir = buyerHome();
+    saveJob(dir, { version: 1, status, pack_id: "pack-1", job_id: "4", K: "{\"pack_id\":\"pack-1\"}", salt: "cd".repeat(32) });
+    const before = readFileSync(jobFilePath(dir), "utf8");
+    const f = fakes({ dir });
+    await assert.rejects(runPick({ ...f.deps, pack: "2" }), { code: "JOB_IN_PROGRESS" }, status);
+    assert.equal(readFileSync(jobFilePath(dir), "utf8"), before, status);
+    assert.equal(f.calls.sends.length, 0, status);
+  }
+});
+
+test("M-2: a failed or closed job is archived to .earned/jobs/, never overwritten", async () => {
+  for (const status of ["failed", "closed"]) {
+    const dir = buyerHome();
+    const old = { version: 1, status, pack_id: "pack-1", job_id: status === "closed" ? "4" : null, K: "{\"pack_id\":\"pack-1\"}", salt: "cd".repeat(32) };
+    saveJob(dir, old);
+    const before = readFileSync(jobFilePath(dir), "utf8");
+    const f = fakes({ dir });
+    await runPick({ ...f.deps, pack: "2" });
+    assert.equal(loadJob(dir).status, "open");
+    assert.equal(loadJob(dir).salt, SALT);
+    const archived = readdirSync(join(dir, "jobs"));
+    assert.equal(archived.length, 1, status);
+    assert.match(archived[0], status === "closed" ? /pack-1-4-/ : /pack-1-unsent-/);
+    assert.equal(readFileSync(join(dir, "jobs", archived[0]), "utf8"), before, "old K + salt kept byte-for-byte");
+    assert.equal(statSync(join(dir, "jobs")).mode & 0o777, 0o700);
+    assert.match(f.lines.join("\n"), new RegExp(`previous ${status} job file archived`));
+  }
+});
+
+test("S-1: K + salt are on disk (status sending) and the spend is reserved before create is sent; tx hash saved before broadcast", async () => {
+  let atSend;
+  const f = fakes({
+    onSend: async (req) => {
+      atSend = { job: loadJob(f.dir), spent: loadState(f.dir).spent_yocto };
+      req.onSigned("SignedTxHashBeforeBroadcast");
+      atSend.afterSign = loadJob(f.dir);
+    },
+    sendThrows: new Error("socket hang up"),
+  });
+  await assert.rejects(runPick({ ...f.deps, pack: "2" }), (e) => e.code === "CREATE_UNCONFIRMED" && /SignedTxHashBeforeBroadcast/.test(e.message));
+  assert.equal(atSend.job.status, "sending");
+  assert.equal(atSend.job.salt, SALT);
+  assert.equal(atSend.job.K, sealPick(loadPack("2"), "2", SALT).K);
+  assert.equal(atSend.spent, (30n * YOCTO_PER_MNEAR).toString());
+  assert.equal(atSend.afterSign.create_tx, "SignedTxHashBeforeBroadcast");
+  const job = loadJob(f.dir);
+  assert.equal(job.status, "unconfirmed");
+  assert.equal(job.create_tx, "SignedTxHashBeforeBroadcast");
+});
+
+function unconfirmedHome() {
+  const dir = buyerHome((30n * YOCTO_PER_MNEAR).toString());
+  saveJob(dir, {
+    version: 1, status: "unconfirmed", contract: CONTRACT, buyer: BUYER, pack_id: "pack-1", job_id: null,
+    K: "{\"pack_id\":\"pack-1\"}", salt: "cd".repeat(32), price_yocto: (30n * YOCTO_PER_MNEAR).toString(), create_tx: "LostTxHash333",
+  });
+  return dir;
+}
+
+test("S-2: an unconfirmed create that landed is found by tx hash -> job open, new pick refused", async () => {
+  const dir = unconfirmedHome();
+  const f = fakes({ dir });
+  const looked = [];
+  const lookupCreate = async (q) => (looked.push(q), okOutcome("9", "LostTxHash333"));
+  await assert.rejects(runPick({ ...f.deps, pack: "2", lookupCreate }), (e) => e.code === "JOB_IN_PROGRESS" && /job 9/.test(e.message));
+  assert.deepEqual(looked, [{ txHash: "LostTxHash333", accountId: BUYER }]);
+  assert.equal(loadJob(dir).status, "open");
+  assert.equal(loadJob(dir).job_id, "9");
+  assert.equal(loadJob(dir).salt, "cd".repeat(32));
+  assert.equal(loadState(dir).spent_yocto, (30n * YOCTO_PER_MNEAR).toString());
+  assert.equal(f.calls.sends.length, 0);
+});
+
+test("S-2: an unconfirmed create that was refused -> failed, reservation released, the new pick runs", async () => {
+  const dir = unconfirmedHome();
+  const f = fakes({ dir });
+  await runPick({ ...f.deps, pack: "2", lookupCreate: async () => panicOutcome("Earned Price: bad deposit. No funds moved.", "LostTxHash333") });
+  assert.equal(loadJob(dir).status, "open");
+  assert.equal(loadState(dir).spent_yocto, (30n * YOCTO_PER_MNEAR).toString(), "old 0.030 released, new 0.030 reserved");
+  assert.match(f.lines.join("\n"), /LostTxHash333 was refused/);
+  assert.equal(readdirSync(join(dir, "jobs")).length, 1);
+});
+
+test("S-2: still unknown (lookup null or throws) -> refused with the explorer link and the exact mv command", async () => {
+  for (const lookupCreate of [async () => null, async () => { throw new Error("UNKNOWN_TRANSACTION"); }, undefined]) {
+    const dir = unconfirmedHome();
+    const f = fakes({ dir });
+    await assert.rejects(
+      runPick({ ...f.deps, pack: "2", lookupCreate }),
+      (e) => e.code === "JOB_IN_PROGRESS" && e.message.includes("https://testnet.nearblocks.io/txns/LostTxHash333") && e.message.includes(`mv ${jobFilePath(dir)} ${join(dir, "jobs", "unsent.json")}`),
+    );
+    assert.equal(loadJob(dir).status, "unconfirmed");
+    assert.equal(loadState(dir).spent_yocto, (30n * YOCTO_PER_MNEAR).toString());
+  }
+});
+
+test("L-1 lock: a second concurrent pick is refused before any network call; the lock is released after a run", async () => {
+  const f = fakes();
+  writeFileSync(join(f.dir, LOCK_FILE_NAME), "");
+  await assert.rejects(runPick({ ...f.deps, pack: "2" }), (e) => e.code === "PICK_LOCKED" && /delete that file/.test(e.message));
+  assert.equal(f.calls.views.length, 0);
+  assert.equal(existsSync(jobFilePath(f.dir)), false);
+
+  const g = fakes();
+  await runPick({ ...g.deps, pack: "2" });
+  assert.equal(existsSync(join(g.dir, LOCK_FILE_NAME)), false);
+  const h = fakes({ dir: g.dir });
+  await assert.rejects(runPick({ ...h.deps, pack: "1" }), { code: "JOB_IN_PROGRESS" });
+  assert.equal(existsSync(join(g.dir, LOCK_FILE_NAME)), false, "released on error too");
+});
+
+test("L-2: the seller and its source are shown; a non-demo seller needs --yes", async () => {
+  const f = fakes();
+  await runPick({ ...f.deps, pack: "2" });
+  assert.match(f.lines.join("\n"), new RegExp(`Seller: ${DEMO_SELLER.replace(/\./g, "\\.")} \\(demo default\\)`));
+
+  const g = fakes();
+  await assert.rejects(runPick({ ...g.deps, pack: "2", seller: "other.testnet" }), (e) => e.code === "SELLER_NOT_CONFIRMED" && /--yes/.test(e.message));
+  assert.equal(g.calls.views.length, 0);
+  await runPick({ ...g.deps, pack: "2", seller: "other.testnet", yes: true });
+  assert.match(g.lines.join("\n"), /Seller: other\.testnet \(from --seller, not the demo seller; confirmed with --yes\)/);
+  assert.equal(g.calls.sends[0].args.seller, "other.testnet");
+});
+
+test("S-3: defaultPickDeps: demo seller by default, EARNED_SELLER ignored, a mainnet EARNED_RPC_URL refused", async () => {
+  const d = await defaultPickDeps({});
+  assert.equal(d.seller, DEMO_SELLER);
+  assert.equal(typeof d.sendCreate, "function");
+  assert.equal(typeof d.lookupCreate, "function");
+  assert.equal((await defaultPickDeps({ EARNED_SELLER: "attacker.testnet" })).seller, DEMO_SELLER);
+  await assert.rejects(defaultPickDeps({ EARNED_RPC_URL: "https://rpc.mainnet.near.org" }));
+});
+
+// ---- sendCreateTx: real near-api-js 7.4.0 types, fake accounts (no network) ----
+
+const KP = near.KeyPair.fromRandom("ed25519");
+const SIGNER = new near.KeyPairSigner(KP);
+async function signTx(nonce = 5n) {
+  const tx = near.createTransaction(BUYER, KP.getPublicKey(), CONTRACT, nonce, [near.actions.functionCall("create", { a: 1 }, CREATE_GAS, 1n)], new Uint8Array(32));
+  return SIGNER.signTransaction(tx);
+}
+
+function fakeAccounts(script) {
+  const log = { made: [], broadcasts: [] };
+  let i = 0;
+  const makeAccount = (url) => {
+    const step = script[i++] ?? {};
+    log.made.push(url);
+    return {
+      createSignedTransaction: async () => {
+        if (step.signThrows) throw step.signThrows;
+        return (await signTx(step.nonce)).signedTransaction;
+      },
+      provider: {
+        sendTransactionUntil: async (signed, waitUntil) => {
+          log.broadcasts.push({ url, waitUntil, nonce: signed.transaction.nonce });
+          if (step.sendThrows) throw step.sendThrows;
+          return okOutcome("1", "H");
+        },
+      },
+    };
+  };
+  return { makeAccount, log };
+}
+
+const sendReq = (makeAccount, onSigned) => ({
+  urls: ["https://a.test", "https://b.test"], makeAccount, near, rpcErrors, onSigned,
+  state: { account_id: BUYER }, contractId: CONTRACT, methodName: "create", args: { a: 1 }, depositYocto: 1n, gas: CREATE_GAS,
+});
+
+test("signedTxHash is the signer's own sha256 tx hash in base58", async () => {
+  const { txHash, signedTransaction } = await signTx();
+  assert.equal(signedTxHash(signedTransaction, near), near.baseEncode(txHash));
+});
+
+test("sendCreateTx: signs on the first RPC that answers, reports the hash, then broadcasts on that RPC", async () => {
+  const { makeAccount, log } = fakeAccounts([{ signThrows: new Error("fetch failed") }, {}]);
+  const hashes = [];
+  const out = await sendCreateTx(sendReq(makeAccount, (h) => hashes.push(h)));
+  assert.equal(out.status.SuccessValue, b64('"1"'));
+  assert.deepEqual(log.made, ["https://a.test", "https://b.test"]);
+  assert.deepEqual(log.broadcasts.map((b) => [b.url, b.waitUntil]), [["https://b.test", "EXECUTED_OPTIMISTIC"]]);
+  assert.equal(hashes.length, 1);
+  assert.equal(hashes[0], signedTxHash((await signTx()).signedTransaction, near));
+});
+
+test("sendCreateTx: signing fails everywhere -> notSent, nothing broadcast, no hash reported", async () => {
+  const { makeAccount, log } = fakeAccounts([{ signThrows: new Error("fetch failed") }, { signThrows: new Error("fetch failed") }]);
+  let signed = 0;
+  await assert.rejects(sendCreateTx(sendReq(makeAccount, () => signed++)), (e) => e.notSent === true);
+  assert.equal(log.broadcasts.length, 0);
+  assert.equal(signed, 0);
+});
+
+test("sendCreateTx: RPC rejects the tx before inclusion (InvalidTx) -> notSent", async () => {
+  for (const err of [new rpcErrors.NotEnoughBalanceError(1n, 2n, BUYER, "", ""), new rpcErrors.TransactionExpiredError("", ""), new rpcErrors.InvalidTransactionError()]) {
+    const { makeAccount } = fakeAccounts([{ sendThrows: err }]);
+    await assert.rejects(sendCreateTx(sendReq(makeAccount)), (e) => e.notSent === true, err.constructor.name);
+  }
+});
+
+test("sendCreateTx: InvalidNonce once -> re-signed with a fresh account and sent; twice -> notSent", async () => {
+  const nonceErr = () => new rpcErrors.InvalidNonceError(9n, 5n, "", "");
+  const a = fakeAccounts([{ sendThrows: nonceErr() }, { nonce: 10n }]);
+  const hashes = [];
+  await sendCreateTx(sendReq(a.makeAccount, (h) => hashes.push(h)));
+  assert.equal(a.log.broadcasts.length, 2);
+  assert.equal(a.log.broadcasts[1].nonce, 10n);
+  assert.equal(hashes.length, 2, "the re-signed tx hash replaces the first");
+  assert.notEqual(hashes[0], hashes[1]);
+
+  const b = fakeAccounts([{ sendThrows: nonceErr() }, { sendThrows: nonceErr() }]);
+  await assert.rejects(sendCreateTx(sendReq(b.makeAccount)), (e) => e.notSent === true);
+});
+
+test("sendCreateTx: timeout or a dropped connection after broadcast is an unknown outcome (not notSent)", async () => {
+  for (const err of [new rpcErrors.TransactionTimeoutError(), new Error("socket hang up"), new rpcErrors.ActionExecutionError("x", 0, "", "")]) {
+    const { makeAccount } = fakeAccounts([{ sendThrows: err }]);
+    await assert.rejects(sendCreateTx(sendReq(makeAccount)), (e) => e === err && !e.notSent, err.constructor.name);
+  }
+  assert.equal(isRejectedBeforeInclusion(new Error("x"), rpcErrors), false);
+});
+
+test("earned pick CLI: --seller needs --yes; EARNED_SELLER does not change the seller (no network)", () => {
+  const home = mkdtempSync(join(tmpdir(), "earned-pick-cli-seller-"));
+  const env = { ...process.env, EARNED_HOME: home, EARNED_RPC_URL: "https://127.0.0.1.invalid" };
+  const run = (args, extra = {}) => spawnSync(process.execPath, [join(ROOT, "cli/earned.js"), "pick", ...args], { env: { ...env, ...extra }, encoding: "utf8" });
+  const noYes = run(["2", "--seller", "other.testnet"]);
+  assert.equal(noYes.status, 1);
+  assert.match(noYes.stderr, /error SELLER_NOT_CONFIRMED: .*--yes/);
+  assert.match(run(["2", "--seller", "other.testnet", "--yes"]).stderr, /error NO_BUYER/);
+  // If EARNED_SELLER were honoured, this would be SELLER_NOT_CONFIRMED.
+  assert.match(run(["2"], { EARNED_SELLER: "other.testnet" }).stderr, /error NO_BUYER/);
 });
