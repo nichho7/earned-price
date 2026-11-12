@@ -1,4 +1,5 @@
 // T-029: `earned verify receipt.json [--tamper] [--json]` and the receipt file helpers.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -9,7 +10,7 @@ import { join } from "node:path";
 import { MAX_RECEIPT_BYTES, readReceipt, writeReceipt } from "../cli/receipt-file.js";
 import { parseVerifyArgs, runVerify } from "../cli/verify-cmd.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const FIXTURE = join(ROOT, "test/fixtures/receipt-t003-sample-0.json");
 const CLI = join(ROOT, "cli/earned.js");
 

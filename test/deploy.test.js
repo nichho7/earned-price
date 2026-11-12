@@ -1,6 +1,7 @@
 // scripts/deploy.sh (T-021, S-001 AC3): testnet-only guard, dry run, account
 // checks and smoke calls, run against stub `cargo` / `near` binaries and a fake
 // local RPC. No network, no keys, nothing signed.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -10,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { wasmInfo, base58 } from "../scripts/wasm-info.mjs";
 
-const repo = new URL("..", import.meta.url).pathname;
+const repo = fileURLToPath(new URL("..", import.meta.url));
 const vector = JSON.parse(readFileSync(join(repo, "test-vectors/commit.json"), "utf8"));
 const PINS = JSON.parse(readFileSync(join(repo, "test-vectors/review-pins.json"), "utf8"));
 const LIVE_PINS = { prompt_version: PINS.prompt_version, model: PINS.model, packs: PINS.packs };

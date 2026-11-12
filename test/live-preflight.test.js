@@ -1,5 +1,6 @@
 // scripts/live-preflight.mjs + scripts/live-run.sh (T-032). No network: a fake fetch answers the
 // recorded-shape JSON-RPC bodies of view_account / view_access_key; nothing is signed or sent.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -9,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { KeyPair } from "near-api-js";
 import { EXPECTED_CODE_HASH, printChecks, runPreflight } from "../scripts/live-preflight.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SELLER = "seller.earned-price.testnet";
 const CONTRACT = "earned-price.testnet";
 const kp = KeyPair.fromRandom("ed25519");

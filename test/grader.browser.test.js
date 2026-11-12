@@ -2,6 +2,7 @@
 // Serves the repo on 127.0.0.1, opens test/browser/grader.html in headless Chrome and reads the DOM.
 // Skips when no Chrome is installed (set CHROME_PATH to point at one). With REQUIRE_BROWSER=1 or
 // CI=true a missing Chrome FAILS the test instead, so a clean-machine run can't hide a skip.
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -12,7 +13,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { canonicalJson, commit, grade, sha256Hex } from "../grader/grade.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const ALLOWED = ["/grader/", "/node_modules/@noble/hashes/", "/test/browser/", "/test/fixtures/", "/test-vectors/"];
 const TYPES = { ".js": "text/javascript", ".json": "application/json", ".html": "text/html" };
 const CHROME = [
@@ -51,6 +52,12 @@ function nodeReport() {
   return { commitment: commit(key, salt), vector_commit: commit(vector.key, vector.salt_hex), results, digest: sha256Hex(results.join("\n")) };
 }
 
+// T-025 review: a CHROME_PATH that points nowhere must fail, not silently fall back to another browser.
+test("CHROME_PATH, when set, points at an existing browser", { skip: !process.env.CHROME_PATH && "CHROME_PATH not set" }, () => {
+  assert.ok(existsSync(process.env.CHROME_PATH), `CHROME_PATH=${process.env.CHROME_PATH} does not exist`);
+  assert.equal(CHROME, process.env.CHROME_PATH);
+});
+
 test("a browser is available when REQUIRE_BROWSER=1 or CI=true", { skip: !REQUIRE_BROWSER && "browser not required" }, () => {
   assert.ok(CHROME, "no Chrome/Chromium found; install one or set CHROME_PATH");
 });
@@ -60,9 +67,11 @@ test("same grade.js runs in headless Chrome with byte-identical results", { skip
   const profile = mkdtempSync(join(tmpdir(), "grader-chrome-"));
   try {
     const url = `http://127.0.0.1:${server.address().port}/test/browser/grader.html`;
+    // --use-mock-keychain: under a fresh user (T-041 clean-clone run, empty HOME) macOS Chrome waits on
+    // the login keychain and the page never prints; this flag skips it (ignored on Linux).
     const { stdout } = await promisify(execFile)(
       CHROME,
-      ["--headless=new", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`, "--virtual-time-budget=10000", "--dump-dom", url],
+      ["--headless=new", "--disable-gpu", "--no-first-run", "--use-mock-keychain", `--user-data-dir=${profile}`, "--virtual-time-budget=10000", "--dump-dom", url],
       { timeout: 45_000, maxBuffer: 10 * 1024 * 1024 },
     );
     const text = stdout.match(/<pre id="out">([\s\S]*?)<\/pre>/)?.[1] ?? "";
