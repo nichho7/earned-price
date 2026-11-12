@@ -16,8 +16,9 @@ test("no-JS HTML (what crawlers get) holds the whole final state", async ({ requ
   expect(res.status()).toBe(200);
   const html = (await res.text()).replace(/<!-- -->/g, ""); // React text-node separators
   // R6 must-contain list (unchanged by the 2026-11-12 amendment)
-  for (const s of ["Holds.", "0.040", "counted once", "COUNTED ONCE", "NOT COUNTED", "Price earned, not claimed.", "npx earned-price init", "Event log · 36 events", "647 agents.", "547 jobs.", "as of 9 Nov 2026", "NEAR Real-World Money"])
+  for (const s of ["Holds.", "0.040", "counted once", "COUNTED ONCE", "NOT COUNTED", "Price earned, not claimed.", "node scripts/self-check.mjs", "Event log · 36 events", "647 agents.", "547 jobs.", "as of 9 Nov 2026", "NEAR Real-World Money"])
     expect(html, `missing "${s}"`).toContain(s);
+  expect(html, "T-085: the CTA is README Tier 1, not an unpublished npm command").not.toContain("npx earned-price init");
   expect(html).toContain('data-stage-state="holds"');
   expect(html).toContain('data-postmark="COUNTED"');
   // both settle tx on screen (run register), each a real testnet explorer link (the T-064 recorded run)
