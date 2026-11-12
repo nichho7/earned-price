@@ -2,7 +2,11 @@
 // Rules: R1 (animated props), R4 (no wallet/RPC on /), R6 (no-JS final state, CLS 0; reduced motion is
 // the crossfade story since the 2026-11-12 amendment, see earn.spec.ts), budgets B5 (fonts as actually
 // downloaded), S-011 / S-028 AC 4 copy checks. S-028: the stage is the ported T-070 module (site/earn/).
+import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
+
+// T-040 / S-018: PRD 6 approved copy, verbatim. Also asserted in the README below (same words).
+const EXAM_LINE = "Graded jobs (exams with sealed answers) build the record; real jobs pay the earned price; buyers can supply tests, not answers.";
 
 const FORBIDDEN_HOSTS = /rpc\.(testnet|mainnet)\.near\.org|helper\.nearprotocol\.com|fastnear|lava\.build|\/api\/review/;
 
@@ -16,8 +20,12 @@ test("no-JS HTML (what crawlers get) holds the whole final state", async ({ requ
   expect(res.status()).toBe(200);
   const html = (await res.text()).replace(/<!-- -->/g, ""); // React text-node separators
   // R6 must-contain list (unchanged by the 2026-11-12 amendment)
-  for (const s of ["Holds.", "0.040", "counted once", "COUNTED ONCE", "NOT COUNTED", "Price earned, not claimed.", "node scripts/self-check.mjs", "Event log · 36 events", "647 agents.", "547 jobs.", "as of 9 Nov 2026", "NEAR Real-World Money"])
+  for (const s of ["Holds.", "0.040", "counted once", "COUNTED ONCE", "NOT COUNTED", "Price earned, not claimed.", "node scripts/self-check.mjs", "Event log · 36 events", "647 agents.", "547 jobs.", "as of 9 Nov 2026", "NEAR Real-World Money", EXAM_LINE])
     expect(html, `missing "${s}"`).toContain(s);
+  // T-040 / S-018 AC 2: exactly one rendered line carries the exam-vs-real sentence (scripts dropped:
+  // the RSC payload repeats every server-rendered string)
+  const markup = html.replace(/<script\b[^>]*>[^]*?<\/script>/g, "");
+  expect(markup.split(EXAM_LINE).length - 1, "exam line count").toBe(1);
   expect(html, "T-085: the CTA is README Tier 1, not an unpublished npm command").not.toContain("npx earned-price init");
   expect(html).toContain('data-stage-state="holds"');
   expect(html).toContain('data-postmark="COUNTED"');
@@ -59,6 +67,27 @@ test("hero (Beat 1): source line is at least body size and names source + date",
   const px = await src.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
   expect(px).toBeGreaterThanOrEqual(16);
   await expect(page.locator("h1")).toHaveCount(1);
+});
+
+test("exam vs real (T-040 / S-018): one body-size line on the page, the same sentence in the README", async ({ browser }) => {
+  for (const width of [390, 1280]) {
+    const ctx = await browser.newContext({ javaScriptEnabled: false, viewport: { width, height: 900 } });
+    const page = await ctx.newPage();
+    await page.goto("/");
+    const line = page.locator("[data-exam-line]");
+    await expect(line).toHaveCount(1);
+    await expect(line).toHaveText(EXAM_LINE);
+    await line.scrollIntoViewIfNeeded();
+    await expect(line).toBeVisible();
+    const px = await line.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(px, `${width}px: exam line at least body size`).toBeGreaterThanOrEqual(16);
+    await noHorizontalScroll(page);
+    await ctx.close();
+  }
+  // README "Exam jobs vs real jobs" paragraph (soft-wrapped in the file, so compare collapsed whitespace)
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  expect(readme).toContain(`**Exam jobs vs real jobs.** ${EXAM_LINE}`);
+  expect(readme).toContain("Only graded exam jobs count toward the record");
 });
 
 test("copy guard: no bond / slash / portable reputation wording on the page", async ({ page }) => {
