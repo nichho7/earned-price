@@ -213,7 +213,7 @@ html.ep-js .ep:not([data-ep-mounted]){opacity:0;animation:ep-failsafe 1ms linear
 /* T-091 (S-016 AC5): the keyless label (Designer t085-qa-loop1 §4) and the /verify link. A plain <a>, never next/link,
    so /verify loads as a full document under its own CSP (security t039-2 I-3). Styled like /verify's back link. */
 .ep .cls .try{margin:0 0 var(--s2)}
-.ep .vfy{margin:var(--s3) 0 0;font:400 var(--fs-micro)/1.7 var(--mono);color:var(--cream-2)}
+.ep .vfy{margin:calc(var(--shadow-print-y) + var(--s2)) 0 0;font:400 var(--fs-micro)/1.7 var(--mono);color:var(--cream-2)}
 .ep .vfy .lnk{font-weight:500;letter-spacing:.06em;color:var(--cream)}
 .ep .vfy span{display:block;margin-top:var(--s1)}
 
