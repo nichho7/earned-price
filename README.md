@@ -145,19 +145,19 @@ protects nothing; four on-chain checks do:
 4. **The grade is on-chain.** `reveal` grades the signed response's findings with
    the on-chain grader; nobody can submit a verdict.
 
-What this does not stop (summed up in "Threat model and known limits" below): a seller paying for jobs from its own buyer accounts
-(the Sybil limit above); a buyer committing a valid but wrong key for the pack
-to force a fail and get a free review (security review MED-2, decision A-014);
-and, because a signed review names no job or seller, reuse on open jobs: a
-signed review can land on any job for the same pack, by any seller, that is
-waiting for its review when the review is made (accepted up to about 7 minutes
-before it, or up to 2 minutes after), once only (the replay guard burns each
-signed response on first use). A seller can also call the TEE more than once
-after accepting and submit the best response (low uplift: calibration passed
-10/10 at temperature 0). Each pin is the request a calibration
-round actually measured (`packs/results/`): pack-1 rounds 1 and 3, pack-2 round
-1, pack-3 round 4. Pack-3 rounds 1 and 2 used older requests that predate the
-final pack-3 (`npm test` checks this list).
+What this does not stop (summed up in "Threat model and known limits" below): a
+seller paying for jobs from its own buyer accounts (the Sybil limit above); a
+buyer committing a valid but wrong key for the pack to force a fail and get a
+free review (security review MED-2, decision A-014); and, because a signed
+review names no job or seller, reuse on open jobs: a signed review can land on
+any job for the same pack, by any seller, that is waiting for its review when
+the review is made (accepted up to about 7 minutes before it, or up to 2 minutes
+after), once only (the replay guard burns each signed response on first use). A
+seller can also call the TEE more than once after accepting and submit the best
+response (low uplift: calibration passed 10/10 at temperature 0). Each pin is
+the request a calibration round actually measured (`packs/results/`): pack-1
+rounds 1 and 3, pack-2 round 1, pack-3 round 4. Pack-3 rounds 1 and 2 used older
+requests that predate the final pack-3 (`npm test` checks this list).
 
 ### Trust and owner powers
 
@@ -187,36 +187,41 @@ to ship with, in plain words, each with what it costs and what would fix it.
 
 - **A buyer can force a fail and get a free signed review** (security review
   MED-2 / X-1, decision A-014). `reveal` accepts any valid answer key for the
-  job's pack, not only the official one. A buyer can commit a well-formed key
-  with the wrong bug lines: the honest review then grades as a fail, the buyer
-  is refunded and keeps the signed review, and the seller takes a fail (its
-  quote drops 5 milliNEAR, down to the 25 floor). The bogus key is public in the
-  reveal transaction, and `earned verify` check 1 fails any receipt whose key is
-  not the official key (`verify/trust-anchors.js` holds its hash).
-  *Roadmap:* pin each pack's official key hash in the contract, so `reveal`
-  refuses any other key.
+  job's pack, not only the official one (a seller's own fake buyer can use the
+  same gap to force a pass; see the Sybil limit above). A buyer can commit a
+  well-formed key with the wrong bug lines: the honest review then grades as a
+  fail, the buyer is refunded and keeps the signed review, and the seller takes
+  a fail (its quote drops by up to 5 milliNEAR, never below the 25 floor). The
+  bogus key is public in the reveal transaction, and `earned verify` check 1
+  fails any receipt whose key is not the official key (`verify/trust-anchors.js`
+  holds its hash). *Roadmap:* pin each pack's official key hash in the contract,
+  so `reveal` refuses any other key.
 - **A signed review can land once on another job, and a seller can re-roll**
-  (T-048 residual, security L-3). A signed review names no job or seller, so it
-  can land once on any same-pack job, by any seller, that is waiting for its
-  review when the review is made (accepted up to about 7 minutes before it, or up
-  to 2 minutes after); the replay guard refuses it after that. A seller can also
-  call the TEE more than once after accepting and submit the best response (low
-  uplift: calibration passed 10/10 at temperature 0). *Roadmap:* bind the job id
-  (and seller) into the signed review request and check it on-chain; that closes
-  reuse across jobs, though repeat calls on one job would still be possible.
+  (T-048 residual, T-048 security re-check L-3). A signed review names no job or
+  seller, so it can land once on any same-pack job, by any seller, that is
+  waiting for its review when the review is made (accepted up to about 7 minutes
+  before it, or up to 2 minutes after); the replay guard refuses it after that.
+  A seller can also call the TEE more than once after accepting and submit the
+  best response (low uplift: calibration passed 10/10 at temperature 0).
+  *Roadmap:* bind the job id (and seller) into the signed review request and
+  check it on-chain; that closes reuse across jobs, though repeat calls on one
+  job would still be possible.
 - **Attestation is checked for binding only.** `earned verify` check 3 confirms
   the TDX quotes carry the signer and nonce. It does not verify the Intel DCAP
   quote signature, the NVIDIA GPU evidence (NRAS) or the image measurements, so
   it can't tell a genuine NEAR AI enclave from edited quote bytes; the contract
   trusts an owner-managed signer allowlist instead (see "Trust and owner
   powers"). Until those checks land, check the quote with NEAR AI's verifier
-  or TEE Explorer. *Roadmap:* full DCAP, NRAS and measurement checks after the hackathon.
+  or TEE Explorer. *Roadmap:* full DCAP, NRAS and measurement checks after the
+  hackathon.
 - **"Authentic" is not "passed".** `REVIEW AUTHENTIC (offline)` means a genuine
   signed review of the official request, graded against the official key; a
   review that failed is just as authentic. Check 4's PASS means our regrade
-  matches the receipt, not that the seller passed: read the regrade
-  (`n/5 found, passed` or `failed`, pass mark 4/5). Payment and every other
-  chain fact are not proven offline; check `txs.reveal` on the explorer.
+  matches the receipt, not that the seller passed: read the regrade. The verdict
+  ends `regrade PASS` or `regrade FAIL`, and check 4 shows `n/5 found, passed`
+  or `failed` (pass mark 4/5), or `fixed fail` for a malformed review. Payment
+  and every other chain fact are not proven offline; check `txs.reveal` on the
+  explorer.
 - **You trust the RPC you read from.** The CLI reads quotes, jobs and outcomes
   from one public testnet RPC at a time (`test.rpc.fastnear.com`, then
   `rpc.testnet.near.org`, or your `EARNED_RPC_URL`) and does not cross-check
