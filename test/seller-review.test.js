@@ -26,6 +26,13 @@ function eip191Sign(text, sk = SK) {
   const rec = secp256k1.sign(keccak_256(new Uint8Array([...prefix, ...msg])), sk, { format: "recovered", prehash: false });
   return "0x" + Buffer.from([...rec.slice(1), rec[0] + 27]).toString("hex");
 }
+// The same signature with s -> n - s and the recovery bit flipped: recovers the same signer.
+function highS(sigHex) {
+  const b = Buffer.from(sigHex.slice(2), "hex");
+  const n = secp256k1.Point.Fn.ORDER;
+  const s = n - BigInt("0x" + b.subarray(32, 64).toString("hex"));
+  return "0x" + b.subarray(0, 32).toString("hex") + s.toString(16).padStart(64, "0") + (b[64] === 27 ? 28 : 27).toString(16);
+}
 
 // Minimal TDX v4 quote: only the version and report_data (signer 20 bytes, 12 zero bytes, nonce).
 function fakeEntry(address, nonce, extra = {}) {
@@ -50,24 +57,32 @@ function chatBody(content, created, id = "chatcmpl-test-" + Math.random().toStri
 }
 
 /**
- * Mocked NEAR AI Cloud. chat: list of {status, body} served in order. signature: optional
- * function (requestBody, responseBody, id) -> {status, body}; default signs the served bytes.
+ * Mocked NEAR AI Cloud. chat: list of {status, body} or {throws: true} (network error) served in
+ * order. attestation: body; attStatus / attThrows for its failures. signature: optional function
+ * (requestBody, responseBody, id) -> response; default signs the bytes served under that id.
  */
-function mockTee({ attestation = fakeAttestation(), chat, signature, sigNotFound = 0 } = {}) {
+function mockTee({ attestation = fakeAttestation(), attStatus = 200, attThrows = false, chat, signature, sigNotFound = 0, onChat = () => {} } = {}) {
   const calls = [];
+  const served = new Map(); // completion id -> { request, response }
   let chatIdx = 0;
-  let lastRequest = null;
-  let lastResponse = null;
   let notFound = sigNotFound;
   const json = (status, obj) => ({ status, ok: status >= 200 && status < 300, text: async () => (typeof obj === "string" ? obj : JSON.stringify(obj)), json: async () => (typeof obj === "string" ? JSON.parse(obj) : obj) });
   const fetch = async (url, init = {}) => {
-    calls.push({ url: String(url), method: init.method ?? "GET", headers: { ...(init.headers ?? {}) }, body: init.body });
+    calls.push({ url: String(url), method: init.method ?? "GET", headers: { ...(init.headers ?? {}) }, body: init.body, redirect: init.redirect });
     const u = new URL(url);
-    if (u.pathname === "/v1/attestation/report") return json(200, attestation);
+    if (u.pathname === "/v1/attestation/report") {
+      if (attThrows) throw new TypeError("fetch failed");
+      return json(attStatus, attestation);
+    }
     if (u.pathname === "/v1/chat/completions") {
       const r = chat[Math.min(chatIdx++, chat.length - 1)];
-      lastRequest = init.body;
-      lastResponse = r.body;
+      onChat(r);
+      if (r.throws) throw new TypeError(`fetch failed (${init.headers?.Authorization})`);
+      let id = null;
+      try {
+        id = JSON.parse(r.body).id ?? null;
+      } catch {}
+      if ((r.status ?? 200) === 200 && id) served.set(id, { request: init.body, response: r.body });
       return json(r.status ?? 200, r.body);
     }
     if (u.pathname.startsWith("/v1/signature/")) {
@@ -76,8 +91,9 @@ function mockTee({ attestation = fakeAttestation(), chat, signature, sigNotFound
         return json(404, { detail: "not found" });
       }
       const id = decodeURIComponent(u.pathname.split("/").pop());
-      if (signature) return signature(lastRequest, lastResponse, id);
-      const text = `${REVIEW_MODEL}:${sha256Hex(lastRequest)}:${sha256Hex(lastResponse)}`;
+      const got = served.get(id);
+      if (signature) return signature(got?.request, got?.response, id);
+      const text = `${REVIEW_MODEL}:${sha256Hex(got.request)}:${sha256Hex(got.response)}`;
       return json(200, { text, signature: eip191Sign(text), signing_address: SIGNER, signing_algo: "ecdsa", signature_kind: "provider_tee" });
     }
     throw new Error(`unexpected URL ${url}`);
@@ -86,8 +102,10 @@ function mockTee({ attestation = fakeAttestation(), chat, signature, sigNotFound
 }
 
 const pack1 = () => loadPack("1");
+// The get_job view of a job created 90 s and accepted 30 s before the response's `created`.
 function acceptedJob(created, over = {}) {
-  return { id: "7", pack_id: "pack-1", status: "accepted", accepted_at_ns: String(BigInt(created - 30) * 1_000_000_000n), ...over };
+  const ns = (s) => String(BigInt(s) * 1_000_000_000n);
+  return { id: "7", pack_id: "pack-1", status: "accepted", accepted_at_ns: ns(created - 30), review_by_ns: ns(created - 90 + 7 * 60), review: null, ...over };
 }
 function baseOpts(tee, created, over = {}) {
   const logs = [];
@@ -144,7 +162,8 @@ test("recorded pack-1 review: findings parsed as {file, line, category}, receipt
   assert.equal(r.findings.length, 6);
   for (const f of r.check.list) assert.deepEqual(Object.keys(f), ["file", "line", "category"]);
   assert.equal(r.response_body, PACK1_RUN.response_body, "raw response bytes kept unchanged");
-  assert.deepEqual(Object.keys(r.tee).sort(), ["attestation", "model", "nonce", "request_sha256", "response_sha256", "signature", "signed_text", "signing_address"].sort());
+  assert.deepEqual(Object.keys(r.tee).sort(), ["attestation", "attestation_checks", "model", "nonce", "request_sha256", "response_sha256", "signature", "signed_text", "signing_address"].sort());
+  assert.deepEqual(r.tee.attestation_checks, { nonce_bound: true, signer_bound: true, signer_allowlisted: true, intel_dcap: false, nvidia_nras: false, measurements_pinned: false }, "receipt says exactly what was checked: binding only, no DCAP/NRAS/measurements");
   assert.equal(r.tee.model, REVIEW_MODEL);
   assert.equal(r.tee.response_sha256, sha256Hex(PACK1_RUN.response_body));
   assert.equal(r.tee.signed_text, `${REVIEW_MODEL}:${r.tee.request_sha256}:${r.tee.response_sha256}`);
@@ -214,7 +233,7 @@ test("more than 10 findings: too_many_findings, never truncated", async () => {
   assert.equal(r.attempts, 1);
 });
 
-test("parse failures map to malformed_finding: non-JSON body, non-array findings, bad field types", async () => {
+test("parse failures map to malformed_finding: non-array findings, bad field types, non-JSON content", async () => {
   const created = createdOf(PACK1_RUN.response_body);
   const cases = [
     chatBody('{"findings": "none"}', created),
@@ -281,14 +300,32 @@ test("freshness: a response created before accepted_at - 2 min or after now + 2 
   await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...opts }), (e) => e.code === "STALE_REVIEW", "no created");
 });
 
-test("401/402/403/429 -> TEE_UNAVAILABLE with status (RECORDED fallback), 5xx -> TEE_HTTP_ERROR; no signature call, no retry", async () => {
+test("chat status codes: 401/402/403/408/429/5xx -> TEE_UNAVAILABLE (fallback), other 4xx -> TEE_HTTP_ERROR; no signature call, no retry", async () => {
   const created = createdOf(PACK1_RUN.response_body);
-  for (const [status, code] of [[401, "TEE_UNAVAILABLE"], [402, "TEE_UNAVAILABLE"], [403, "TEE_UNAVAILABLE"], [429, "TEE_UNAVAILABLE"], [500, "TEE_HTTP_ERROR"], [503, "TEE_HTTP_ERROR"]]) {
+  const unavailable = [401, 402, 403, 408, 429, 500, 502, 503, 504].map((s) => [s, "TEE_UNAVAILABLE"]);
+  for (const [status, code] of [...unavailable, [400, "TEE_HTTP_ERROR"], [404, "TEE_HTTP_ERROR"], [422, "TEE_HTTP_ERROR"]]) {
     const tee = mockTee({ chat: [{ status, body: '{"error":"x"}' }] });
     const { opts } = baseOpts(tee, created);
-    await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...opts }), (e) => e instanceof ReviewError && e.code === code && e.status === status);
+    await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...opts }), (e) => e instanceof ReviewError && e.code === code && e.status === status, String(status));
     assert.equal(tee.calls.filter((c) => c.url.endsWith("/chat/completions")).length, 1, String(status));
     assert.equal(tee.calls.filter((c) => c.url.includes("/signature/")).length, 0);
+  }
+});
+
+test("attestation status codes map like chat: 429/5xx/network -> TEE_UNAVAILABLE, 400 -> TEE_HTTP_ERROR, not JSON -> ATTESTATION_INVALID; no paid call", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  for (const [over, code, status] of [
+    [{ attStatus: 503 }, "TEE_UNAVAILABLE", 503],
+    [{ attStatus: 500 }, "TEE_UNAVAILABLE", 500],
+    [{ attStatus: 429 }, "TEE_UNAVAILABLE", 429],
+    [{ attStatus: 400 }, "TEE_HTTP_ERROR", 400],
+    [{ attThrows: true }, "TEE_UNAVAILABLE", undefined],
+    [{ attestation: "<html>502</html>" }, "ATTESTATION_INVALID", undefined],
+  ]) {
+    const tee = mockTee({ ...over, chat: [{ body: PACK1_RUN.response_body }] });
+    const { opts } = baseOpts(tee, created);
+    await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...opts }), (e) => e instanceof ReviewError && e.code === code && e.status === status, code + status);
+    assert.equal(tee.calls.filter((c) => c.url.endsWith("/chat/completions")).length, 0);
   }
 });
 
@@ -432,7 +469,7 @@ test("real T-003 evidence end to end: real attestation + real provider_tee signa
     model: rec.model,
     apiKey: KEY,
     signers: ["0xfe0071895500a9755c18044948ab4f4e1a7f337e"],
-    notBeforeS: created - 60,
+    notBeforeNs: String(BigInt(created - 60) * 1_000_000_000n),
     fetch: tee.fetch,
     log: (l) => logs.push(l),
     nonce: () => rec.nonce,
@@ -455,4 +492,181 @@ test("real T-003 evidence end to end: real attestation + real provider_tee signa
 
 test("teeReview rejects a non-string request body (no SDK objects, no re-serialisation)", async () => {
   await assert.rejects(teeReview({ requestBody: { model: REVIEW_MODEL }, apiKey: KEY, signers: [SIGNER], fetch: async () => assert.fail("no call") }), (e) => e.code === "BAD_REQUEST_BODY");
+});
+
+// --- fixes from the T-027 code and security reviews ---
+
+test("code review M-1: malformed first, then the retry fails (429, 503, network, non-JSON, no id) -> attempt 1 returned as the signed fixed FAIL", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const bad = chatBody("Here are the bugs: line 4 is wrong.", created, "chatcmpl-first");
+  for (const second of [{ status: 429, body: '{"error":"rate"}' }, { status: 503, body: "busy" }, { throws: true }, { body: "<html>502</html>" }, { body: JSON.stringify({ choices: [] }) }]) {
+    const tee = mockTee({ chat: [{ body: bad }, second] });
+    const { opts, logs } = baseOpts(tee, created);
+    const r = await reviewJob({ job: acceptedJob(created), pack: pack1(), ...opts });
+    const label = JSON.stringify(second);
+    assert.equal(r.attempts, 2, label);
+    assert.deepEqual(r.check, { ok: false, error: ERROR_MALFORMED }, label);
+    assert.equal(r.response_body, bad, label);
+    assert.equal(r.submit_args.response, bad, label);
+    assert.equal(r.tee.response_sha256, sha256Hex(bad), label);
+    assert.ok(new URL(tee.calls.find((c) => c.url.includes("/signature/")).url).pathname.endsWith("/chatcmpl-first"), label);
+    const v = verifyCompletionSignature({ requestBody: r.request_body, responseBody: bad, model: REVIEW_MODEL, sig: { text: r.tee.signed_text, signature: r.tee.signature, signing_address: r.tee.signing_address }, expectedSigner: SIGNER });
+    assert.equal(v.ok, true, label);
+    assert.ok(logs.length > 0);
+  }
+});
+
+test("whole body not JSON on every attempt -> TEE_BAD_RESPONSE after one retry; non-JSON then good -> the good one", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const tee = mockTee({ chat: [{ body: "<html>502</html>" }, { body: "<html>502</html>" }] });
+  const { opts, logs } = baseOpts(tee, created);
+  await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...opts }), (e) => e.code === "TEE_BAD_RESPONSE");
+  assert.equal(tee.calls.filter((c) => c.url.endsWith("/chat/completions")).length, 2);
+  assert.equal(tee.calls.filter((c) => c.url.includes("/signature/")).length, 0);
+  assert.ok(logs.some((l) => l.includes("unreadable response body")));
+  const t2 = mockTee({ chat: [{ body: "<html>502</html>" }, { body: PACK1_RUN.response_body }] });
+  const r = await reviewJob({ job: acceptedJob(created), pack: pack1(), ...baseOpts(t2, created).opts });
+  assert.equal(r.check.ok, true);
+  assert.equal(r.attempts, 2);
+});
+
+test("a response over the escrow's 128 KiB cap is not submittable", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const huge = chatBody(JSON.stringify({ findings: [] }) + " ".repeat(130 * 1024), created);
+  const tee = mockTee({ chat: [{ body: huge }] });
+  const { opts } = baseOpts(tee, created, { maxAttempts: 1 });
+  await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...opts }), (e) => e.code === "TEE_BAD_RESPONSE");
+});
+
+test("maxAttempts must be an integer >= 1; a missing pack is PACK_MISMATCH, not a TypeError; both before any call", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  for (const maxAttempts of [0, -1, 1.5]) {
+    const tee = mockTee({ chat: [{ body: PACK1_RUN.response_body }] });
+    await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...baseOpts(tee, created, { maxAttempts }).opts }), (e) => e.code === "BAD_OPTIONS", String(maxAttempts));
+    assert.equal(tee.calls.length, 0);
+  }
+  const tee = mockTee({ chat: [{ body: PACK1_RUN.response_body }] });
+  await assert.rejects(reviewJob({ job: acceptedJob(created), pack: undefined, ...baseOpts(tee, created).opts }), (e) => e instanceof ReviewError && e.code === "PACK_MISMATCH");
+  assert.equal(tee.calls.length, 0);
+  await assert.rejects(teeReview({ requestBody: "{}", apiKey: KEY, signers: [SIGNER], fetch: async () => assert.fail("no call") }), (e) => e.code === "BAD_OPTIONS", "teeReview needs notBeforeNs");
+});
+
+test("signature endpoint 5xx or network error after the paid call -> SIGNATURE_UNAVAILABLE", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const t1 = mockTee({ chat: [{ body: PACK1_RUN.response_body }], signature: () => t1.json(503, "busy") });
+  await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...baseOpts(t1, created).opts }), (e) => e.code === "SIGNATURE_UNAVAILABLE" && e.status === 503);
+  const t2 = mockTee({ chat: [{ body: PACK1_RUN.response_body }], signature: () => { throw new TypeError("fetch failed"); } });
+  await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...baseOpts(t2, created).opts }), (e) => e.code === "SIGNATURE_UNAVAILABLE");
+});
+
+test("security L-1: freshness compares in nanoseconds, like the contract (accepted_at with a fractional second)", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const acceptedS = created + 120; // the response is exactly 120 s before accepted_at's whole second
+  const job = acceptedJob(created, { accepted_at_ns: String(BigInt(acceptedS) * 1_000_000_000n + 500_000_000n) });
+  const tee = mockTee({ chat: [{ body: PACK1_RUN.response_body }] });
+  const { opts } = baseOpts(tee, created, { now: () => (acceptedS + 4) * 1000 });
+  await assert.rejects(reviewJob({ job, pack: pack1(), ...opts }), (e) => e.code === "STALE_REVIEW", "created*1e9 + 120e9 < accepted_at_ns");
+  const exact = acceptedJob(created, { accepted_at_ns: String(BigInt(acceptedS) * 1_000_000_000n) });
+  const t2 = mockTee({ chat: [{ body: PACK1_RUN.response_body }] });
+  assert.equal((await reviewJob({ job: exact, pack: pack1(), ...baseOpts(t2, created, { now: () => (acceptedS + 4) * 1000 }).opts })).check.ok, true, "equal is fresh");
+});
+
+test("security L-2: every call refuses redirects", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const tee = mockTee({ chat: [{ body: PACK1_RUN.response_body }] });
+  await reviewJob({ job: acceptedJob(created), pack: pack1(), ...baseOpts(tee, created).opts });
+  assert.equal(tee.calls.length, 3);
+  for (const c of tee.calls) assert.equal(c.redirect, "error", c.url);
+});
+
+test("a high-s signature (valid but malleable, refused by the escrow) -> SIGNATURE_INVALID", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const tee = mockTee({
+    chat: [{ body: PACK1_RUN.response_body }],
+    signature: (req, resp) => {
+      const text = `${REVIEW_MODEL}:${sha256Hex(req)}:${sha256Hex(resp)}`;
+      return tee.json(200, { text, signature: highS(eip191Sign(text)), signing_address: SIGNER, signing_algo: "ecdsa" });
+    },
+  });
+  await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...baseOpts(tee, created).opts }), (e) => e.code === "SIGNATURE_INVALID");
+});
+
+// --- time budget (code review S-1) ---
+
+/** A fake clock: fetch advances it per call kind; timeoutSignal records each call's timeout. */
+function budgetRig(created, { chatMs = 0, sigMs = 0, ...teeOver } = {}) {
+  let t = (created + 4) * 1000;
+  const timeouts = [];
+  const tee = mockTee(teeOver);
+  const fetch = async (url, init) => {
+    timeouts.push([new URL(url).pathname.split("/")[2], init.signal.ms]);
+    const r = await tee.fetch(url, init);
+    // a slow call takes its time, but never longer than its timeout (it would abort there)
+    if (url.includes("/chat/")) t += Math.min(chatMs, init.signal.ms);
+    if (url.includes("/signature/")) t += Math.min(sigMs, init.signal.ms);
+    return r;
+  };
+  const { opts, logs } = baseOpts(tee, created, {
+    fetch,
+    now: () => t,
+    sleep: async (ms) => {
+      t += ms;
+    },
+    timeoutSignal: (ms) => ({ ms }),
+  });
+  return { tee, opts, logs, timeouts, start: t, now: () => t };
+}
+
+test("budget: every call's timeout is capped by the 240 s default budget, keeping 20 s for the signature", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const rig = budgetRig(created, { chat: [{ body: PACK1_RUN.response_body }] });
+  await reviewJob({ job: acceptedJob(created), pack: pack1(), ...rig.opts });
+  assert.deepEqual(rig.timeouts, [["attestation", 30_000], ["chat", 120_000], ["signature", 30_000]]);
+  const small = budgetRig(created, { chat: [{ body: PACK1_RUN.response_body }] });
+  await reviewJob({ job: acceptedJob(created), pack: pack1(), budgetMs: 60_000, ...small.opts });
+  assert.deepEqual(small.timeouts, [["attestation", 30_000], ["chat", 40_000], ["signature", 30_000]]);
+});
+
+test("budget: review_by - 45 s caps the deadline; too late or already reviewed is refused before any call", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const startS = created + 4;
+  const ns = (s) => String(BigInt(s) * 1_000_000_000n);
+  const rig = budgetRig(created, { chat: [{ body: PACK1_RUN.response_body }] });
+  await reviewJob({ job: acceptedJob(created, { review_by_ns: ns(startS + 45 + 50) }), pack: pack1(), ...rig.opts });
+  assert.deepEqual(rig.timeouts.find(([k]) => k === "chat"), ["chat", 30_000], "50 s left before the margin: 30 s chat + 20 s signature reserve");
+  for (const [over, code] of [
+    [{ review_by_ns: ns(startS + 45) }, "REVIEW_WINDOW_CLOSED"],
+    [{ review_by_ns: ns(startS - 1) }, "REVIEW_WINDOW_CLOSED"],
+    [{ review_by_ns: undefined }, "JOB_NOT_ACCEPTED"],
+    [{ review: { model: REVIEW_MODEL } }, "ALREADY_REVIEWED"],
+  ]) {
+    const r2 = budgetRig(created, { chat: [{ body: PACK1_RUN.response_body }] });
+    await assert.rejects(reviewJob({ job: acceptedJob(created, over), pack: pack1(), ...r2.opts }), (e) => e.code === code, code);
+    assert.equal(r2.tee.calls.length, 0, code);
+  }
+  const r3 = budgetRig(created, { chat: [{ body: PACK1_RUN.response_body }] });
+  await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), budgetMs: 30_000, ...r3.opts }), (e) => e.code === "DEADLINE_EXCEEDED");
+  assert.equal(r3.tee.calls.length, 0, "under 35 s: no attestation, no paid call");
+});
+
+test("budget: no time left for the retry -> the first signed attempt is the fixed FAIL, one chat call", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const bad = chatBody("not json", created);
+  // 100 s budget: chat gets 80 s and takes 70 s, leaving 30 s - 20 s signature reserve < 30 s for a retry
+  const rig = budgetRig(created, { chatMs: 70_000, chat: [{ body: bad }, { body: PACK1_RUN.response_body }] });
+  const r = await reviewJob({ job: acceptedJob(created), pack: pack1(), budgetMs: 100_000, ...rig.opts });
+  assert.equal(r.attempts, 1);
+  assert.deepEqual(r.check, { ok: false, error: ERROR_MALFORMED });
+  assert.equal(r.response_body, bad);
+  assert.equal(rig.tee.calls.filter((c) => c.url.endsWith("/chat/completions")).length, 1);
+  assert.ok(rig.logs.some((l) => l.includes("no time left")));
+});
+
+test("budget: worst case (slow chat x2, signature never stored) still ends by the deadline", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const bad = chatBody("not json", created);
+  const rig = budgetRig(created, { chatMs: 150_000, sigMs: 9_000, sigNotFound: 99, chat: [{ body: bad }, { body: bad }] });
+  await assert.rejects(reviewJob({ job: acceptedJob(created), pack: pack1(), ...rig.opts }), (e) => e.code === "SIGNATURE_UNAVAILABLE");
+  assert.ok(rig.now() - rig.start <= 240_000, `took ${rig.now() - rig.start} ms of fake time`);
+  for (const [, ms] of rig.timeouts) assert.ok(ms > 0 && ms <= 120_000);
 });
