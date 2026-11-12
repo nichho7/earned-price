@@ -9,16 +9,20 @@
 // compose_hash). checkAttestationBinding only proves the JSON names this signer and echoes our
 // nonce; quote bytes can be edited, so it does not prove a genuine enclave. See ATTESTATION_CHECKS.
 // See spike/README.md.
-import { createHash } from "node:crypto";
+// Isomorphic (T-029): no node: imports and no Buffer, so the browser verify page (T-039) loads this
+// exact file. Only dependencies: @noble/curves and @noble/hashes (audited, pure JS).
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
+import { sha256Hex } from "../grader/grade.js";
+
+export { sha256Hex }; // sha256 (hex) of a string's UTF-8 bytes; one implementation, the grader's
 
 const enc = new TextEncoder();
-const hex = (b) => Buffer.from(b).toString("hex");
-const unhex = (s) => Uint8Array.from(Buffer.from(s.replace(/^0x/, ""), "hex"));
-
-export const sha256Hex = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const hex = (b) => bytesToHex(b);
+/** Hex (optional 0x) to bytes. Throws on odd length or a non-hex character (never truncates). */
+const unhex = (s) => hexToBytes(String(s).replace(/^0x/, ""));
 
 /** Ethereum address (0x + 40 lowercase hex) of an uncompressed or compressed secp256k1 public key. */
 export function ethAddress(publicKey) {
