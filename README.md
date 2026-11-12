@@ -338,6 +338,9 @@ scripts/deploy.sh --dry-run
 # Offline receipt check, no key, no network: 4 checks in order, then a tampered copy
 node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json           # see: PASS 1-4, then NOT AN OFFICIAL PACK (fixture)
 node cli/earned.js verify test/fixtures/receipt-t003-sample-0.json --tamper  # see: FAIL: check 2 TEE signature covers this review
+
+# The real receipt from our first live testnet run (tx hashes + explorer links: recorded/README.md)
+node cli/earned.js verify recorded/pack-2.json   # see: REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-2 request (prompt v1), regrade PASS.
 ```
 
 #### Contract test: a fail refunds the buyer and drops the price
@@ -425,6 +428,10 @@ the commands to resume with the same buyer (`EARNED_HOME`); do not rerun the scr
 failed step. `--go` refuses `EARNED_RPC_URL` and any network but testnet, and refuses a seller
 whose record is not empty (the demo's 0.030 -> 0.040 -> 0.040 needs a fresh seller) unless
 `--used-seller` is given.
+
+The first `--go` run (2026-11-12, jobs 1 and 2) is shipped in `recorded/`: both receipts, the
+console output and every tx hash with its explorer link. `earned hire` replays it, labelled
+RECORDED, when the seller can't review live.
 
 ## License
 

@@ -1,0 +1,178 @@
+# Earned Price: the first live testnet run, 2026-11-12 13:24-13:25 UTC (T-064)
+# scripts/live-run.sh --go on main 741d0a4, against earned-price.testnet and seller.earned-price.testnet.
+# Assembled from the per-step logs the script tee'd (in run order), with the script's own
+# "== <step>: earned <args>" header lines re-added. Only change: the buyer's local folder is
+# shown as $EARNED_HOME (no absolute paths). That folder held the throwaway buyer key; it is
+# not published. The two receipts are recorded/pack-2.json (job 1) and recorded/pack-3.json (job 2).
+
+== step1-init: earned init
+Created testnet buyer earned-price-buyer-09552fb0.testnet
+  create tx: CbXuiUougakPpWtFJPCaXxo4r7UV5JB6YgQWur5UY1h9
+  key file:  $EARNED_HOME/buyer.json (0600, gitignored; never commit or share it)
+  spend cap: 0.2 NEAR (spent 0 NEAR)
+Packs:
+  pack 1  sha256 9bf2b12b3653819537c75330e29a2b080936aaf1215be0bfec3039a8884ed573  Invoices
+  pack 2  sha256 c827d2285b945f69d3813e13686370165baaa2c2470544aba08e8ebd520f5c68  Warehouse stock
+  pack 3  sha256 992e7b187475ddb1f19b464a98dc891111ce917e03957a3801e351b5d8efa202  Merchant settlement
+SEE: step 1 PASS
+
+== quote: earned quote seller.earned-price.testnet
+Seller seller.earned-price.testnet on earned-price.testnet
+Quote: 0.030 NEAR (testnet)
+  formula: 0.030 + 0.010×0 − 0.005×0 = 0.030 NEAR
+  P = 0 unique buyers with a pass, F = 0 fails, 0 graded jobs
+  rule: 0.030 + 0.010×P − 0.005×F, clamped to 0.025..0.100 NEAR
+
+== step2-pick: earned pick 2
+Seller: seller.earned-price.testnet (demo default)
+Pack 2 (Warehouse stock), pack-2, frozen sha256 c827d2285b945f69d3813e13686370165baaa2c2470544aba08e8ebd520f5c68
+Sealed answer key: commit df91286d933bda7391db2129b2e57fdd1ae8566587ffcbac5c45476c975b3d3f
+  review request 13218ed9b768… matches the contract's pack-2 pin
+Escrow earned-price.testnet
+Quote: 0.030 NEAR (testnet)
+  formula: 0.030 + 0.010×0 − 0.005×0 = 0.030 NEAR
+  P = 0 unique buyers with a pass, F = 0 fails, 0 graded jobs
+  rule: 0.030 + 0.010×P − 0.005×F, clamped to 0.025..0.100 NEAR
+Buyer offers 0.020 NEAR
+  seller: Refused 0.020 NEAR: below my cost floor 0.025 NEAR. My price is 0.030 NEAR.
+Buyer offers 0.030 NEAR
+  seller: Accepted: price 0.030 NEAR.
+Escrow create: job 1, 0.030 NEAR locked (spent 0.03 of 0.2 NEAR cap)
+  create tx: CUuEWusixATkE8yybm9CAm22tt6QDAsHxWf9oQEExksm
+  commit:    df91286d933bda7391db2129b2e57fdd1ae8566587ffcbac5c45476c975b3d3f
+  key + salt kept in $EARNED_HOME/job.json until reveal
+Next: `earned hire` (the seller accepts, reviews in the TEE, then you reveal)
+SEE: step 2 PASS
+
+== step3-hire: earned hire --local-seller
+Job 1 (pack-2) on earned-price.testnet: 0.03 NEAR in escrow, seller seller.earned-price.testnet
+Stage: open. seller must accept or decline by 2026-11-12T13:26:15.432Z (accept_by, 1m 56s left)
+Seller accepted: accept tx 6TvuZ7Z52NjE8xEDBvKuJm6dEVrpQmvWyj6HqfXARKVN
+[seller] signed review: 6 findings, attempts 1, response 7ca8e6d809d7
+Seller review in the TEE: 6 findings, signed by 0xfe0071895500a9755c18044948ab4f4e1a7f337e, response 7ca8e6d809d7…
+  submit_review tx: DXxtYrWFMzogDobRSyKLNS3s6PVYThjRA8TQpyB1YPsu
+Stage: accepted, review on-chain. buyer must reveal the key by 2026-11-12T13:36:15.432Z (reveal_deadline, 11m 37s left)
+Grade: 5/5 found (pass mark 4) -> PASS
+  B1 found   (finding at line 13; key stock.py:13-14 resource-leak)
+  B2 found   (finding at line 31; key stock.py:30-31 error-handling)
+  B3 found   (finding at line 70; key stock.py:67-70 missing-check)
+  B4 found   (finding at line 95; key stock.py:95-95 off-by-one)
+  B5 found   (finding at line 103; key stock.py:103-103 wrong-comparison)
+  1 other finding(s) matched no bug
+Passed. The seller was paid from escrow.
+  settle tx (the settle runs inside reveal): 9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB
+  https://testnet.nearblocks.io/txns/9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB
+Next quote (get_record): 0.030 -> 0.040 NEAR
+  formula: 0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR
+  P = 1 unique buyers with a pass, F = 0 fails, 1 graded jobs
+  rule: 0.030 + 0.010×P − 0.005×F, clamped to 0.025..0.100 NEAR
+Receipt: $EARNED_HOME/receipts/job-1.json
+  full review (response + attestation): $EARNED_HOME/receipts/job-1.review.json
+  PASS  1 Commit hash matches the revealed key
+  PASS  2 TEE signature covers this review
+  PASS  3 Attestation binds the signer and nonce
+  PASS  4 Regrade gives the same score
+  regrade: 5/5 PASS
+  REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-2 request (prompt v1), regrade PASS.
+  Not proven offline: job, buyer, seller, quote, payment, tx hashes, freshness, review reuse. Check them on-chain: txs.submit_review and txs.reveal on the testnet explorer.
+Check it yourself: earned verify $EARNED_HOME/receipts/job-1.json
+SEE: step 3 PASS
+
+== step5-verify-pack2: earned verify $EARNED_HOME/receipts/job-1.json
+Verifying $EARNED_HOME/receipts/job-1.json: job 1, pack-2, testnet (offline, no key)
+PASS  1 Commit hash matches the revealed key
+         commit matches: the revealed key and salt hash to df91286d933b… (pack-2, the official answer key); the commit itself is a chain fact (txs.create)
+PASS  2 TEE signature covers this review
+         0xfe0071895500a9755c18044948ab4f4e1a7f337e (on the escrow's deploy-time allowlist) signed the official pack-2 request (prompt v1) and sha256(review) 7ca8e6d809d7…
+PASS  3 Attestation binds the signer and nonce
+         signer 0xfe0071895500a9755c18044948ab4f4e1a7f337e and nonce 6afde1a6bc75… are in both TDX quotes (binding only)
+PASS  4 Regrade gives the same score
+         5/5 found, passed (pass mark 4/5)
+Not checked offline: Intel DCAP chain, NVIDIA GPU evidence, image measurements. The signer is checked against the escrow's deploy-time allowlist (contract/tee-signers.json); the live list is the contract's signers() view.
+REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-2 request (prompt v1), regrade PASS.
+Not proven offline: job, buyer, seller, quote, payment, tx hashes, freshness, review reuse. Check them on-chain: txs.submit_review and txs.reveal on the testnet explorer.
+
+== step5-verify-pack2-tamper: earned verify $EARNED_HOME/receipts/job-1.json --tamper
+Verifying $EARNED_HOME/receipts/job-1.json: job 1, pack-2, testnet (offline, no key)
+Tampered copy (the file is unchanged): tee.response_body byte 51 "9" -> "a"
+PASS  1 Commit hash matches the revealed key
+         commit matches: the revealed key and salt hash to df91286d933b… (pack-2, the official answer key); the commit itself is a chain fact (txs.create)
+FAIL  2 TEE signature covers this review
+         sha256 of the stored review is 91595c9ac89d…, but the TEE signed 7ca8e6d809d7…: the review text was changed
+PASS  3 Attestation binds the signer and nonce
+         signer 0xfe0071895500a9755c18044948ab4f4e1a7f337e and nonce 6afde1a6bc75… are in both TDX quotes (binding only)
+PASS  4 Regrade gives the same score
+         5/5 found, passed (pass mark 4/5)
+Not checked offline: Intel DCAP chain, NVIDIA GPU evidence, image measurements. The signer is checked against the escrow's deploy-time allowlist (contract/tee-signers.json); the live list is the contract's signers() view.
+FAIL: check 2 TEE signature covers this review
+Not proven offline: job, buyer, seller, quote, payment, tx hashes, freshness, review reuse. Check them on-chain: txs.submit_review and txs.reveal on the testnet explorer.
+
+== step4-hire-pack3: earned hire --pack 3 --local-seller
+No open job: opening a pack-3 job first (as `earned pick 3`)
+Seller: seller.earned-price.testnet (demo default)
+Pack 3 (Merchant settlement), pack-3, frozen sha256 992e7b187475ddb1f19b464a98dc891111ce917e03957a3801e351b5d8efa202
+Sealed answer key: commit 5ef90397b927ea2c1a7295af264e2298c2bb34ae7d26b39eeb75c12b84f14438
+  review request c88a5bb858cd… matches the contract's pack-3 pin
+Escrow earned-price.testnet
+Quote: 0.040 NEAR (testnet)
+  formula: 0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR
+  P = 1 unique buyers with a pass, F = 0 fails, 1 graded jobs
+  rule: 0.030 + 0.010×P − 0.005×F, clamped to 0.025..0.100 NEAR
+Buyer offers 0.020 NEAR
+  seller: Refused 0.020 NEAR: below my cost floor 0.025 NEAR. My price is 0.040 NEAR.
+Buyer offers 0.040 NEAR
+  seller: Accepted: price 0.040 NEAR.
+  previous closed job file archived to $EARNED_HOME/jobs/2026-11-12T13-24-44-223Z-pack-2-1-13293.json
+Escrow create: job 2, 0.040 NEAR locked (spent 0.07 of 0.2 NEAR cap)
+  create tx: GFkPH6NANwEKZNJB1xBSALwje3pnYAYzgS1F6WCUT1D1
+  commit:    5ef90397b927ea2c1a7295af264e2298c2bb34ae7d26b39eeb75c12b84f14438
+  key + salt kept in $EARNED_HOME/job.json until reveal
+Job 2 (pack-3) on earned-price.testnet: 0.04 NEAR in escrow, seller seller.earned-price.testnet
+Stage: open. seller must accept or decline by 2026-11-12T13:26:45.884Z (accept_by, 1m 57s left)
+Seller accepted: accept tx 3UVF9yCwfypA6C3UfXQV7t23BBuqRDJrMp7y4wKjU59Y
+[seller] signed review: 8 findings, attempts 1, response 60f3299aef35
+Seller review in the TEE: 8 findings, signed by 0xfe0071895500a9755c18044948ab4f4e1a7f337e, response 60f3299aef35…
+  submit_review tx: B9cCSY47Wo7hsvBkyw4DuaW8x5SmR6Udgjf824dX6GpF
+Stage: accepted, review on-chain. buyer must reveal the key by 2026-11-12T13:36:45.884Z (reveal_deadline, 11m 45s left)
+Grade: 4/5 found (pass mark 4) -> PASS
+  B1 found   (finding at line 37; key settlement.py:37-37 float-money)
+  B2 found   (finding at line 45; key settlement.py:45-45 timezone)
+  B3 found   (finding at line 87; key settlement.py:85-90 race-condition)
+  B4 found   (finding at line 96; key settlement.py:94-102 mutable-default)
+  B5 missed  (key settlement.py:57-63 off-by-one)
+  4 other finding(s) matched no bug
+Passed. The seller was paid from escrow.
+  settle tx (the settle runs inside reveal): 3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw
+  https://testnet.nearblocks.io/txns/3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw
+Next quote (get_record): 0.040 -> 0.040 NEAR
+  formula: 0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR
+  P = 1 unique buyers with a pass (2 passes, 1 counted: one per buyer), F = 0 fails, 2 graded jobs
+  rule: 0.030 + 0.010×P − 0.005×F, clamped to 0.025..0.100 NEAR
+Receipt: $EARNED_HOME/receipts/job-2.json
+  full review (response + attestation): $EARNED_HOME/receipts/job-2.review.json
+  PASS  1 Commit hash matches the revealed key
+  PASS  2 TEE signature covers this review
+  PASS  3 Attestation binds the signer and nonce
+  PASS  4 Regrade gives the same score
+  regrade: 4/5 PASS
+  REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-3 request (prompt v1), regrade PASS.
+  Not proven offline: job, buyer, seller, quote, payment, tx hashes, freshness, review reuse. Check them on-chain: txs.submit_review and txs.reveal on the testnet explorer.
+Check it yourself: earned verify $EARNED_HOME/receipts/job-2.json
+Repeat pass: this buyer already has a paid pass with seller.earned-price.testnet, so P (unique buyers) stays 1; passes 1 -> 2.
+Quote held: 0.040 -> 0.040 NEAR (P = 1 unique buyer, 2 passes, F = 0). A repeat pass pays the seller but can't pump the price.
+a fail subtracts 0.005 (see README step: contract test)
+SEE: step 4 PASS
+
+== step5-verify-pack3: earned verify $EARNED_HOME/receipts/job-2.json
+Verifying $EARNED_HOME/receipts/job-2.json: job 2, pack-3, testnet (offline, no key)
+PASS  1 Commit hash matches the revealed key
+         commit matches: the revealed key and salt hash to 5ef90397b927… (pack-3, the official answer key); the commit itself is a chain fact (txs.create)
+PASS  2 TEE signature covers this review
+         0xfe0071895500a9755c18044948ab4f4e1a7f337e (on the escrow's deploy-time allowlist) signed the official pack-3 request (prompt v1) and sha256(review) 60f3299aef35…
+PASS  3 Attestation binds the signer and nonce
+         signer 0xfe0071895500a9755c18044948ab4f4e1a7f337e and nonce 2cc4c1c27e74… are in both TDX quotes (binding only)
+PASS  4 Regrade gives the same score
+         4/5 found, passed (pass mark 4/5)
+Not checked offline: Intel DCAP chain, NVIDIA GPU evidence, image measurements. The signer is checked against the escrow's deploy-time allowlist (contract/tee-signers.json); the live list is the contract's signers() view.
+REVIEW AUTHENTIC (offline): genuine NEAR AI TEE review of the official pack-3 request (prompt v1), regrade PASS.
+Not proven offline: job, buyer, seller, quote, payment, tx hashes, freshness, review reuse. Check them on-chain: txs.submit_review and txs.reveal on the testnet explorer.
