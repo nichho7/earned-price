@@ -203,11 +203,12 @@ export async function viewFunctionAt({ fetch: fetchFn, urls, contractId, method,
  * and returns { seller, record, quoteMilli, quoteYocto, lines }. Throws QUOTE_MISMATCH
  * if the contract's quote differs from the formula (never prints a price we can't explain).
  */
-export async function fetchQuote({ fetch: fetchFn, urls, contractId, seller }) {
+export async function fetchQuote({ fetch: fetchFn, urls, contractId, seller, blockId }) {
   assertTestnetAccount(seller);
-  const view = (method, blockId) => viewFunctionAt({ fetch: fetchFn, urls, contractId, method, args: { seller }, blockId });
+  const view = (method, at) => viewFunctionAt({ fetch: fetchFn, urls, contractId, method, args: { seller }, blockId: at });
   // Read quote at the same block as the record, so a job settling in between can't cause a false mismatch.
-  const first = await view("get_record");
+  // blockId pins both reads to one block (hire step 4: the block of the job's closing receipt).
+  const first = await view("get_record", blockId);
   const record = parseRecord(first.value);
   // Without a block hash the next read would silently fall back to finality=final and lose the pin.
   if (typeof first.blockHash !== "string" || !first.blockHash) throw new QuoteError("VIEW_FAILED", "get_record answer has no block_hash; cannot pin the quote read");
@@ -218,5 +219,5 @@ export async function fetchQuote({ fetch: fetchFn, urls, contractId, seller }) {
   if (quoteYocto !== BigInt(q) * YOCTO_PER_MNEAR) {
     throw new QuoteError("QUOTE_MISMATCH", `on-chain quote ${onChain} yocto does not match the formula (${formatMilli(q)} NEAR from the record); refusing to quote`);
   }
-  return { seller, record, quoteMilli: q, quoteYocto, lines: quoteLines(record) };
+  return { seller, record, quoteMilli: q, quoteYocto, lines: quoteLines(record), blockHash: first.blockHash };
 }

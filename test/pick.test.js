@@ -705,3 +705,13 @@ test("earned pick CLI: --seller needs --yes; EARNED_SELLER does not change the s
   // If EARNED_SELLER were honoured, this would be SELLER_NOT_CONFIRMED.
   assert.match(run(["2"], { EARNED_SELLER: "other.testnet" }).stderr, /error NO_BUYER/);
 });
+
+test("embedded pick (from `earned hire --pack 3`, T-032): same create, but no 'Next:' and no 'SEE: step 2 PASS' line", async () => {
+  const f = fakes({ record: { passes: 1, fails: 0, unique_buyers: 1, jobs: 1 } });
+  const r = await runPick({ ...f.deps, pack: "3", embedded: true });
+  assert.equal(f.calls.sends.length, 1);
+  assert.equal(f.calls.sends[0].depositYocto, 40n * YOCTO_PER_MNEAR);
+  assert.equal(r.job.status, "open");
+  assert.ok(!f.lines.some((l) => l.startsWith("SEE:") || l.startsWith("Next:")));
+  assert.match(f.lines.at(-1), /key \+ salt kept in /);
+});

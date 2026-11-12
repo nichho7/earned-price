@@ -315,7 +315,8 @@ function jobInProgress(dir, prior, state) {
 
 /**
  * Runs pick. deps: { pack, offer?, seller?, yes?, dir? | cwd+env, network, fetch, urls, contractId,
- * sendCreate, lookupCreate?, loadPack?, salt?, out }. Returns { job, quote, haggle, txHash }.
+ * sendCreate, lookupCreate?, loadPack?, salt?, embedded?, out }. Returns { job, quote, haggle, txHash }.
+ * embedded: run from `earned hire --pack N` (T-032), so the "Next:" and "SEE: step 2" lines are left out.
  * sendCreate({ ..., onSigned(txHash) }) must call onSigned before broadcasting and tag errors that
  * cannot have landed with notSent: true.
  */
@@ -352,13 +353,13 @@ export async function runPick(deps) {
   if (!buyer || buyer.status !== "created") throw new PickError("NO_BUYER", "no testnet buyer yet; run `earned init` first");
   const release = acquirePickLock(dir, { say: out });
   try {
-    return await pickLocked({ n, fetchFn, urls, contractId, seller, sendCreate, lookupCreate, loadPack, salt, out, openingMilli, dir });
+    return await pickLocked({ n, fetchFn, urls, contractId, seller, sendCreate, lookupCreate, loadPack, salt, out, openingMilli, dir, embedded: deps.embedded === true });
   } finally {
     release();
   }
 }
 
-async function pickLocked({ n, fetchFn, urls, contractId, seller, sendCreate, lookupCreate, loadPack, salt, out, openingMilli, dir }) {
+async function pickLocked({ n, fetchFn, urls, contractId, seller, sendCreate, lookupCreate, loadPack, salt, out, openingMilli, dir, embedded }) {
   let state = loadState(dir); // re-read under the lock
   if (!state || state.status !== "created") throw new PickError("NO_BUYER", "no testnet buyer yet; run `earned init` first");
   const say = (line) => out(redact(line, state));
@@ -472,8 +473,10 @@ async function pickLocked({ n, fetchFn, urls, contractId, seller, sendCreate, lo
   say(`  create tx: ${created.txHash}`);
   say(`  commit:    ${sealed.commit_hash}`);
   say(`  key + salt kept in ${jobFilePath(dir)} until reveal`);
-  say("Next: `earned hire` (the seller accepts, reviews in the TEE, then you reveal)");
-  say("SEE: step 2 PASS");
+  if (!embedded) {
+    say("Next: `earned hire` (the seller accepts, reviews in the TEE, then you reveal)");
+    say("SEE: step 2 PASS");
+  }
   return { job: done, quote, haggle: answers, txHash: created.txHash };
 }
 

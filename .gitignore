@@ -19,6 +19,8 @@ near-credentials/
 !packs/pack-*/answer-key.json
 # earned init: throwaway testnet buyer key (0600). Never commit.
 .earned/
+# scripts/live-run.sh buyer homes (throwaway keys + logs). Never commit.
+.earned-live/
 
 # Build output
 target/
