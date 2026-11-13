@@ -13,11 +13,11 @@
 // Skills used: ci-cd-and-automation, security-and-hardening, karpathy-guidelines
 import { RUNS, RUNS_SOURCE } from "../site/data/runs.ts";
 import { HERO } from "../site/data/hero.ts";
-import { findPlaceholders, foldRun, outcomeOf } from "../site/earn/earn-core.js";
+import { DERIVED_FROM, derivedFromOf, findPlaceholders, foldRun, outcomeOf } from "../site/earn/earn-core.js";
 import { txStatus, txSucceeded, TX_HASH } from "./site-rpc.mjs";
 
-/** The tx each derived event comes from (schema.ts: the accept / submit_review / reveal EVENT_JSON). */
-export const DERIVED_FROM = { accepted: "accept", attested: "submit_review", check_graded: "reveal", settled: "reveal" };
+/** The tx each derived event comes from. One table, shared with the S-010 bus (site/earn/earn-core.js). */
+export { DERIVED_FROM, derivedFromOf };
 
 /**
  * Pure (code review R-1): every tx hash any event carries, keyed by hash, with the action and signer it claims.
@@ -35,8 +35,9 @@ export function linkedTxs(runs) {
       if (e.tx_hash === undefined) continue;
       let action = e.data?.action;
       if (e.type !== "tx_submitted" && e.type !== "tx_confirmed") {
-        action = DERIVED_FROM[e.type];
-        if (!action) { errs.push(`run ${i + 1} ${e.type} seq ${e.seq}: unknown event type carries tx_hash ${e.tx_hash}`); continue; }
+        const allowed = derivedFromOf(e); // schema v1.1: a settled may close on reveal, timeout or decline (its reason says which)
+        if (!allowed.length) { errs.push(`run ${i + 1} ${e.type} seq ${e.seq}: unknown event type or settle reason carries tx_hash ${e.tx_hash}`); continue; }
+        action = allowed.find((a) => confirmed.get(a) === e.tx_hash) ?? allowed[0];
         const want = confirmed.get(action);
         if (e.tx_hash !== want) errs.push(`run ${i + 1} ${e.type} seq ${e.seq}: tx_hash ${e.tx_hash} is not the ${action} tx (${want ?? "none confirmed"})`);
       }
@@ -74,7 +75,7 @@ export async function checkTxs(runs, status = txStatus) {
 /** Shape checks for one run (always on). */
 export function runErrors(run, i) {
   const hard = [];
-  if (run.schema !== "earned-lab-events" || run.version !== 1) hard.push(`run ${i + 1}: not schema earned-lab-events v1`);
+  if (run.schema !== "earned-lab-events" || (run.version !== 1 && run.version !== 1.1)) hard.push(`run ${i + 1}: not schema earned-lab-events v1 / v1.1`);
   if (run.mode !== "recorded" || run.network !== "testnet") hard.push(`run ${i + 1}: mode ${run.mode} / ${run.network} can't be on the home page (contract tests are test-only)`);
   run.events.forEach((e, j) => { if (e.seq !== j) hard.push(`run ${i + 1}: seq gap at index ${j}`); });
   // The player's groups and "+N s" gaps assume time never runs backwards (code review O-5).

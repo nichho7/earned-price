@@ -414,7 +414,7 @@ test("honest data: real recorded run, so no PLACEHOLDER DATA chip; the network c
   await mount(page);
   await expect(page.locator('[data-chip="placeholder"]')).toHaveCount(0);
   await expect(page.locator("header [data-chip]")).toHaveCount(0);
-  await expect(page.locator('.ep [data-chip="net"]')).toHaveText("TESTNET · RECORDED");
+  await expect(page.locator('.ep [data-chip="net"]')).toContainText("TESTNET · RECORDED 12 NOV 13:25 UTC · verified live · signed review B9cC…6GpF"); // T-038: + time, signed review (B1)
   await page.locator('.ep [data-act="skip"]').click(); // the final state: every tx of run 2 on the receipt
   const links = await page.locator('.ep a.lnk[href*="nearblocks.io/txns/"]').evaluateAll((as) => as.map((a) => a.getAttribute("href")));
   expect(links.length).toBeGreaterThan(0);

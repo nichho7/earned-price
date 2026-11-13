@@ -1,4 +1,7 @@
-// [CTO] T-051 /lab earn-moment event schema, version 1. Prose and rules: schema.md.
+// [CTO] T-051 /lab earn-moment event schema, version 1.1. Prose and rules: schema.md.
+// v1.1 (T-038 fix round 1, 2026-11-13) is a strict superset of v1: every v1 file is a valid v1.1 file. It adds the
+// closings the contract has besides reveal (m001 §8): `timeout` and `decline` actions, their `settled` reasons,
+// record_change "none", and grade null when nothing was graded. The recorded run-{1,2}.json stay version 1.
 // Types only plus one guard. No runtime deps. Copied from deliverables/cto/lab-events/schema.ts (T-051);
 // T-033 adds the optional fixture fields the files already carry (clock_base_ns, skills_used).
 // Skills used: spec-driven-development, api-and-interface-design, karpathy-guidelines
@@ -6,7 +9,7 @@
 export type Network = "testnet" | "sandbox";
 /** Where the event came from. "client" = our own site/CLI; "view" = an RPC view call. */
 export type Source = "testnet" | "sandbox" | "client" | "view";
-export type Action = "create" | "accept" | "submit_review" | "reveal";
+export type Action = "create" | "accept" | "submit_review" | "reveal" | "timeout" | "decline"; // timeout, decline: v1.1
 export type Actor = "buyer" | "seller";
 
 /** Fields on every event. */
@@ -109,7 +112,21 @@ export interface CheckGradedEvent extends EventBase {
   };
 }
 
-/** Money moved and the record changed (payout or refund EVENT_JSON; same tx as reveal, later receipt). */
+/**
+ * Why money moved, as the closing tx's EVENT_JSON names it (v1.1 adds all but settle / grade_fail):
+ *   settle         payout.kind "settle"              reveal tx    paid_seller     pass  grade
+ *   grade_fail     refund.reason "grade_fail"        reveal tx    refunded_buyer  fail  grade
+ *   no_reveal      timeout.reason, payout "timeout"  timeout tx   paid_seller     none  null
+ *   no_review      timeout + refund.reason           timeout tx   refunded_buyer  fail  null
+ *   not_accepted   timeout + refund.reason           timeout tx   refunded_buyer  none  null
+ *   decline        decline event                     decline tx   refunded_buyer  none  null
+ *   payout_failed  payout_failed_refunded            reveal|timeout refunded_buyer none grade (reveal) | null (timeout)
+ * The bus enforces this table (site/earn/earn-core.js SETTLE_REASONS).
+ */
+export type SettleReason = "settle" | "grade_fail" | "no_reveal" | "no_review" | "not_accepted" | "decline" | "payout_failed";
+export interface Grade { found: number; total: number; pass_min: number; passed: boolean; error: string | null }
+
+/** Money moved and the record changed (or not). Same tx as the closing call (reveal / timeout / decline), later receipt, stamped with that tx's t_ms. */
 export interface SettledEvent extends EventBase {
   type: "settled";
   tx_hash: string;
@@ -117,11 +134,11 @@ export interface SettledEvent extends EventBase {
     outcome: "paid_seller" | "refunded_buyer";
     amount_mnear: number;
     to: string;
-    reason: "settle" | "grade_fail";   // chain: payout.kind "settle" / refund.reason "grade_fail"
-    record_change: "pass" | "fail";
+    reason: SettleReason;
+    record_change: "pass" | "fail" | "none";   // "none": v1.1
     counts_unique_buyer?: boolean;     // T-051 fixtures only. The contract never emits it: the site derives
                                        // "counted once" from get_record before/after (T-070 review H-2), and checks this against it when present
-    grade: { found: number; total: number; pass_min: number; passed: boolean; error: string | null };
+    grade: Grade | null;               // null (v1.1) when nothing was graded: every timeout and decline
   };
 }
 
@@ -131,7 +148,7 @@ export type LabEvent =
 
 export interface LabFixture {
   schema: "earned-lab-events";
-  version: 1;
+  version: 1 | 1.1;              // 1.1 = v1 + timeout / decline closings. Recorded runs stay 1.
   sequence: "pass" | "repeat" | "fail";
   mode: "recorded" | "contract-test";
   network: Network;

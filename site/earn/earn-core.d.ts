@@ -16,7 +16,7 @@ export interface RunState {
 
 export interface Step { kind: "group" | "break"; run: number; gi: number; group: LabEvent[]; gap: number | null; play: number; label: string | null; shortened: boolean }
 export interface Story { runs: LabFixture[]; mode: "recorded" | "live"; steps: Step[] }
-export interface StoryView { story: Story; k: number; step: Step | null; cur: number; run: RunState; next: Step | null; last: boolean }
+export interface StoryView { story: Story; k: number; step: Step | null; cur: number; run: RunState; done: RunState[]; next: Step | null; last: boolean }
 
 export const EXPLORER: string;
 export const TIMING: { chainCap: number; clientCap: number; runBreak: number; stillWaitingMs: number };
@@ -41,3 +41,15 @@ export function acctUrl(id: string, f: LabFixture, explorer?: string): string | 
 export function esc(s: unknown): string;
 export function num(n: unknown): string;
 export function fmtM(n: number): string;
+export const DERIVED_FROM: { readonly accepted: "accept"; readonly attested: "submit_review"; readonly check_graded: "reveal"; readonly settled: "reveal" };
+export type SettleRule = { outcome: "paid_seller" | "refunded_buyer"; record: "pass" | "fail" | "none"; from: readonly string[]; grade: boolean | null };
+export const SETTLE_REASONS: Readonly<Record<"settle" | "grade_fail" | "no_reveal" | "no_review" | "not_accepted" | "decline" | "payout_failed", SettleRule>>;
+export function derivedFromOf(e: unknown): readonly string[];
+export const ACTIONS: readonly string[];
+export function recLabel(iso: string | null | undefined): string;
+export function latestAttestation(story: Story): { tx: string; run: number; f: LabFixture } | null;
+export interface Chip { kind: "net" | "sbx" | "ph"; text: string; att?: { tx: string; run: number; f: LabFixture } | null }
+export function chipsOf(story: Story, liveMode: boolean): Chip[];
+export function quoteOf(r: { unique_buyers: number; fails: number }): number;
+export function appendRunSteps(story: Story, r: number, fromGroup?: number): Story;
+export function rebuildRunSteps(story: Story, r: number): void;
