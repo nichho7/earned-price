@@ -56,7 +56,7 @@ export type AccountErrorCode =
   | "FAUCET_HTTP" | "FAUCET_BAD_RESPONSE" | "FAUCET_TX_FAILED" | "FAUCET_REFUSED" | "QUOTE_UNAVAILABLE" | "BAD_QUOTE"
   | "WALLET_LOAD_FAILED" | "ACCOUNT_TAKEN" | "ACCOUNT_KEY_MISSING"
   | "BAD_SIGN_REQUEST" | "NO_BUYER" | "JOB_OPEN" | "NO_JOB" | "QUOTE_CHANGED" | "CAP_REACHED" | "NOT_SENT"
-  | "SEND_UNCONFIRMED" | "CREATE_REFUSED" | "TX_REFUSED";
+  | "SEND_UNCONFIRMED" | "CREATE_REFUSED" | "TX_REFUSED" | "RETRY_LIMIT";
 
 export const FAUCET_URL: string;
 export const RPC_URLS: string[];
@@ -73,6 +73,8 @@ export const GAS_RESERVE_BASIS: string;
 export const JOB_KEY: string;
 export const SIGNABLE: Readonly<Record<SignMethod, bigint>>;
 export const GAS_PRICE_YOCTO: bigint;
+export const MAX_CLOSE_TRIES: number;
+export function maxGasYocto(method: SignMethod): bigint;
 export const JOB_GAS_RESERVE_YOCTO: bigint;
 export const KEY_CHECK_TRIES: number;
 export const SPEND_CAP_YOCTO: bigint;
@@ -85,6 +87,8 @@ export class AccountError extends Error {
   budget?: ReturnType<typeof checkJobBudget>;
   txHash?: string | null;
   failure?: string;
+  tries?: number;
+  method?: SignMethod;
   constructor(code: AccountErrorCode, message: string);
 }
 

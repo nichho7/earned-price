@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { baseEncode } from "near-api-js";
 import {
-  AccountError, CONTRACT_ID, CREATE_GAS, DEMO_SELLER, JOB_GAS_RESERVE_YOCTO, JOB_KEY, REVEAL_GAS, RPC_URLS, SIGNABLE,
+  AccountError, CONTRACT_ID, CREATE_GAS, DEMO_SELLER, JOB_GAS_RESERVE_YOCTO, JOB_KEY, MAX_CLOSE_TRIES, REVEAL_GAS, RPC_URLS, SIGNABLE, maxGasYocto,
   SPEND_CAP_YOCTO, STORAGE_KEY, TIMEOUT_GAS, loadJob, publicBuyer, recordJobClosed, saveBuyer, saveJob, signJobAction,
 } from "./account.js";
 import type { Buyer, Job, KV } from "./account.d.ts";
@@ -334,6 +334,58 @@ test("timeout: only for this browser's job, TIMEOUT_GAS, no deposit; the not_acc
   assert.equal(spent(storage), before + 5n * 10n ** 20n + 7n * 10n ** 20n);
   // A closed job takes no second timeout.
   await assert.rejects(signJobAction(deps, { method: "timeout", args: { job_id: "7" }, depositYocto: 0n }), code("NO_JOB"));
+});
+
+/* ---------- security review MUST-1: retries are bounded and gas is held against the cap before it burns ---------- */
+
+const timeoutRefused = (hash: string, burntYocto: bigint): Outcome => ({
+  status: { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: "Smart contract panicked: not yet" } } } } },
+  transaction: { hash },
+  transaction_outcome: { id: hash, outcome: { executor_id: ACCOUNT, logs: [], tokens_burnt: String(burntYocto) } },
+  receipts_outcome: [],
+});
+
+test("MUST-1: a refused timeout is signed at most MAX_CLOSE_TRIES times per job, then RETRY_LIMIT with nothing signed", async () => {
+  const storage = setup({ spent_yocto: String(QUOTE + JOB_GAS_RESERVE_YOCTO) });
+  openJob(storage);
+  const fake = fakeNear((_tx, i) => timeoutRefused(TXH(20 + i), 5n * MILLI)); // 0.005 burnt per refused try
+  const deps = { storage, nav: undefined, fetch: chain().fn, loadNear: fake.loadNear };
+  for (let i = 0; i < MAX_CLOSE_TRIES; i++) {
+    await assert.rejects(signJobAction(deps, { method: "timeout", args: { job_id: "7" }, depositYocto: 0n }), code("TX_REFUSED"));
+  }
+  await assert.rejects(signJobAction(deps, { method: "timeout", args: { job_id: "7" }, depositYocto: 0n }), (e: unknown) => code("RETRY_LIMIT")(e) && (e as AccountError).tries === MAX_CLOSE_TRIES);
+  assert.equal(fake.seen.signed.length, MAX_CLOSE_TRIES);
+  const job = loadJob(storage)!;
+  assert.equal(job.close_txs.length, MAX_CLOSE_TRIES);
+  // every burnt yocto is inside what the cap counts: spent >= quote + real gas, and gas held >= gas burnt
+  const burnt = BigInt(job.burnt_yocto);
+  assert.equal(burnt, 5n * 10n ** 20n + 15n * MILLI);
+  assert.ok(BigInt(job.reserve_yocto) >= burnt);
+  assert.ok(spent(storage) >= QUOTE + burnt);
+});
+
+test("MUST-1: real gas past the gas held is counted at once (not at close), and a try whose max gas would cross the cap is refused", async () => {
+  // A gas price above 1e8: one refused timeout burns 0.06, more than the 0.043 held.
+  const storage = setup({ spent_yocto: String(QUOTE + JOB_GAS_RESERVE_YOCTO) });
+  openJob(storage);
+  const fake = fakeNear((_tx, i) => timeoutRefused(TXH(30 + i), 60n * MILLI));
+  const deps = { storage, nav: undefined, fetch: chain().fn, loadNear: fake.loadNear };
+  await assert.rejects(signJobAction(deps, { method: "timeout", args: { job_id: "7" }, depositYocto: 0n }), code("TX_REFUSED"));
+  const burnt = 5n * 10n ** 20n + 60n * MILLI;
+  assert.equal(spent(storage), QUOTE + burnt, "the excess over the reserve is on the cap right after the tx");
+  assert.equal(loadJob(storage)!.reserve_yocto, String(burnt));
+  // Next try needs burnt + 0.01 held: 0.01 more. Leave less than that under the cap: refused before signing.
+  const b = JSON.parse(storage.getItem(STORAGE_KEY)!);
+  saveBuyer(storage, { ...b, spent_yocto: String(SPEND_CAP_YOCTO - maxGasYocto("timeout") + 1n) });
+  await assert.rejects(signJobAction(deps, { method: "timeout", args: { job_id: "7" }, depositYocto: 0n }), (e: unknown) => code("CAP_REACHED")(e) && (e as AccountError).method === "timeout");
+  assert.equal(fake.seen.signed.length, 1);
+  // With room left, the top-up is booked (recordSpend) BEFORE the tx is signed.
+  saveBuyer(storage, { ...b, spent_yocto: String(QUOTE + burnt) });
+  const fake2 = fakeNear(() => timeoutOk(TXH(40)));
+  const r = await signJobAction({ ...deps, loadNear: fake2.loadNear }, { method: "timeout", args: { job_id: "7" }, depositYocto: 0n });
+  assert.equal(r.closed?.kind, "timeout_refund");
+  // closed: the price comes back, held-but-unburnt gas is released; spent = all the gas really burnt
+  assert.equal(spent(storage), burnt + 7n * 10n ** 20n);
 });
 
 test("reveal: only the key + salt this job committed, only on an accepted job, REVEAL_GAS", async () => {

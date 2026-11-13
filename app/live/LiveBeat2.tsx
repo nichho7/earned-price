@@ -9,12 +9,12 @@
 // Skills used: frontend-ui-engineering, security-and-hardening, incremental-implementation, karpathy-guidelines
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AccountError, CONTRACT_ID, DEMO_SELLER, GAS_RESERVE_BASIS, JOB_GAS_RESERVE_YOCTO, SPEND_CAP_YOCTO, jobIsLive, loadJob, near3, pickStorage,
+  AccountError, CONTRACT_ID, DEMO_SELLER, GAS_RESERVE_BASIS, JOB_GAS_RESERVE_YOCTO, MAX_CLOSE_TRIES, SPEND_CAP_YOCTO, jobIsLive, loadJob, near3, pickStorage,
   readPublicBuyer, reconcileCreate, recordJobAccepted, recordJobClosed, signJobAction,
 } from "../../site/live/account.js";
 import type { ClosingOutcome, Job, KV, ParsedTx, PublicBuyer } from "../../site/live/account.d.ts";
 import {
-  OPENING_OFFER_MILLI, blockByHash, createEventOf, lookupTx, mmss, readJobView, readQuoteFull, sealPack, watchSeller,
+  DEADLINE_MARGIN_MS, OPENING_OFFER_MILLI, blockByHash, chainHead, createEventOf, lookupTx, mmss, readJobView, readQuoteFull, sealPack, watchSeller,
 } from "../../site/live/job.js";
 import type { FullQuote } from "../../site/live/job.d.ts";
 import { LIVE_BUS, liveRun, type LiveRun } from "../../site/live/live-bus.ts";
@@ -29,7 +29,7 @@ import b from "./beat2.module.css";
 
 type Phase = "pick" | "quote" | "haggle" | "deal" | "locking" | "waiting" | "accepted" | "declined" | "timing_out" | "timed_out" | "unseen" | "error" | "cap";
 type Tape = { who: "SELLER" | "YOU"; kind: "quote" | "offer" | "refused" | "deal"; milli: number; struck?: boolean; text?: string };
-type Notice = { code: string; title: string; body: string; retry?: "haggle" | "lock" | "watch" | "pick" };
+type Notice = { code: string; title: string; body: string; retry?: "haggle" | "lock" | "watch" | "pick" | "timeout" };
 type SellerLine = { st: "todo" | "wait" | "ok" | "bad"; label: string; note: string; tx?: string | null; bus?: number | null };
 
 const RECORDED_HREF = "/";
@@ -62,7 +62,10 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
   const [createTx, setCreateTx] = useState<string | null>(null);
   const [createBus, setCreateBus] = useState<number | null>(null);
   const [job, setJob] = useState<Job | null>(null);
-  const [acceptByNs, setAcceptByNs] = useState<bigint | null>(null);
+  const [acceptByNs, setAcceptByState] = useState<bigint | null>(null);
+  // review MUST-2: async paths (timeout after a long watch) read accept_by from this ref, never a stale render's state
+  const acceptByRef = useRef<bigint | null>(null);
+  const setAcceptByNs = (v: bigint | null) => { acceptByRef.current = v; setAcceptByState(v); };
   const [chain, setChain] = useState<{ ns: bigint; at: number } | null>(null);
   const [now, setNow] = useState(0);
   const [seller, setSeller] = useState<SellerLine>({ st: "todo", label: "Seller accepts or declines", note: "—" });
@@ -173,21 +176,25 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
     if (!quote || !seal) return;
     setNotice(null);
     setPhase("locking");
+    let signed: string | null = null;
+    const submitted = (h: string | null) => {
+      const p = h ? run.current?.createSubmitted(h, quote.quoteYocto) : null;
+      if (p?.ok) setCreateBus(p.seq);
+    };
     try {
       const r = await signJobAction({ storage: storage(), nav: navigator, fetch: fetchFn(), loadNear }, {
         method: "create",
         args: { seller: DEMO_SELLER, commit_hash: seal.commit_hash, pack_id: seal.pack_id },
         depositYocto: quote.quoteYocto,
         seal: { K: seal.K, salt: seal.salt },
-        onSigned: (h) => {
-          setCreateTx(h);
-          const p = run.current?.createSubmitted(h, quote.quoteYocto);
-          if (p?.ok) setCreateBus(p.seq);
-        },
+        onSigned: (h) => { signed = h; setCreateTx(h); },
       });
+      submitted(signed);
       refreshBuyer();
       await afterCreate(r.job, r.parsed, true);
     } catch (err) {
+      // review L-6: tx_submitted only for a tx that reached testnet (not for NOT_SENT or a refusal before signing)
+      if (err instanceof AccountError && (err.code === "SEND_UNCONFIRMED" || err.code === "CREATE_REFUSED")) submitted(signed);
       refreshBuyer();
       fail(err, err instanceof AccountError && err.code === "QUOTE_CHANGED" ? "haggle" : "lock");
     }
@@ -262,12 +269,15 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
 
   /* ---------- the accept window passed: timeout (signed through the gate), outcome from its EVENT_JSON ---------- */
   async function timeout(j: Job) {
+    setNotice(null);
     setPhase("timing_out");
     setSeller({ st: "wait", label: "accept_by passed: calling timeout", note: "refund, record unchanged" });
+    let signed: string | null = null;
     try {
       const r = await signJobAction({ storage: storage(), nav: navigator, fetch: fetchFn(), loadNear }, {
-        method: "timeout", args: { job_id: j.job_id! }, depositYocto: 0n, onSigned: (h) => { run.current?.timeoutSubmitted(h); },
+        method: "timeout", args: { job_id: j.job_id! }, depositYocto: 0n, onSigned: (h) => { signed = h; },
       });
+      if (signed) run.current?.timeoutSubmitted(signed); // review L-6: after broadcast, not before
       refreshBuyer();
       if (!r.closed) throw new AccountError("SEND_UNCONFIRMED", "the timeout landed without a closing event for this job");
       const bh = r.parsed.events.find((e) => e.event === "timeout")?.blockHash;
@@ -280,17 +290,42 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
       setPhase("timed_out");
     } catch (err) {
       refreshBuyer();
-      // The seller may have accepted in the last block (the timeout is then refused): look again.
-      if (err instanceof AccountError && err.code === "TX_REFUSED" && acceptByNs) return watch(j, null, acceptByNs);
+      if (err instanceof AccountError && err.code === "TX_REFUSED") return afterRefusedTimeout(j, err);
       fail(err, "watch");
     }
+  }
+
+  /**
+   * Review MUST-2: testnet refused the timeout. Re-read the job (never the accept_by this page held): the seller may
+   * have moved, the job may be closed, or accept_by may not have passed on chain yet; each gets its own state.
+   */
+  async function afterRefusedTimeout(j: Job, err: AccountError) {
+    const view = await readJobView(fetchFn(), j.job_id!).catch(() => undefined);
+    const head = await chainHead(fetchFn()).catch(() => null);
+    if (view === undefined || !head) return fail(new AccountError("RPC_UNAVAILABLE", "couldn't re-read the job after a refused timeout"), "watch");
+    if (view) setAcceptByNs(BigInt(view.accept_by_ns));
+    const by = acceptByRef.current ?? 0n;
+    // accepted, closed (null), or accept_by not yet passed on chain: watch again; the closing tx or the countdown decides
+    if (!view || view.status !== "open" || head.timestampNs <= by + BigInt(DEADLINE_MARGIN_MS) * 1_000_000n) return watch(j, null, by);
+    let tries = MAX_CLOSE_TRIES;
+    try { tries = loadJob(storage())?.close_txs.length ?? MAX_CLOSE_TRIES; } catch { /* corrupt: no retry */ }
+    const left = Math.max(0, MAX_CLOSE_TRIES - tries);
+    setSeller({ st: "bad", label: "Timeout refused · job still open", note: "", tx: err.txHash ?? null });
+    setNotice({
+      code: "TIMEOUT_REFUSED", retry: left > 0 ? "timeout" : undefined, title: "Testnet refused the timeout",
+      body: left > 0
+        ? `${err.failure ?? "refused"}. The job is still open and accept_by has passed, so it can time out now. ${left} of ${MAX_CLOSE_TRIES} tries left; each costs gas.`
+        : `${err.failure ?? "refused"}. This page stops after ${MAX_CLOSE_TRIES} tries so gas can't run past the cap. Your deposit stays in escrow until a timeout lands; ${lc(RECORDED_LINE)}`,
+    });
+    setPhase("error");
   }
 
   function retry(kind: Notice["retry"]) {
     setNotice(null);
     if (kind === "haggle") return void readQuote();
     if (kind === "lock") return void lock();
-    if (kind === "watch" && job?.job_id && acceptByNs) return void watch(job, null, acceptByNs);
+    if (kind === "watch" && job?.job_id && acceptByRef.current) return void watch(job, null, acceptByRef.current);
+    if (kind === "timeout" && job?.job_id) return void timeout(job); // the gate enforces MAX_CLOSE_TRIES
     // a new job: back to the pack list (a fresh seal and quote)
     setSeal(null); setQuote(null); setTape([]); setCreateTx(null); setCreateBus(null); setJob(null); setAcceptByNs(null); setClosed(null);
     setSeller({ st: "todo", label: "Seller accepts or declines", note: "—" });
@@ -444,10 +479,12 @@ function noticeOf(code: string, err: unknown, retry: Notice["retry"]): Notice {
   const e = err as AccountError | null;
   switch (code) {
     case "QUOTE_CHANGED": return { code, retry: "haggle", title: "The seller's quote moved", body: `It is ${e?.quoteYocto ? near3(e.quoteYocto, true) : "different"} now (another job changed its record since you haggled). Nothing was sent. Haggle again at the new quote.` };
-    case "CAP_REACHED": return { code, title: "Spend cap reached", body: `This job needs ${e?.budget ? near3(e.budget.needYocto, true) : "more"} NEAR (quote + gas reserve ${near3(JOB_GAS_RESERVE_YOCTO, true)}) and this account has ${e?.budget ? near3(e.budget.leftYocto) : "less"} NEAR left of its ${near3(SPEND_CAP_YOCTO)} NEAR cap, so nothing was sent. ${RECORDED_LINE}` };
+    case "CAP_REACHED": if (e?.method && e.method !== "create") return { code, title: "Spend cap reached", body: `Another ${e.method} could burn ${e?.budget ? near3(e.budget.needYocto, true) : "more"} NEAR of gas, more than this account has left of its ${near3(SPEND_CAP_YOCTO)} NEAR cap, so nothing was sent. Your deposit stays in escrow until a timeout lands. ${RECORDED_LINE}` };
+      return { code, title: "Spend cap reached", body: `This job needs ${e?.budget ? near3(e.budget.needYocto, true) : "more"} NEAR (quote + gas reserve ${near3(JOB_GAS_RESERVE_YOCTO, true)}) and this account has ${e?.budget ? near3(e.budget.leftYocto) : "less"} NEAR left of its ${near3(SPEND_CAP_YOCTO)} NEAR cap, so nothing was sent. ${RECORDED_LINE}` };
     case "NOT_SENT": return { code, retry, title: "Create didn't reach testnet", body: `Nothing moved and the reservation is released. Try again, or ${lc(RECORDED_LINE)}` };
     case "SEND_UNCONFIRMED": return { code, retry: "pick", title: "Create was sent, but no answer came back", body: "Its tx hash is saved in this browser, and the amount stays counted against your cap until the outcome is known. Reload in a minute to look it up, or watch the recorded run (real testnet data, labelled RECORDED)." };
     case "CREATE_REFUSED": return { code, retry: "pick", title: "Testnet refused the create", body: `${e?.message ?? ""}. Your deposit didn't move; only its gas was spent. Try again, or ${lc(RECORDED_LINE)}` };
+    case "RETRY_LIMIT": return { code, title: "No more timeout tries from this page", body: `This page signed ${MAX_CLOSE_TRIES} closing txs for this job and stops there, so gas can't run past the cap. Your deposit stays in escrow until a timeout lands. ${RECORDED_LINE}` };
     case "JOB_OPEN": return { code, retry: "watch", title: "A job of yours is still open", body: "Finish it first (its key and salt are in this browser). Try again to keep watching it." };
     case "ACCOUNT_KEY_MISSING": return { code, title: "This browser's key isn't on the account", body: `Nothing was sent. ${RECORDED_LINE}` };
     case "STORAGE_CORRUPT": return { code, title: "Saved job unreadable", body: `The job saved in this browser can't be read, so nothing is sent from it. ${RECORDED_LINE}` };

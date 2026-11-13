@@ -31,7 +31,7 @@ const evt = (event: string, data: Record<string, unknown>) => `EVENT_JSON:${JSON
 type SellerPlan = "accept" | "decline" | "none";
 type Sent = { method: string; receiver: string; deposit: bigint; args: Record<string, unknown>; hash: string };
 type Chain = {
-  exists: Map<string, string>; quoteMilli: bigint; rpc: "ok" | "down"; seller: SellerPlan; acceptWindowMs: number; sellerDelayMs: number;
+  exists: Map<string, string>; quoteMilli: bigint; rpc: "ok" | "down"; seller: SellerPlan; acceptWindowMs: number; sellerDelayMs: number; refuseTimeouts: number;
   sent: Sent[]; job: null | { buyer: string; price: string; commit_hash: string; pack_id: string; created: number; acceptBy: number; status: "open" | "accepted" | "closed"; moveHeight: number | null };
   txs: Map<string, unknown>; blocks: Map<string, number>; t0: number;
 };
@@ -39,7 +39,7 @@ type Chain = {
 /** The mocked testnet. Chain time = wall clock; a block every 500 ms. */
 async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<Chain> {
   const c: Chain = {
-    exists: new Map(), quoteMilli: 30n, rpc: "ok", seller: "accept", acceptWindowMs: 120_000, sellerDelayMs: 2500,
+    exists: new Map(), quoteMilli: 30n, rpc: "ok", seller: "accept", acceptWindowMs: 120_000, sellerDelayMs: 2500, refuseTimeouts: 0,
     sent: [], job: null, txs: new Map(), blocks: new Map(), t0: Date.now(), ...over,
   };
   const heightAt = (ms: number) => H0 + Math.floor((ms - c.t0) / 500);
@@ -120,6 +120,9 @@ async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<Chain> 
             job_id: JOB_ID, buyer: t.signerId, seller: args.seller, price: String(fc.deposit), excess_refunded: "0", commit_hash: args.commit_hash, pack_id: args.pack_id,
             created_at_ns: ns(created), accept_by_ns: ns(acceptBy), review_by_ns: ns(created + 420_000), reveal_deadline_ns: ns(created + 720_000),
           })], JOB_ID);
+        } else if (fc.methodName === "timeout" && c.refuseTimeouts > 0) {
+          c.refuseTimeouts--;
+          o = outcome(hash, t.signerId, now, [], null, "the job can't time out yet");
         } else if (fc.methodName === "timeout" && c.job && c.job.status === "open" && Date.now() > c.job.acceptBy) {
           c.job.status = "closed";
           o = outcome(hash, t.signerId, now, [evt("timeout", { job_id: JOB_ID, reason: "not_accepted" }), evt("refund", { job_id: JOB_ID, buyer: c.job.buyer, seller: DEMO_SELLER, amount: c.job.price, reason: "not_accepted", record: "unchanged" })]);
@@ -304,4 +307,38 @@ test("beat 2: testnet RPC down -> a clear notice and the RECORDED path; Try agai
   await notice(page).getByRole("button", { name: "Haggle again" }).click();
   await expect(step2(page)).toHaveAttribute("data-step2", "haggle");
   expect(chain.sent).toEqual([]);
+});
+
+test("review MUST-2: a refused timeout re-reads the job and offers a bounded retry (3 tries per job, then it stops)", async ({ page }) => {
+  const chain = await mockChain(page, { seller: "none", acceptWindowMs: 1500, refuseTimeouts: 99 });
+  await toStep2(page);
+  await haggleToDeal(page);
+  await page.getByRole("button", { name: "Lock 0.030 in escrow →" }).click();
+  await expect(notice(page)).toHaveAttribute("data-notice", "TIMEOUT_REFUSED", { timeout: 25_000 });
+  await expect(notice(page)).toContainText("The job is still open and accept_by has passed, so it can time out now. 2 of 3 tries left");
+  await expect(line(page, "seller")).toContainText("Timeout refused · job still open");
+  await notice(page).getByRole("button", { name: "Try again" }).click();
+  await expect(notice(page)).toContainText("1 of 3 tries left");
+  await notice(page).getByRole("button", { name: "Try again" }).click();
+  await expect(notice(page)).toContainText("This page stops after 3 tries so gas can't run past the cap");
+  await expect(notice(page).getByRole("button", { name: "Try again" })).toHaveCount(0);
+  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
+  expect(chain.sent.filter((x) => x.method === "timeout")).toHaveLength(3);
+  // every refused try's gas is inside what the cap counts (quote + gas held >= quote + gas burnt)
+  const b = await stored(page, KEY);
+  const j = await stored(page, JOB_KEY);
+  expect(BigInt(b.spent_yocto)).toBeGreaterThanOrEqual(30n * MILLI + BigInt(j.burnt_yocto));
+  expect(j.close_txs).toHaveLength(3);
+});
+
+test("review MUST-2: one refused timeout, then Try again lands it: refund from its EVENT_JSON", async ({ page }) => {
+  const chain = await mockChain(page, { seller: "none", acceptWindowMs: 1500, refuseTimeouts: 1 });
+  await toStep2(page);
+  await haggleToDeal(page);
+  await page.getByRole("button", { name: "Lock 0.030 in escrow →" }).click();
+  await expect(notice(page)).toHaveAttribute("data-notice", "TIMEOUT_REFUSED", { timeout: 25_000 });
+  await notice(page).getByRole("button", { name: "Try again" }).click();
+  await expect(notice(page)).toHaveAttribute("data-notice", "TIMED_OUT");
+  await expect(page.locator('[data-outcome="timeout_refund"]')).toBeVisible();
+  expect(chain.sent.filter((x) => x.method === "timeout")).toHaveLength(2);
 });

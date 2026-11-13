@@ -351,6 +351,10 @@ export async function withBuyerLock(nav, fn) {
 export const JOB_KEY = "earned-price.job.v1";
 /** The only methods the page may sign, with their fixed gas (cli/pick.js CREATE_GAS, cli/tx.js REVEAL_GAS / TIMEOUT_GAS). */
 export const SIGNABLE = Object.freeze({ create: CREATE_GAS, reveal: REVEAL_GAS, timeout: TIMEOUT_GAS });
+/** Hard per-job limit on timeout + reveal tries this page signs (security review MUST-1): a close that keeps failing can't burn gas forever. */
+export const MAX_CLOSE_TRIES = 3;
+/** The most gas one `method` tx can burn at the reference price (its fixed gas x 1e8 yocto/gas). */
+export const maxGasYocto = (method) => SIGNABLE[method] * GAS_PRICE_YOCTO;
 const JOB_ID_RE = /^\d{1,20}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
 const PACK_RE = /^pack-[123]$/;
@@ -537,6 +541,9 @@ export async function signJobAction(deps, req) {
       if (method === "reveal" && (job.status !== "accepted" || args.key !== job.K || args.salt !== job.salt)) {
         throw refuse("reveal sends only the key and salt this job committed, on an accepted job");
       }
+      if (job.close_txs.length >= MAX_CLOSE_TRIES) {
+        throw Object.assign(new AccountError("RETRY_LIMIT", `this page already signed ${job.close_txs.length} closing txs for job ${job.job_id}; it signs no more`), { tries: job.close_txs.length });
+      }
     }
     if (!(await keyOnAccount(fetchFn, RPC_URLS, state.account_id, state.public_key))) {
       throw new AccountError("ACCOUNT_KEY_MISSING", "this browser's key is not on the saved account");
@@ -559,6 +566,22 @@ export async function signJobAction(deps, req) {
         status: "sending", job_id: null, create_tx: null, close_txs: [],
       };
       saveJob(storage, job);
+    } else {
+      // Gas is held against the cap BEFORE it can burn (MUST-1): the job's reserve_yocto (gas held) must cover what was
+      // burnt plus the most this tx can burn. Topping it up goes through recordSpend, which refuses past the cap.
+      const held = BigInt(job.reserve_yocto);
+      const need = BigInt(job.burnt_yocto) + maxGasYocto(method);
+      if (need > held) {
+        const extra = need - held;
+        const cap = capStatus(state);
+        if (extra > cap.leftYocto) {
+          throw Object.assign(new AccountError("CAP_REACHED", `${method}'s gas would cross the spend cap`), { budget: { fits: false, needYocto: extra, ...cap }, method });
+        }
+        state = recordSpend(state, extra);
+        saveBuyer(storage, state);
+        job = { ...job, reserve_yocto: need.toString() };
+        saveJob(storage, job);
+      }
     }
     const onSigned = (txHash) => {
       job = method === "create" ? { ...job, create_tx: txHash } : { ...job, close_txs: [...job.close_txs, txHash] };
@@ -593,6 +616,16 @@ export async function signJobAction(deps, req) {
     }
     const burnt = burntOf(outcome);
     job = { ...job, burnt_yocto: (BigInt(job.burnt_yocto) + burnt).toString() };
+    if (method !== "create" || !parsed.failure) {
+      // Real gas counts at once (MUST-1): if it ran past the gas held (a gas price above 1e8), the excess is added now
+      // with recordBurn (a real tx, never refused). Held gas is released only when the job closes (settleClose).
+      const over = BigInt(job.burnt_yocto) - BigInt(job.reserve_yocto);
+      if (over > 0n) {
+        state = recordBurn(state, over);
+        saveBuyer(storage, state);
+        job = { ...job, reserve_yocto: job.burnt_yocto };
+      }
+    }
     if (method === "create") {
       if (parsed.failure) {
         // A definite refusal moved no deposit; the gas it burnt is real (recordBurn, never refused).
