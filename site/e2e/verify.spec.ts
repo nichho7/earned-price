@@ -202,12 +202,13 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
     const page = await ctx.newPage();
     await open(page);
     expect(await page.evaluate(() => scrollY), "no scroll on load").toBe(0);
-    await expect(check(page, 2)).not.toBeInViewport();
+    // No "check 2 starts off-screen" precondition: how far below the fold it sits depends on the OS fonts
+    // (Linux CI renders it 42% visible at 390x844). The rule is no scroll on load, then fully in view after Verify.
     await page.click("[data-act=tamper]");
     expect(await page.evaluate(() => scrollY), "the flip alone (no result yet) does not scroll").toBe(0);
     await page.click("[data-act=verify]");
     await expect(state(page)).toHaveAttribute("data-vf-state", "fail");
-    await expect(check(page, 2)).toBeInViewport();
+    await expect(check(page, 2)).toBeInViewport({ ratio: 1 });
     await expect(page.locator("[data-edit]")).toBeInViewport();
     await ctx.close();
     // 1280 x 800: the sheet sits beside the controls, so a run never scrolls
