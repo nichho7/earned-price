@@ -14,9 +14,18 @@
 //   sealed key, so they are shown only after the reveal).
 // - stageOf: which deadline the one countdown runs to (m001 §8): accept_by while open, review_by while accepted with no
 //   review, reveal_deadline once a review is on-chain. get_job is read only while the job is live.
+// - T-037 / review L-2: a reload mid-review loses the body (the function's answer never reached this tab, and a second
+//   POST gets job_busy / ALREADY_REVIEWED, both replay). The seller's submit_review tx carries the body as its `response`
+//   argument, so recoverReviewBody finds that tx on chain the way watchSeller finds the accept (the seller account's
+//   access-key changes, block by block) and keeps the body ONLY if its sha256 is the response_sha256 get_job shows. The
+//   gate checks the same hash again before any reveal (account.js assertReviewOnChain), so an unverified body is never
+//   revealed. Also fixes L-7: the recovered submit tx hash is kept with the body.
 // All network access and storage are injected, so the unit tests never touch the network.
 // Skills used: api-and-interface-design, security-and-hardening, karpathy-guidelines
 import { BUG_COUNT, findingsFromResponse, grade, sha256Hex } from "../../grader/grade.js";
+import { parseTxOutcome } from "../../cli/tx.js";
+import { AccountError, CONTRACT_ID, DEMO_SELLER } from "./account.js";
+import { RPC_FAILS_BEFORE_DOWN, POLL_MS, UNSEEN_ROUNDS, blockByHash, chainHead, lookupTx, sellerTxsAt } from "./job.js";
 
 export const REVIEW_URL = "/api/review";
 export const REVIEW_FN_MAX_MS = 300_000; // site-api/review.js MAX_DURATION_MS (Vercel maxDuration 300; drift test)
@@ -108,9 +117,19 @@ export async function requestReview({ fetch: fetchFn, sign, jobId, timeoutMs = R
   return down();
 }
 
-/** Keeps the review body for this job in this browser (a reload can still reveal). Best effort. */
-export function saveReviewBody(storage, jobId, responseBody) {
-  try { storage.setItem(REVIEW_KEY, JSON.stringify({ job_id: jobId, response_body: responseBody })); } catch { /* quota: the reveal just needs this tab */ }
+/** Keeps the review body (and its submit tx, when known) for this job in this browser (a reload can still reveal). Best effort. */
+export function saveReviewBody(storage, jobId, responseBody, submitTx = null) {
+  try { storage.setItem(REVIEW_KEY, JSON.stringify({ job_id: jobId, response_body: responseBody, submit_tx: hashOrNull(submitTx) })); } catch { /* quota: the reveal just needs this tab */ }
+}
+
+/** The cached submit_review tx hash for this job, or null (review L-7: a reload still links and publishes it). */
+export function loadReviewTx(storage, jobId) {
+  try {
+    const v = JSON.parse(storage.getItem(REVIEW_KEY) ?? "null");
+    return isObj(v) && v.job_id === jobId ? hashOrNull(v.submit_tx) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The cached review body for this job, or null. */
@@ -124,6 +143,7 @@ export function loadReviewBody(storage, jobId) {
 }
 
 const lcHex = (v) => (typeof v === "string" ? v.toLowerCase().replace(/^0x/, "") : null);
+const HEX64 = /^[0-9a-f]{64}$/;
 
 /** The signed review on-chain is the body this page holds (sha256 = get_job.review.response_sha256). */
 export function reviewMatches(view, responseBody) {
@@ -165,4 +185,110 @@ export function checksOf(K, findings) {
     };
   });
   return { rows, grade: g };
+}
+
+/* ---------- T-037 / review L-2: the review body from the seller's own submit_review tx ---------- */
+
+/** review_by is about 5 min after the accept (m001 §8); testnet makes about 1 block/s. Generous, still bounded. */
+export const RECOVER_MAX_BLOCKS = 900;
+
+const b64Json = (s) => {
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0))));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * One seller tx, checked as the submit_review of THIS job: signed by DEMO_SELLER, sent to CONTRACT_ID, exactly one
+ * FunctionCall `submit_review` whose args name this job_id and carry a non-empty `response` within the escrow's size
+ * limit, and the tx succeeded with this job's submit_review EVENT_JSON. Returns { responseBody, txHash } or null.
+ * The body is NOT trusted yet: recoverReviewBody compares its sha256 with get_job's, and the gate does again.
+ */
+export function submitReviewOf(outcome, jobId) {
+  const t = outcome?.transaction;
+  if (!t || t.signer_id !== DEMO_SELLER || t.receiver_id !== CONTRACT_ID) return null;
+  if (!Array.isArray(t.actions) || t.actions.length !== 1) return null;
+  const fc = t.actions[0]?.FunctionCall;
+  if (!isObj(fc) || fc.method_name !== "submit_review" || typeof fc.args !== "string") return null;
+  const args = b64Json(fc.args);
+  if (!isObj(args) || String(args.job_id) !== jobId) return null;
+  const response = args.response;
+  if (typeof response !== "string" || response === "" || new TextEncoder().encode(response).length > MAX_RESPONSE_BYTES) return null;
+  let parsed;
+  try {
+    parsed = parseTxOutcome(outcome, CONTRACT_ID);
+  } catch {
+    return null;
+  }
+  if (parsed.failure || !parsed.events.some((e) => e.event === "submit_review" && String(e.data.job_id) === jobId)) return null;
+  const txHash = hashOrNull(parsed.txHash ?? t.hash);
+  return txHash ? { responseBody: response, txHash } : null;
+}
+
+/** The height of the block that included a tx (its transaction_outcome block), or null if no RPC knows the tx. */
+export async function txHeight(fetchFn, txHash, sender) {
+  const out = await lookupTx(fetchFn, txHash, sender);
+  const bh = out?.transaction_outcome?.block_hash;
+  return typeof bh === "string" ? (await blockByHash(fetchFn, bh)).height : null;
+}
+
+/**
+ * Review L-2: finds the seller's submit_review tx for job `jobId` from block `fromHeight` on (the accept's block) and
+ * returns its `response` argument only when sha256(response) === `wantSha256` (get_job.review.response_sha256).
+ * The contract stores at most one review per job, so the first successful submit_review for this job is THE review.
+ * Resolves to
+ *   { ok: true, responseBody, txHash }
+ *   { ok: false, reason: "mismatch", txHash }   this job's submit_review whose args don't hash to the stored review:
+ *                                               a lying RPC; the body is dropped and never offered to the gate
+ *   { ok: false, reason: "not_found" }          maxBlocks scanned and no submit_review for this job
+ *   { ok: false, reason: "no_review" }          wantSha256 isn't a sha256 (get_job shows no review)
+ * Throws RPC_UNAVAILABLE after repeated failed rounds, or after UNSEEN_ROUNDS rounds stuck on a listed tx no RPC will
+ * return (review MUST-1), and an AbortError when `signal` aborts. Every round that makes no progress sleeps first.
+ */
+export async function recoverReviewBody({ fetch: fetchFn, jobId, fromHeight, wantSha256, signal, sleep, maxBlocks = RECOVER_MAX_BLOCKS, pollMs = POLL_MS }) {
+  const want = lcHex(wantSha256);
+  if (!want || !HEX64.test(want)) return { ok: false, reason: "no_review" };
+  const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const last = fromHeight + maxBlocks;
+  const seen = new Set();
+  let cursor = fromHeight;
+  let fails = 0;
+  let stalls = 0; // rounds stuck on a listed tx that no RPC returns (review MUST-1); reset when the cursor moves
+  for (;;) {
+    if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    let caughtUp = false;
+    let stalled = false;
+    try {
+      const head = await chainHead(fetchFn);
+      const to = Math.min(head.height, last);
+      scan: for (let h = cursor; h <= to; h++) {
+        if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+        for (const txHash of await sellerTxsAt(fetchFn, h)) {
+          if (seen.has(txHash)) continue;
+          const outcome = await lookupTx(fetchFn, txHash, DEMO_SELLER);
+          if (!outcome) { stalled = true; break scan; } // not executed yet (or an RPC error): this block is read again next round, after a sleep
+          seen.add(txHash);
+          const found = submitReviewOf(outcome, jobId);
+          if (!found) continue;
+          return sha256Hex(found.responseBody) === want
+            ? { ok: true, responseBody: found.responseBody, txHash: found.txHash }
+            : { ok: false, reason: "mismatch", txHash: found.txHash };
+        }
+        cursor = h + 1;
+        fails = 0; // review L-11: progress clears earlier transient errors
+        stalls = 0;
+      }
+      fails = 0;
+      if (cursor > last) return { ok: false, reason: "not_found" };
+      caughtUp = stalled || cursor > head.height;
+    } catch (err) {
+      if (err?.name === "AbortError") throw err;
+      if (++fails >= RPC_FAILS_BEFORE_DOWN) throw new AccountError("RPC_UNAVAILABLE", "testnet RPC stopped answering while the page looked for the signed review");
+      caughtUp = true;
+    }
+    if (stalled && ++stalls >= UNSEEN_ROUNDS) throw new AccountError("RPC_UNAVAILABLE", "testnet RPC keeps failing to return a seller tx while the page looks for the signed review");
+    if (caughtUp) await wait(pollMs);
+  }
 }

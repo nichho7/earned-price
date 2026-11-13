@@ -12,6 +12,10 @@
 //   review "not_configured" (T-100): the real function's answer when EARNED_LIVE_REVIEWS is off: a replay, job left open.
 // reveal is graded by the real grader against the revealed key (commit checked); a pass settles and moves the record.
 // Defaults are beat 2's: nothing changes for live-beat2.spec.ts.
+// T-037: several jobs in one run (ids 17, 18, ...), the record counts unique buyers (a repeat pass moves passes only),
+// submit_review carries its args (job_id, hashes, response) as the real tx does, a second POST for a job already under
+// review answers replay job_busy (T-028), views honour block_id (the pinned record read), and `tamperSubmitArgs` makes the
+// RPC lie about the submit tx's `response` (review L-2).
 // Skills used: webapp-testing, test-driven-development
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -51,10 +55,11 @@ export type Sent = { method: string; receiver: string; deposit: bigint; args: Re
 type Review = { model: string; request_sha256: string; response_sha256: string; signed_text: string; signature: string; signing_address: string };
 type Rec = { passes: number; fails: number; unique_buyers: number; jobs: number };
 export type Chain = {
+  nextJob: number; paid: Set<string>; reviewing: boolean; tamperSubmitArgs: boolean;
   exists: Map<string, string>; quoteMilli: bigint; rpc: "ok" | "down"; seller: SellerPlan; acceptWindowMs: number; sellerDelayMs: number; refuseTimeouts: number;
   review: ReviewPlan; reviewDelayMs: number; reviewWindowMs: number; revealWindowMs: number; findings: (key: { bugs: { file: string; line_start: number; category: string }[] }) => unknown[];
   sent: Sent[]; posts: Record<string, unknown>[]; authOk: boolean[];
-  job: null | { buyer: string; price: string; commit_hash: string; pack_id: string; created: number; acceptBy: number; status: "open" | "accepted" | "closed"; moveHeight: number | null; review: Review | null; body: string | null; acceptedAt: number | null };
+  job: null | { id: string; buyer: string; price: string; commit_hash: string; pack_id: string; created: number; acceptBy: number; status: "open" | "accepted" | "closed"; moveHeight: number | null; review: Review | null; body: string | null; acceptedAt: number | null };
   record: Rec | null; txs: Map<string, unknown>; blocks: Map<string, number>; t0: number;
 };
 
@@ -64,6 +69,7 @@ export const allFive: Chain["findings"] = (key) => key.bugs.map((b) => ({ file: 
 /** The mocked testnet. Chain time = wall clock; a block every 500 ms. */
 export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<Chain> {
   const c: Chain = {
+    nextJob: Number(JOB_ID), paid: new Set(), reviewing: false, tamperSubmitArgs: false,
     exists: new Map(), quoteMilli: 30n, rpc: "ok", seller: "accept", acceptWindowMs: 120_000, sellerDelayMs: 2500, refuseTimeouts: 0,
     review: "off", reviewDelayMs: 2500, reviewWindowMs: 420_000, revealWindowMs: 720_000, findings: allFive,
     sent: [], posts: [], authOk: [], job: null, record: null, txs: new Map(), blocks: new Map(), t0: Date.now(), ...over,
@@ -75,9 +81,9 @@ export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<
   const hashOf = (h: number) => { const x = baseEncode(sha(`block-${h}`)); c.blocks.set(x, h); return x; };
   const header = (h: number) => ({ header: { height: h, hash: hashOf(h), timestamp_nanosec: String(BigInt(timeOf(h)) * 1_000_000n) } });
   const ns = (ms: number) => String(BigInt(ms) * 1_000_000n);
-  const outcome = (hash: string, signer: string, h: number, logs: string[], value: unknown = null, failure?: string, extra: string[][] = []) => ({
+  const outcome = (hash: string, signer: string, h: number, logs: string[], value: unknown = null, failure?: string, extra: string[][] = [], actions?: unknown[]) => ({
     status: failure ? { Failure: { ActionError: { index: 0, kind: { FunctionCallError: { ExecutionError: `Smart contract panicked: ${failure}` } } } } } : { SuccessValue: Buffer.from(JSON.stringify(value)).toString("base64") },
-    transaction: { hash, signer_id: signer, receiver_id: CONTRACT_ID },
+    transaction: { hash, signer_id: signer, receiver_id: CONTRACT_ID, ...(actions ? { actions } : {}) },
     transaction_outcome: { id: hash, block_hash: hashOf(h), outcome: { executor_id: signer, logs: [], tokens_burnt: String(BURNT / 2n) } },
     receipts_outcome: [
       { id: `r${hash.slice(0, 8)}`, block_hash: hashOf(h + 1), outcome: { executor_id: CONTRACT_ID, logs, tokens_burnt: String(BURNT / 2n) } },
@@ -85,12 +91,13 @@ export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<
     ],
   });
   /** A tx the function signs now lands in the next block (a block the page has not scanned yet, as on chain). */
-  const sellerTx = (kind: string, logs: string[] | ((h: number) => string[])) => {
+  const sellerTx = (kind: string, logs: string[] | ((h: number) => string[]), actions?: unknown[]) => {
     const h = heightAt(Date.now()) + 1;
     const hash = baseEncode(sha(`seller-${kind}-${h}`));
-    c.txs.set(hash, outcome(hash, DEMO_SELLER, h, typeof logs === "function" ? logs(h) : logs));
+    c.txs.set(hash, outcome(hash, DEMO_SELLER, h, typeof logs === "function" ? logs(h) : logs, null, undefined, [], actions));
     return hash;
   };
+  const fulfil = async (route: Route, r: Parameters<Route["fulfill"]>[0]) => { try { await route.fulfill(r); } catch { /* the page reloaded: the function ran on anyway */ } };
   /** The seller's move becomes visible on chain once its block is reached. */
   const sellerTick = () => {
     const j = c.job;
@@ -99,8 +106,8 @@ export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<
     const hash = baseEncode(sha(`seller-${c.seller}-${h}`));
     if (c.txs.has(hash)) return;
     const logs = c.seller === "accept"
-      ? [evt("accept", { job_id: JOB_ID, seller: DEMO_SELLER, accepted_at_ns: ns(timeOf(h)) })]
-      : [evt("decline", { job_id: JOB_ID, seller: DEMO_SELLER, buyer: j.buyer, refunded: j.price })];
+      ? [evt("accept", { job_id: j.id, seller: DEMO_SELLER, accepted_at_ns: ns(timeOf(h)) })]
+      : [evt("decline", { job_id: j.id, seller: DEMO_SELLER, buyer: j.buyer, refunded: j.price })];
     c.txs.set(hash, outcome(hash, DEMO_SELLER, h, logs));
     j.status = c.seller === "accept" ? "accepted" : "closed";
     if (j.status === "accepted") j.acceptedAt = timeOf(h);
@@ -135,27 +142,35 @@ export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<
         return route.fulfill(ok({ mode: "replay", label: "RECORDED", reason: "not_configured", review_submitted: false, job_id: JOB_ID, job_state: "open", message: COPY.not_configured, decline_tx: null }));
       }
       const j = c.job!;
+      // T-028: one review per job. Running -> replay job_busy; landed -> 409 ALREADY_REVIEWED. Neither returns the body (L-2).
+      if (c.reviewing) return fulfil(route, ok({ mode: "replay", label: "RECORDED", reason: "job_busy", review_submitted: false, job_id: j.id, job_state: "unknown", message: "x" }));
+      if (j.review) return fulfil(route, { status: 409, contentType: "application/json", body: JSON.stringify({ mode: "error", code: "ALREADY_REVIEWED" }) });
+      c.reviewing = true;
       let acceptTx: string | null = null;
       if (j.status === "open") {
         let at = Date.now();
-        acceptTx = sellerTx("accept", (h) => { at = timeOf(h); return [evt("accept", { job_id: JOB_ID, seller: DEMO_SELLER, accepted_at_ns: ns(at) })]; });
+        acceptTx = sellerTx("accept", (h) => { at = timeOf(h); return [evt("accept", { job_id: j.id, seller: DEMO_SELLER, accepted_at_ns: ns(at) })]; });
         j.status = "accepted";
         j.acceptedAt = at;
       }
       await new Promise((r) => setTimeout(r, c.reviewDelayMs));
       if (c.review === "no_review") {
-        return route.fulfill(ok({ mode: "replay", label: "RECORDED", reason: "tee_unavailable", review_submitted: false, job_id: JOB_ID, job_state: "accepted_no_review", message: "x" }));
+        c.reviewing = false;
+        return fulfil(route, ok({ mode: "replay", label: "RECORDED", reason: "tee_unavailable", review_submitted: false, job_id: j.id, job_state: "accepted_no_review", message: "x" }));
       }
       const key = JSON.parse(readKey(j.pack_id));
       const responseBody = reviewBody(c.findings(key));
       const request_sha256 = "13".repeat(32);
       const response_sha256 = sha256Hex(responseBody);
       const review = { model: "deepseek-ai/DeepSeek-V4.1-Flash-1017", request_sha256, response_sha256, signed_text: `m:${request_sha256}:${response_sha256}`, signature: "0x" + "ab".repeat(65), signing_address: SIGNER };
-      const submitTx = sellerTx("submit", [evt("submit_review", { job_id: JOB_ID, seller: DEMO_SELLER, signed_text: review.signed_text, signature: review.signature, signing_address: SIGNER })]);
+      const args = { job_id: j.id, model: review.model, request_sha256, response_sha256, signature: review.signature, signing_address: SIGNER, response: c.tamperSubmitArgs ? responseBody.replace("findings", "findingx") : responseBody };
+      const actions = [{ FunctionCall: { method_name: "submit_review", args: Buffer.from(JSON.stringify(args)).toString("base64"), gas: 300_000_000_000_000, deposit: "0" } }];
+      const submitTx = sellerTx("submit", [evt("submit_review", { job_id: j.id, seller: DEMO_SELLER, signed_text: review.signed_text, signature: review.signature, signing_address: SIGNER })], actions);
       j.review = review;
       j.body = responseBody;
-      return route.fulfill(ok({
-        mode: "live", job_id: JOB_ID, pack_id: j.pack_id, seller: DEMO_SELLER, accept_tx: acceptTx, submit: { status: "landed", tx_hash: submitTx }, review_submitted: true,
+      c.reviewing = false;
+      return fulfil(route, ok({
+        mode: "live", job_id: j.id, pack_id: j.pack_id, seller: DEMO_SELLER, accept_tx: acceptTx, submit: { status: "landed", tx_hash: submitTx }, review_submitted: true,
         review: { findings: c.findings(key), response_body: responseBody, request_body: "{}", tee: { signing_address: SIGNER } },
       }));
     });
@@ -198,37 +213,40 @@ export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<
         if (fc.methodName === "create") {
           const created = timeOf(now); // block time, as on chain (accept_by = block time + window)
           const acceptBy = created + c.acceptWindowMs;
-          c.job = { buyer: t.signerId, price: String(fc.deposit), commit_hash: args.commit_hash, pack_id: args.pack_id, created, acceptBy, status: "open", moveHeight: c.seller === "none" || c.review !== "off" ? null : heightAt(created + c.sellerDelayMs), review: null, body: null, acceptedAt: null };
+          const id = String(c.nextJob++);
+          c.job = { id, buyer: t.signerId, price: String(fc.deposit), commit_hash: args.commit_hash, pack_id: args.pack_id, created, acceptBy, status: "open", moveHeight: c.seller === "none" || c.review !== "off" ? null : heightAt(created + c.sellerDelayMs), review: null, body: null, acceptedAt: null };
           o = outcome(hash, t.signerId, now, [evt("create", {
-            job_id: JOB_ID, buyer: t.signerId, seller: args.seller, price: String(fc.deposit), excess_refunded: "0", commit_hash: args.commit_hash, pack_id: args.pack_id,
+            job_id: id, buyer: t.signerId, seller: args.seller, price: String(fc.deposit), excess_refunded: "0", commit_hash: args.commit_hash, pack_id: args.pack_id,
             created_at_ns: ns(created), accept_by_ns: ns(acceptBy), review_by_ns: ns(created + c.reviewWindowMs), reveal_deadline_ns: ns(created + c.revealWindowMs),
-          })], JOB_ID);
+          })], id);
         } else if (fc.methodName === "timeout" && c.refuseTimeouts > 0) {
           c.refuseTimeouts--;
           o = outcome(hash, t.signerId, now, [], null, "the job can't time out yet");
         } else if (fc.methodName === "timeout" && j && j.status === "open" && Date.now() > j.acceptBy) {
           j.status = "closed";
-          o = outcome(hash, t.signerId, now, [evt("timeout", { job_id: JOB_ID, reason: "not_accepted" }), evt("refund", { job_id: JOB_ID, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, reason: "not_accepted", record: "unchanged" })]);
+          o = outcome(hash, t.signerId, now, [evt("timeout", { job_id: j.id, reason: "not_accepted" }), evt("refund", { job_id: j.id, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, reason: "not_accepted", record: "unchanged" })]);
         } else if (fc.methodName === "timeout" && j && j.status === "accepted" && !j.review && late(c.reviewWindowMs)) {
           j.status = "closed";
           const r = rec();
           c.record = { ...r, fails: r.fails + 1, jobs: r.jobs + 1 };
-          o = outcome(hash, t.signerId, now, [evt("timeout", { job_id: JOB_ID, reason: "no_review" }), evt("refund", { job_id: JOB_ID, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, reason: "no_review", record: "fail" })]);
+          o = outcome(hash, t.signerId, now, [evt("timeout", { job_id: j.id, reason: "no_review" }), evt("refund", { job_id: j.id, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, reason: "no_review", record: "fail" })]);
         } else if (fc.methodName === "timeout" && j && j.status === "accepted" && j.review && late(c.revealWindowMs)) {
           j.status = "closed";
-          o = outcome(hash, t.signerId, now, [evt("timeout", { job_id: JOB_ID, reason: "no_reveal" })], null, undefined, [[evt("payout", { job_id: JOB_ID, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, kind: "timeout" })]]);
+          o = outcome(hash, t.signerId, now, [evt("timeout", { job_id: j.id, reason: "no_reveal" })], null, undefined, [[evt("payout", { job_id: j.id, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, kind: "timeout" })]]);
         } else if (fc.methodName === "reveal" && j && j.status === "accepted" && j.review && !late(c.revealWindowMs)
           && sha256Hex(args.response) === j.review.response_sha256 && commit(JSON.parse(args.key), args.salt) === j.commit_hash) {
           const g = grade(JSON.parse(args.key), findingsFromResponse(args.response));
           j.status = "closed";
           const r = rec();
-          const revealLog = evt("reveal", { job_id: JOB_ID, buyer: j.buyer, seller: DEMO_SELLER, pack_id: j.pack_id, found: g.found, total: g.total, pass_min: g.pass_min, passed: g.passed, matched: g.matched.map((m: { bug: string }) => m.bug), missed: g.missed, false_positives: g.false_positives, error: g.error ?? null, outcome: g.passed ? "pass" : "fail" });
+          const revealLog = evt("reveal", { job_id: j.id, buyer: j.buyer, seller: DEMO_SELLER, pack_id: j.pack_id, found: g.found, total: g.total, pass_min: g.pass_min, passed: g.passed, matched: g.matched.map((m: { bug: string }) => m.bug), missed: g.missed, false_positives: g.false_positives, error: g.error ?? null, outcome: g.passed ? "pass" : "fail" });
           if (g.passed) {
-            c.record = { passes: r.passes + 1, fails: r.fails, unique_buyers: r.unique_buyers + 1, jobs: r.jobs + 1 };
-            o = outcome(hash, t.signerId, now, [revealLog], null, undefined, [[evt("payout", { job_id: JOB_ID, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, kind: "settle" })]]);
+            // the contract's record_pass: unique_buyers rises only on a buyer's first paid pass with this seller
+            c.record = { passes: r.passes + 1, fails: r.fails, unique_buyers: r.unique_buyers + (c.paid.has(j.buyer) ? 0 : 1), jobs: r.jobs + 1 };
+            c.paid.add(j.buyer);
+            o = outcome(hash, t.signerId, now, [revealLog], null, undefined, [[evt("payout", { job_id: j.id, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, kind: "settle" })]]);
           } else {
             c.record = { ...r, fails: r.fails + 1, jobs: r.jobs + 1 };
-            o = outcome(hash, t.signerId, now, [revealLog, evt("refund", { job_id: JOB_ID, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, reason: "grade_fail", record: "fail" })]);
+            o = outcome(hash, t.signerId, now, [revealLog, evt("refund", { job_id: j.id, buyer: j.buyer, seller: DEMO_SELLER, amount: j.price, reason: "grade_fail", record: "fail" })]);
           }
         } else {
           o = outcome(hash, t.signerId, now, [], null, "not allowed");
@@ -247,13 +265,15 @@ export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<
       if (params.method_name === "get_record") value = rec();
       else if (params.method_name === "get_job") {
         const j = c.job;
-        value = j && j.status !== "closed" ? {
-          id: JOB_ID, buyer: j.buyer, seller: DEMO_SELLER, price: j.price, commit_hash: j.commit_hash, pack_id: j.pack_id, status: j.status,
+        const asked = params.args_base64 ? String(JSON.parse(Buffer.from(params.args_base64, "base64").toString()).id) : null;
+        value = j && j.status !== "closed" && (asked === null || asked === j.id) ? {
+          id: j.id, buyer: j.buyer, seller: DEMO_SELLER, price: j.price, commit_hash: j.commit_hash, pack_id: j.pack_id, status: j.status,
           created_at_ns: ns(j.created), accept_by_ns: ns(j.acceptBy), review_by_ns: ns(j.created + c.reviewWindowMs), reveal_deadline_ns: ns(j.created + c.revealWindowMs),
           accepted_at_ns: j.acceptedAt ? ns(j.acceptedAt) : null, review: j.review,
         } : null;
       } else value = String((c.record ? BigInt(quoteOf(c.record)) : c.quoteMilli) * MILLI);
-      return route.fulfill(rpcOk({ result: enc(value), block_hash: hashOf(now), block_height: now, logs: [] }));
+      // a view pinned to a block (block_id) answers for that block (the mock's state is the latest; T-037 pinned record read)
+      return route.fulfill(rpcOk({ result: enc(value), block_hash: typeof params.block_id === "string" ? params.block_id : hashOf(now), block_height: now, logs: [] }));
     });
   }
   return c;

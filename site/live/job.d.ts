@@ -23,8 +23,10 @@ export type SellerResult =
 
 export function sealPack(key: unknown, randomBytes: (n: number) => Uint8Array): { pack_id: string; K: string; salt: string; commit_hash: string };
 export function readQuoteFull(fetchFn: FetchFn): Promise<FullQuote>;
+export function readRecordAt(fetchFn: FetchFn, blockHash: string, jobId: string): Promise<FullQuote | null>;
 export function readJobView(fetchFn: FetchFn, jobId: string): Promise<JobView | null>;
 export function chainHead(fetchFn: FetchFn): Promise<Head>;
+export function finalHead(fetchFn: FetchFn): Promise<Head>;
 export function blockByHash(fetchFn: FetchFn, hash: string): Promise<Head>;
 export function sellerTxsAt(fetchFn: FetchFn, height: number): Promise<string[]>;
 export function lookupTx(fetchFn: FetchFn, txHash: string, sender: string): Promise<unknown | null>;

@@ -6,6 +6,8 @@
 // from its closing tx's EVENT_JSON (cli/tx.js outcomeOf), never from get_job. Every observed tx outcome is published
 // on the typed bus through site/live/live-bus.ts (one moment = one publish, one t_ms).
 // Values and copy: m001-ui-contract §2-3, §8; t017 design-spec screens 1-2 and the §8 copy rows. Tokens only.
+// T-037: `beat={4}` is step 4's hire: pack 3 again, same buyer, at the seller's live quote (no haggle: the quote is the
+// price, design spec screen 6 `default`). The same gate, seal, create, accept watch and timeout as step 2.
 // Skills used: frontend-ui-engineering, security-and-hardening, incremental-implementation, karpathy-guidelines
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -36,6 +38,7 @@ type SellerLine = { st: "todo" | "wait" | "ok" | "bad"; label: string; note: str
 const RECORDED_HREF = "/";
 const MIN_OFFER_MILLI = 5;
 const CAP_MILLI = Number(SPEND_CAP_YOCTO / 10n ** 21n);
+const HEAD4: Partial<Record<Phase, string>> = { pick: "Again.", quote: "Again.", haggle: "Again.", deal: "Again.", locking: "Locking." };
 const HEAD: Record<Phase, string> = {
   pick: "Pick an exam job.", quote: "Haggle.", haggle: "Haggle.", deal: "Deal.", locking: "Locking.", waiting: "Committed.",
   accepted: "Seller accepted.", declined: "Declined.", timing_out: "Timed out.", timed_out: "Timed out.", unseen: "Closed.", error: "Not locked.", cap: "Cap reached.",
@@ -51,16 +54,19 @@ type Beat2Props = {
   onCreated?: (job: Job, run: LiveRun | null) => void;
   /** T-036: the seller's accept was seen on chain: step 3 opens. */
   onAccepted?: (job: Job, run: LiveRun | null) => void;
+  /** T-037: 2 (pick and haggle, default) or 4 (pack 3 again at the live quote). */
+  beat?: 2 | 4;
 };
 
-export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat2Props) {
+export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted, beat = 2 }: Beat2Props) {
+  const four = beat === 4;
   const store = useRef<KV | null>(null);
   const run = useRef<LiveRun | null>(null);
   const abort = useRef<AbortController | null>(null);
   const headRef = useRef<HTMLHeadingElement>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<Phase>("pick");
-  const [packId, setPackId] = useState("2");
+  const [packId, setPackId] = useState(four ? "3" : "2");
   const [seal, setSeal] = useState<ReturnType<typeof sealPack> | null>(null);
   const [quote, setQuote] = useState<FullQuote | null>(null);
   const [tape, setTape] = useState<Tape[]>([]);
@@ -106,7 +112,7 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
   useEffect(() => {
     let j: Job | null = null;
     try { j = loadJob(storage()); } catch { setNotice(noticeOf("STORAGE_CORRUPT", null, undefined)); setPhase("error"); return; }
-    if (!jobIsLive(j)) return;
+    if (!jobIsLive(j)) { if (four) void sealAndHaggle(); return; } // step 4 starts at once: seal pack 3, read the quote
     (async () => {
       let cur = j!;
       if (cur.status === "sending" || cur.status === "unconfirmed") cur = (await reconcileCreate({ storage: storage(), nav: navigator, fetch: fetchFn() })) ?? cur;
@@ -138,7 +144,8 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
 
   /* ---------- 1. pick + seal ---------- */
   async function sealAndHaggle() {
-    const pack = packs.find((p) => p.id === packId)!;
+    const pack = packs.find((p) => p.id === (four ? "3" : packId))!;
+    if (!pack.hashOk) { setNotice(noticeOf("UNEXPECTED", null, "pick")); setPhase("error"); return; }
     const sealed = sealPack(pack.key, randomBytes);
     setSeal(sealed);
     await readQuote(sealed.pack_id);
@@ -156,6 +163,11 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
       setTape([{ who: "SELLER", kind: "quote", milli: q.quoteMilli }]);
       run.current = liveRun(LIVE_BUS, { buyer: buyer.account_id, contract: CONTRACT_ID, seller: DEMO_SELLER, pack_id });
       run.current.quote({ record: q.record, quoteMilli: q.quoteMilli, formula: formulaLine(q.record) });
+      if (four) { // step 4: the live quote is the price (no haggle); the buyer locks it
+        setTape([{ who: "SELLER", kind: "quote", milli: q.quoteMilli }, { who: "SELLER", kind: "deal", milli: q.quoteMilli }]);
+        setPhase("deal");
+        return;
+      }
       setPhase("haggle");
     } catch (err) { fail(err, "haggle"); }
   }
@@ -340,6 +352,7 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
     // a new job: back to the pack list (a fresh seal and quote)
     setSeal(null); setQuote(null); setTape([]); setCreateTx(null); setCreateBus(null); setJob(null); setAcceptByNs(null); setClosed(null);
     setSeller({ st: "todo", label: "Seller accepts or declines", note: "—" });
+    if (four) return void sealAndHaggle();
     setPhase("pick");
   }
 
@@ -348,17 +361,22 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
   const pass = phase === "accepted";
   const priceMilli = quote?.quoteMilli ?? (job ? Number(BigInt(job.price_yocto) / 10n ** 21n) : null);
   const committed = Boolean(job?.job_id);
+  const head = (four && HEAD4[phase]) || HEAD[phase];
+  const headId = four ? "hire4-head" : "step2-head";
 
   return (
-    <section className={`${s.live} ${b.step}`} aria-labelledby="step2-head" data-step2={phase}>
+    <section className={`${s.live} ${b.step}`} aria-labelledby={headId} {...(four ? { "data-hire4": phase } : { "data-step2": phase })}>
       <div className={s.left}>
         <div className={s.top}>
-          <span className={s.kick}>Step 2 · Pick &amp; haggle</span>
+          <span className={s.kick}>{four ? "Step 4 · Repeat buyer" : <>Step 2 · Pick &amp; haggle</>}</span>
           <span className={s.chip} data-chip="live">TESTNET · LIVE</span>
         </div>
-        <h2 id="step2-head" className={s.head} tabIndex={-1} ref={headRef}>{HEAD[phase]}</h2>
-        <p className="sr" role="status" aria-live="polite">{`Step 2: ${HEAD[phase]}${pass ? " step 2 PASS" : ""}`}</p>
-        {phase === "pick" && (
+        <h2 id={headId} className={s.head} tabIndex={-1} ref={headRef}>{head}</h2>
+        <p className="sr" role="status" aria-live="polite">{four ? `Step 4: ${head}${pass ? " seller accepted" : ""}` : `Step 2: ${head}${pass ? " step 2 PASS" : ""}`}</p>
+        {four && (phase === "pick" || phase === "quote") && (
+          <p className={s.lede}>Hire the same seller again, for pack 3, from the same account. The seller is reading its record for the quote.</p>
+        )}
+        {!four && phase === "pick" && (
           <>
             <p className={s.lede}>Each pack is about 150 lines of Python with 5 planted bugs. The answer key is sealed: its hash goes into escrow before the seller sees the code, so nobody can move the goalposts.</p>
             <div className={b.packs} role="radiogroup" aria-label="Exam packs">
@@ -394,7 +412,12 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
         )}
         {(phase === "deal" || phase === "locking") && (
           <>
-            <p className={s.lede}>Pay into escrow. The grade decides where it goes.</p>
+            {four
+              ? <>
+                <p className={s.lede}>Hire again for pack 3 at the seller&apos;s quote. The grade decides where your {priceMilli !== null ? formatMilli(priceMilli) : "deposit"} goes, and what the quote does next.</p>
+                {quote && <p className={s.fine} data-line="repeat-buyer">Repeat buyer: the same account as step 3 · unique buyers so far: {quote.record.unique_buyers}</p>}
+              </>
+              : <p className={s.lede}>Pay into escrow. The grade decides where it goes.</p>}
             <ul className={b.rules}>
               <li>The seller accepts or declines first. A decline refunds you at once.</li>
               <li>No valid reveal by the deadline? A signed review on-chain still pays the seller.</li>
@@ -403,7 +426,7 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
             </ul>
             <div className={s.ctas}>
               <button type="button" className={s.primary} onClick={lock} disabled={phase === "locking"} aria-busy={phase === "locking"} data-act="lock">
-                {phase === "locking" ? "Locking…" : `Lock ${priceMilli !== null ? formatMilli(priceMilli) : ""} in escrow →`}
+                {phase === "locking" ? "Locking…" : four ? `Hire for pack 3 at ${priceMilli !== null ? formatMilli(priceMilli) : ""} →` : `Lock ${priceMilli !== null ? formatMilli(priceMilli) : ""} in escrow →`}
               </button>
             </div>
             <p className={s.fine}>Gas reserve {near3(JOB_GAS_RESERVE_YOCTO, true)} ({GAS_RESERVE_BASIS}), counted against the cap until the job closes.</p>
@@ -424,7 +447,7 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
         <div className={`${s.paper} sheet`}>
           <div className={s.rc}>
             <div className={s.rtop}>
-              <span><b>Step 2 · Pick &amp; haggle</b><small>seller {DEMO_SELLER}</small></span>
+              <span><b>{four ? "Step 4 · Hire again" : <>Step 2 · Pick &amp; haggle</>}</b><small>seller {DEMO_SELLER}</small></span>
               <span>pack {pack.id}</span>
             </div>
             <div className={s.proc} aria-live="polite">
@@ -444,8 +467,8 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat
                 href={seller.tx ? txUrl(seller.tx) : undefined} hrefText={seller.tx ? `tx ${shortHash(seller.tx)}` : undefined} bus={seller.bus ?? null} countdown={phase === "waiting"} />
             </div>
             <div className={s.sum} data-line="sum">
-              <span>step 2</span>
-              <b>{pass ? "PASS" : phase === "declined" || phase === "timed_out" ? "refunded" : phase === "error" || phase === "cap" || phase === "unseen" ? "not passed" : "—"}</b>
+              <span>{four ? "step 4 · hire" : "step 2"}</span>
+              <b>{pass ? (four ? "accepted" : "PASS") : phase === "declined" || phase === "timed_out" ? "refunded" : phase === "error" || phase === "cap" || phase === "unseen" ? "not passed" : "—"}</b>
             </div>
             {closed && <p className={b.outcome} data-outcome={closed.o.kind}>{closed.o.line}</p>}
             {notice && (
