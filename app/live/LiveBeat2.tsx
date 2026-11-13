@@ -241,9 +241,10 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
       } else if (r.kind === "declined") {
         const res = await recordJobClosed({ storage: storage(), nav: navigator }, r.closed, r.parsed.txHash);
         onBuyer(res.buyer);
-        run.current?.closed("declined"); // no schema-v1 shape yet (T-038 fix round)
+        const block = r.blockHash ? await blockByHash(fetchFn(), r.blockHash).catch(() => null) : null;
+        const p = run.current?.declined(r.parsed, block, r.closed.refundYocto ?? j.price_yocto);
         setClosed({ o: r.closed, tx: r.parsed.txHash });
-        setSeller({ st: "bad", label: "Seller declined · refund", note: "", tx: r.parsed.txHash });
+        setSeller({ st: "bad", label: "Seller declined · refund", note: "", tx: r.parsed.txHash, bus: p?.ok ? p.seq : null });
         setNotice({ code: "DECLINED", title: "The seller declined", body: `Your ${near3(BigInt(j.price_yocto), true)} came back in the same transaction. A declined job doesn't change the seller's record.`, retry: "pick" });
         setPhase("declined");
       } else if (r.kind === "deadline") {
@@ -264,12 +265,17 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
     setPhase("timing_out");
     setSeller({ st: "wait", label: "accept_by passed: calling timeout", note: "refund, record unchanged" });
     try {
-      const r = await signJobAction({ storage: storage(), nav: navigator, fetch: fetchFn(), loadNear }, { method: "timeout", args: { job_id: j.job_id! }, depositYocto: 0n });
+      const r = await signJobAction({ storage: storage(), nav: navigator, fetch: fetchFn(), loadNear }, {
+        method: "timeout", args: { job_id: j.job_id! }, depositYocto: 0n, onSigned: (h) => { run.current?.timeoutSubmitted(h); },
+      });
       refreshBuyer();
       if (!r.closed) throw new AccountError("SEND_UNCONFIRMED", "the timeout landed without a closing event for this job");
-      run.current?.closed(r.closed.kind);
+      const bh = r.parsed.events.find((e) => e.event === "timeout")?.blockHash;
+      const block = bh ? await blockByHash(fetchFn(), bh).catch(() => null) : null;
+      // v1.1 has a shape only for the not_accepted refund; any other close is shown from its EVENT_JSON, not published
+      const p = r.closed.kind === "timeout_refund" ? run.current?.timedOut(r.parsed, block, r.closed.refundYocto ?? j.price_yocto) : null;
       setClosed({ o: r.closed, tx: r.parsed.txHash });
-      setSeller({ st: "bad", label: "Timed out · refund", note: "", tx: r.parsed.txHash });
+      setSeller({ st: "bad", label: "Timed out · refund", note: "", tx: r.parsed.txHash, bus: p?.ok ? p.seq : null });
       setNotice({ code: "TIMED_OUT", title: "The seller didn't accept in time", body: `${r.closed.line} Nothing else moved.`, retry: "pick" });
       setPhase("timed_out");
     } catch (err) {

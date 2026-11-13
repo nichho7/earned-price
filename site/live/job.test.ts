@@ -159,8 +159,14 @@ const createParsed = parseTxOutcome({ status: { SuccessValue: "" }, transaction:
 })] } }] }, CONTRACT_ID);
 const acceptParsed = parseTxOutcome(sellerTx(H(2), [acceptLog()]), CONTRACT_ID);
 
-/** Runs a full beat-2 sequence through `bus`, with a clock that can stand still (two moments in one ms). */
-function beat2(bus: BusLike) {
+const PRICE = "30000000000000000000000";
+const declineParsed = parseTxOutcome(sellerTx(H(3), [ev("decline", { job_id: "7", seller: DEMO_SELLER, buyer: BUYER, refunded: PRICE })]), CONTRACT_ID);
+const timeoutParsed = parseTxOutcome({ status: { SuccessValue: "" }, transaction: { hash: H(4) }, receipts_outcome: [{ block_hash: "b", outcome: { executor_id: CONTRACT_ID, logs: [
+  ev("timeout", { job_id: "7", reason: "not_accepted" }), ev("refund", { job_id: "7", buyer: BUYER, seller: DEMO_SELLER, amount: PRICE, reason: "not_accepted" }),
+] } }] }, CONTRACT_ID);
+
+/** Runs a full beat-2 sequence through `bus` (closing by accept, decline or timeout), with a clock that can stand still. */
+function beat2(bus: BusLike, close: "accept" | "decline" | "timeout" = "accept") {
   let t = 1_000;
   const clock = () => t;
   const run = liveRun(bus, { buyer: BUYER, contract: CONTRACT_ID, seller: DEMO_SELLER, pack_id: "pack-2" }, clock);
@@ -169,7 +175,13 @@ function beat2(bus: BusLike) {
   t += 1200;
   out.push(run.createConfirmed(createParsed, { height: 277368595, timestampNs: 1794489856066800093n }));
   t += 5000;
-  out.push(run.accepted(acceptParsed, { height: 277368604, timestampNs: 1794489861442459754n }, "1794489860965883335"));
+  if (close === "accept") out.push(run.accepted(acceptParsed, { height: 277368604, timestampNs: 1794489861442459754n }, "1794489860965883335"));
+  if (close === "decline") out.push(run.declined(declineParsed, { height: 277368604, timestampNs: 1794489861442459754n }, PRICE));
+  if (close === "timeout") {
+    out.push(run.timeoutSubmitted(H(4)));
+    t += 1200;
+    out.push(run.timedOut(timeoutParsed, { height: 277368700, timestampNs: 1794489980000000000n }, PRICE));
+  }
   return { run, out };
 }
 
@@ -191,13 +203,20 @@ test("bus adapter: quote, tx_submitted, tx_confirmed(create), tx_confirmed(accep
   assert.equal(bus.headers[0].buyer, BUYER);
 });
 
-test("bus adapter: decline / timeout outcomes are NOT guessed into schema v1 (pending the T-038 fix round)", () => {
-  const bus = pendingBus();
-  const { run } = beat2(bus);
-  const r = run.closed("timeout_refund");
-  assert.equal(r.ok, false);
-  assert.match(r.ok ? "" : r.pending ?? "", /T-038/);
-  assert.equal(bus.batches.length, 4);
+test("bus adapter: decline and timeout publish the v1.1 shapes (t-038-chart e64bfeb): tx_confirmed + settled at the closing tx's moment", () => {
+  for (const close of ["decline", "timeout"] as const) {
+    const bus = pendingBus();
+    const { out } = beat2(bus, close);
+    assert.ok(out.every((r) => r.ok));
+    const last = bus.batches.at(-1)! as { type: string; tx_hash: string; t_ms: number; data: Record<string, unknown> }[];
+    assert.deepEqual(last.map((e) => e.type), ["tx_confirmed", "settled"]);
+    assert.equal(new Set(last.map((e) => e.t_ms)).size, 1, "one publish = one t_ms");
+    assert.equal(last[0].tx_hash, last[1].tx_hash, "settled carries its closing tx");
+    assert.equal(last[0].data.action, close);
+    assert.deepEqual(last[1].data, { outcome: "refunded_buyer", amount_mnear: 30, to: BUYER, reason: close === "decline" ? "decline" : "not_accepted", record_change: "none", grade: null });
+    if (close === "timeout") assert.deepEqual(bus.batches.at(-2)!.map((e) => [e.type, (e as { data: { action: string } }).data.action]), [["tx_submitted", "timeout"]]);
+    assert.equal(bus.headers[0].version, 1.1);
+  }
 });
 
 const realBus = new URL("../bus/bus.ts", import.meta.url);
@@ -207,4 +226,9 @@ test("bus adapter against T-038's real bus (runs once site/bus/bus.ts is on this
   const { out } = beat2(bus);
   assert.deepEqual(out.map((r) => r.ok), [true, true, true, true], JSON.stringify(out));
   assert.equal(bus.runs[0].events.length, 5);
+  for (const close of ["decline", "timeout"] as const) {
+    const b = createBus();
+    const r = beat2(b, close).out;
+    assert.ok(r.every((x) => x.ok), `${close}: ${JSON.stringify(r)}`);
+  }
 });

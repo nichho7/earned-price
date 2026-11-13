@@ -247,6 +247,7 @@ test("beat 2: the seller declines -> the outcome comes from the decline tx, the 
   await expect(notice(page)).toContainText("Your 0.030 came back in the same transaction. A declined job doesn't change the seller's record.");
   await expect(page.locator('[data-outcome="declined"]')).toBeVisible();
   await expect(line(page, "seller")).toContainText("Seller declined · refund");
+  await expect(line(page, "seller")).toHaveAttribute("data-bus-seq", "3"); // tx_confirmed(decline) + settled(decline), one publish
   await expect(line(page, "sum")).toContainText("refunded");
   await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
   expect((await stored(page, JOB_KEY)).status).toBe("closed");
@@ -265,6 +266,7 @@ test("beat 2: nobody accepts by accept_by -> the page calls timeout through the 
   await expect(notice(page)).toHaveAttribute("data-notice", "TIMED_OUT", { timeout: 25_000 });
   await expect(page.locator('[data-outcome="timeout_refund"]')).toContainText("Timed out: the seller did not accept by accept_by. You were refunded; the seller's record is unchanged.");
   await expect(line(page, "seller")).toContainText("Timed out · refund");
+  await expect(line(page, "seller")).toHaveAttribute("data-bus-seq", "4"); // tx_submitted(timeout) 3, then tx_confirmed + settled(not_accepted)
   const t = chain.sent.find((s) => s.method === "timeout")!;
   expect(t).toMatchObject({ receiver: CONTRACT_ID, deposit: 0n, args: { job_id: JOB_ID } });
   await expect(line(page, "seller").getByRole("link")).toHaveAttribute("href", `https://testnet.nearblocks.io/txns/${t.hash}`);
