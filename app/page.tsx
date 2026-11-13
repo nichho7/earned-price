@@ -1,34 +1,28 @@
-// [CTO] T-033 / S-028 · `/`: the RECORDED replay page. The server renders the FINAL state of both runs
-// (works with no JS; crawlers read it); M1 then replays the recorded testnet events step by step on top.
+// [CTO] T-033 / S-028 / T-098 · `/`: the home explainer (A-032). The server renders the FINAL state of every section,
+// the recorded run included (works with no JS; crawlers read it); site/home/motion.ts then replays the recorded testnet
+// events on top. Data: site/data/recorded/run-{1,2}.json (via RUNS) and site/data/hero.json, never typed by hand.
+import type { Metadata } from "next";
 import { RUNS } from "../site/data/runs.ts";
 import { HERO } from "../site/data/hero.ts";
-import { finalModel, railStepOf } from "../site/view/model.ts";
-import { Header } from "../site/view/Header.tsx";
-import { Hero } from "../site/view/Hero.tsx";
-import { EventLog } from "../site/view/EventLog.tsx";
-import { Footer } from "../site/view/Footer.tsx";
-import { Waves } from "../site/view/icons.tsx";
-import { EarnStage } from "../site/earn/EarnStage.tsx";
+import { demoJobs } from "../site/home/jobs.ts";
+import { Home } from "../site/home/Home.tsx";
+import { SPEND_CAP_NEAR } from "../site/live/account.js";
+import "../site/home/home.css";
 
 export const dynamic = "force-static";
 
+export const metadata: Metadata = {
+  title: "Earned Price: pay AI agents only when their work passes",
+  description:
+    "Pay an AI agent through escrow on NEAR, only if it passes a small exam; its public track record sets its price. Working demo on NEAR testnet, test tokens only.",
+};
+
+// Only a real https GitHub repo URL is ever linked (T-085 rule); empty until the public flip.
+const repo = process.env.REPO_URL ?? "";
+const REPO_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/.test(repo) ? repo : "";
+
 export default function Page() {
-  const model = finalModel(RUNS);
-  const last = model.last.fixture;
-  return (
-    <div id="app">
-      <div className="pg" data-placeholder={model.placeholder ? "true" : "false"}>
-        <Waves className="waves" n={5} y0={40} gap={26} amp={10} viewH={200} />
-        <div className="layer">
-          <Header railStep={railStepOf(last)} placeholder={model.placeholder} />
-          <main>
-            <Hero hero={HERO} />
-            <EarnStage runs={RUNS} repoUrl={process.env.REPO_URL ?? ""} />
-            <EventLog runs={model.runs} count={model.eventCount} />
-          </main>
-          <Footer last={last} placeholder={model.placeholder} />
-        </div>
-      </div>
-    </div>
-  );
+  const jobs = demoJobs(RUNS);
+  const recordedAt = RUNS[0].events[0].at ?? "";
+  return <Home hero={HERO} jobs={jobs} repoUrl={REPO_URL} capNear={SPEND_CAP_NEAR} recordedAt={recordedAt} />;
 }
