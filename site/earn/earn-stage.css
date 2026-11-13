@@ -210,6 +210,12 @@ html.ep-js .ep:not([data-ep-mounted]){opacity:0;animation:ep-failsafe 1ms linear
 .ep .cmeta{margin-top:var(--s3);font:400 var(--fs-row)/1.7 var(--mono);color:var(--cream-2)}
 .ep .cmeta b{color:var(--cream);font-weight:500}
 .ep .cmeta .lnk{color:var(--cream)}
+/* T-091 (S-016 AC5): the keyless label (Designer t085-qa-loop1 §4) and the /verify link. A plain <a>, never next/link,
+   so /verify loads as a full document under its own CSP (security t039-2 I-3). Styled like /verify's back link. */
+.ep .cls .try{margin:0 0 var(--s2)}
+.ep .vfy{margin:calc(var(--shadow-print-y) + var(--s2)) 0 0;font:400 var(--fs-micro)/1.7 var(--mono);color:var(--cream-2)}
+.ep .vfy .lnk{font-weight:500;letter-spacing:.06em;color:var(--cream)}
+.ep .vfy span{display:block;margin-top:var(--s1)}
 
 /* takeover: full-viewport postal-cancel waves, pass only, played by WAAPI. The layer itself is never
    animated (M-5): each wave is hidden at rest and its own animation shows and hides it. */
@@ -255,4 +261,44 @@ html.ep-js .ep:not([data-ep-mounted]){opacity:0;animation:ep-failsafe 1ms linear
   .ep .cls h2{font-size:var(--fs-closer-n)}
   .ep .cmd{font-size:var(--fs-data)}
   .ep .chip{padding:var(--s1) var(--s2);font-size:var(--fs-label-n)}
+}
+
+/* [CTO] T-038 / S-010 · the plain quote chart (a stage slot, left column under the run register). No motion of its own:
+   it changes only when the stage folds a new event (reduced motion crossfades the slot like any other).
+   Text is HTML so Quote and Pass % stay readable at 390 px; the SVG holds only the grid and the step line. */
+.ep .qcw{margin:var(--s5) 0 0}
+.ep .qcw>figcaption{font:500 var(--fs-label)/1 var(--mono);letter-spacing:var(--track-wide);color:var(--cream-2)}
+.ep .qc{margin-top:var(--s2);border-top:var(--hairline) solid var(--line);padding-top:var(--s3)}
+.ep .qc-figs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s4)}
+.ep .qc-figs p{margin:0;display:flex;flex-direction:column;gap:var(--s1);min-width:0}
+.ep .qc-figs small{font:500 var(--fs-label)/1 var(--mono);letter-spacing:var(--track-label);color:var(--cream-2)}
+.ep .qc-figs b{font:400 var(--fs-record)/1 var(--serif);font-variant-numeric:tabular-nums;color:var(--cream)}
+.ep .qc-figs span{font:400 var(--fs-row)/1.4 var(--mono);color:var(--cream-2)}
+.ep .qc-plot{display:grid;grid-template-columns:44px minmax(0,1fr);margin-top:var(--s4)}
+.ep .qc-y{position:relative;height:150px}
+.ep .qc-y span{position:absolute;right:var(--s2);translate:0 -50%;font:400 var(--fs-micro)/1 var(--mono);font-variant-numeric:tabular-nums;color:var(--cream-2)}
+.ep .qc-y .qc-fl{color:var(--cream-2);font-style:italic}
+.ep .qc-area{position:relative;height:150px;border-left:var(--hairline) solid var(--line);border-bottom:var(--hairline) solid var(--line)}
+.ep .qc-area svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.ep .qc-grid path{fill:none;stroke:var(--line);stroke-width:1;stroke-dasharray:2 4;vector-effect:non-scaling-stroke}
+.ep .qc-floor{fill:none;stroke:var(--cream-2);stroke-width:1;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}
+.ep .qc-line{fill:none;stroke:var(--cream);stroke-width:2.5;stroke-linejoin:miter;vector-effect:non-scaling-stroke}
+.ep .qc-pt{position:absolute;width:12px;height:12px;border-radius:50%;translate:-50% -50%;background:var(--cream);border:2px solid var(--violet)}
+.ep .qc-pt.start,.ep .qc-pt.read{background:var(--violet);border-color:var(--cream)}
+.ep .qc-pt.now{background:var(--canary)}
+.ep .qc-x{grid-column:2;list-style:none;margin:var(--s2) 0 0;padding:0;display:grid;grid-template-columns:repeat(var(--qc-slots),minmax(0,1fr))}
+.ep .qc-x li{display:flex;flex-direction:column;align-items:center;gap:2px;text-align:center;font:400 var(--fs-row)/1.35 var(--mono);color:var(--cream);min-width:0}
+.ep .qc-x li b{font-weight:500}
+.ep .qc-x li.pend,.ep .qc-x .qc-src,.ep .qc-x .qc-read{color:var(--cream-2)}
+.ep .qc-x .lnk{color:var(--cream);white-space:nowrap}
+.ep .qc-note{margin:var(--s3) 0 0;font:400 var(--fs-row)/1.45 var(--mono);color:var(--cream-2)}
+.ep .chip .att,.ep .chip .vl{white-space:nowrap}
+.ep .chip .att .lnk{color:inherit}
+@container (max-width:760px){
+  .ep .qcw{order:11}
+  .ep .qc-x li{font-size:var(--fs-row-n)}
+}
+@container (max-width:420px){
+  .ep .chip.net{display:block;white-space:normal;line-height:1.6}
+  .ep .chip.net::before{display:inline-block;vertical-align:middle;margin-right:var(--s2)}
 }

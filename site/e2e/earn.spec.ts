@@ -57,6 +57,19 @@ async function expectCloserCta(page: Page) {
   await expect(page.locator(".ep .cls")).toContainText("Price earned, not claimed.");
   await expect(page.locator(".ep .cls")).toContainText("NEAR Real-World Money");
 }
+/** T-091 / S-016 AC5: the keyless label above the command and the plain /verify link below it, both visible. */
+async function expectCloserVerify(page: Page) {
+  const cls = page.locator(".ep .cls");
+  await expect(cls.locator(".try")).toBeVisible();
+  await expect(cls.locator(".try")).toHaveText("Try it, no key:");
+  const a = cls.locator('a[href="/verify"]');
+  await expect(a).toBeVisible();
+  await expect(a).toHaveText("Verify the receipt yourself →");
+  await expect(cls.locator(".vfy span")).toHaveText("offline, in your browser · change one byte and it fails");
+  const [t, c, v] = await Promise.all([cls.locator(".try"), cls.locator(".cmd"), a].map((l) => l.boundingBox()));
+  expect(t!.y + t!.height, "label sits above the command").toBeLessThanOrEqual(c!.y + 0.5);
+  expect(v!.y, "link sits below the command").toBeGreaterThanOrEqual(c!.y + c!.height - 0.5);
+}
 const toHeadline = (page: Page) => page.locator(".ep .hd").evaluate((el) => el.scrollIntoView({ block: "start" }));
 
 /** Drives the fake clock until the timeline ends; returns every distinct snapshot in order. */
@@ -119,6 +132,7 @@ test("R7 + R1, full motion: every step is one real event group in order; odomete
   expect(seen.filter((s) => s.run === "0").every((s) => s.rail === "3")).toBe(true);
   expect(holds.rail).toBe("4");
   await expectCloserCta(page);
+  await expectCloserVerify(page);
   const props = await page.evaluate(() => [...(window as unknown as { __kf: Set<string> }).__kf]);
   expect(props.filter((p) => !R1_KEYS.has(p)), "R1: only transform / opacity / clip-path may animate").toEqual([]);
   expect(props).toEqual(expect.arrayContaining(["transform", "clipPath", "opacity"]));
@@ -144,6 +158,7 @@ test("R6 amended: OS Reduce Motion plays the same story as opacity-only crossfad
   const end = seen[seen.length - 1];
   expect([end.state, end.price, end.closer]).toEqual(["holds", "0.040 NEAR", "1"]);
   await expectCloserCta(page);
+  await expectCloserVerify(page);
   await ctx.close();
 });
 
@@ -399,9 +414,45 @@ test("honest data: real recorded run, so no PLACEHOLDER DATA chip; the network c
   await mount(page);
   await expect(page.locator('[data-chip="placeholder"]')).toHaveCount(0);
   await expect(page.locator("header [data-chip]")).toHaveCount(0);
-  await expect(page.locator('.ep [data-chip="net"]')).toHaveText("TESTNET · RECORDED");
+  await expect(page.locator('.ep [data-chip="net"]')).toContainText("TESTNET · RECORDED 12 NOV 13:25 UTC · verified live · signed review B9cC…6GpF"); // T-038: + time, signed review (B1)
   await page.locator('.ep [data-act="skip"]').click(); // the final state: every tx of run 2 on the receipt
   const links = await page.locator('.ep a.lnk[href*="nearblocks.io/txns/"]').evaluateAll((as) => as.map((a) => a.getAttribute("href")));
   expect(links.length).toBeGreaterThan(0);
   for (const h of links) expect(h).toMatch(/^https:\/\/testnet\.nearblocks\.io\/txns\/[1-9A-HJ-NP-Za-km-z]{43,44}$/);
+});
+
+for (const width of [390, 1280])
+  test(`/verify link (T-091, S-016 AC5) at ${width}: on the final frame below the command, a plain href, fits the width`, async ({ browser }) => {
+    const ctx = await browser.newContext({ viewport: { width, height: 900 } });
+    const page = await ctx.newPage();
+    await mount(page);
+    await page.locator('.ep [data-act="skip"]').click();
+    await expectCloserVerify(page);
+    const a = page.locator('.ep .cls a[href="/verify"]');
+    await expect(a).toHaveAttribute("href", "/verify");
+    const box = (await a.boundingBox())!;
+    expect(box.x, "link starts on screen").toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, "link ends on screen").toBeLessThanOrEqual(width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), "no sideways scroll").toBe(true);
+    await ctx.close();
+  });
+
+// Security t039-2 I-3: a next/link soft navigation would render /verify inside `/`'s document, which has no CSP.
+// The link must be a plain <a>: a full document load whose response carries the policy, and a fresh window.
+test("/verify link (T-091, I-3): clicking it is a full document load of /verify with the CSP header, not a client navigation", async ({ browser }) => {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await ctx.newPage();
+  await mount(page);
+  await page.locator('.ep [data-act="skip"]').click();
+  await page.evaluate(() => { (window as unknown as { __sameDoc?: number }).__sameDoc = 1; });
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => new URL(r.url()).pathname === "/verify" && r.request().resourceType() === "document"),
+    page.locator('.ep .cls a[href="/verify"]').click(),
+  ]);
+  expect(res.status()).toBe(200);
+  expect(res.headers()["content-security-policy"] ?? "", "the /verify document carries its CSP").toContain("default-src 'self'");
+  await page.waitForURL(/\/verify$/);
+  await expect(page.locator("#vf-h")).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __sameDoc?: number }).__sameDoc), "a new document, not a soft navigation").toBeUndefined();
+  await ctx.close();
 });

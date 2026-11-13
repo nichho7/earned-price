@@ -2,7 +2,15 @@
 // Rules: R1 (animated props), R4 (no wallet/RPC on /), R6 (no-JS final state, CLS 0; reduced motion is
 // the crossfade story since the 2026-11-12 amendment, see earn.spec.ts), budgets B5 (fonts as actually
 // downloaded), S-011 / S-028 AC 4 copy checks. S-028: the stage is the ported T-070 module (site/earn/).
+import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
+import { HERO } from "../data/hero.ts";
+
+// S-011: the counts and the as-of date come from the one data file, so the R-004 re-pull swaps hero.json only.
+const HERO_STRINGS = [`${HERO.agents} agents.`, `${HERO.jobs} jobs.`, `as of ${HERO.as_of_label}`];
+
+// T-040 / S-018: PRD 6 approved copy, verbatim. Also asserted in the README below (same words).
+const EXAM_LINE = "Graded jobs (exams with sealed answers) build the record; real jobs pay the earned price; buyers can supply tests, not answers.";
 
 const FORBIDDEN_HOSTS = /rpc\.(testnet|mainnet)\.near\.org|helper\.nearprotocol\.com|fastnear|lava\.build|\/api\/review/;
 
@@ -16,8 +24,12 @@ test("no-JS HTML (what crawlers get) holds the whole final state", async ({ requ
   expect(res.status()).toBe(200);
   const html = (await res.text()).replace(/<!-- -->/g, ""); // React text-node separators
   // R6 must-contain list (unchanged by the 2026-11-12 amendment)
-  for (const s of ["Holds.", "0.040", "counted once", "COUNTED ONCE", "NOT COUNTED", "Price earned, not claimed.", "node scripts/self-check.mjs", "Event log · 36 events", "647 agents.", "547 jobs.", "as of 9 Nov 2026", "NEAR Real-World Money"])
+  for (const s of ["Holds.", "0.040", "counted once", "COUNTED ONCE", "NOT COUNTED", "Price earned, not claimed.", "node scripts/self-check.mjs", "Try it, no key:", "Verify the receipt yourself →", "Event log · 36 events", ...HERO_STRINGS, "NEAR Real-World Money", EXAM_LINE])
     expect(html, `missing "${s}"`).toContain(s);
+  // T-040 / S-018 AC 2: exactly one rendered line carries the exam-vs-real sentence (scripts dropped:
+  // the RSC payload repeats every server-rendered string)
+  const markup = html.replace(/<script\b[^>]*>[^]*?<\/script>/g, "");
+  expect(markup.split(EXAM_LINE).length - 1, "exam line count").toBe(1);
   expect(html, "T-085: the CTA is README Tier 1, not an unpublished npm command").not.toContain("npx earned-price init");
   expect(html).toContain('data-stage-state="holds"');
   expect(html).toContain('data-postmark="COUNTED"');
@@ -45,6 +57,8 @@ for (const width of [390, 1280]) {
     await expect(page.locator(".ep .rep")).toBeVisible();
     await expect(page.locator(".ep .pm[data-postmark=COUNTED]")).toBeVisible();
     await expect(page.locator("[data-closer]")).toBeVisible();
+    await expect(page.locator("[data-closer] .try")).toHaveText("Try it, no key:"); // T-091
+    await expect(page.locator('[data-closer] a[href="/verify"]')).toBeVisible();
     await expect(page.locator(".ep .ep-ctl")).toBeHidden();
     await noHorizontalScroll(page);
     await ctx.close();
@@ -55,16 +69,52 @@ test("hero (Beat 1): source line is at least body size and names source + date",
   await page.goto("/");
   const src = page.locator("[data-hero-source]");
   await expect(src).toContainText("market.near.ai");
-  await expect(src).toContainText("as of 9 Nov 2026");
+  await expect(src).toContainText(`as of ${HERO.as_of_label}`);
   const px = await src.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
   expect(px).toBeGreaterThanOrEqual(16);
   await expect(page.locator("h1")).toHaveCount(1);
 });
 
-test("copy guard: no bond / slash / portable reputation wording on the page", async ({ page }) => {
-  await page.goto("/");
-  const text = await page.locator("body").innerText();
-  expect(text).not.toMatch(/\bbond|\bslash|portable reputation/i);
+test("hook (S-011 AC 1): line 1 of the copy says the record sets the price, beside the counts", async ({ browser }) => {
+  for (const width of [390, 1280]) {
+    const ctx = await browser.newContext({ javaScriptEnabled: false, viewport: { width, height: 900 } });
+    const page = await ctx.newPage();
+    await page.goto("/");
+    await expect(page.locator("h1")).toHaveText(`${HERO.agents} agents.${HERO.jobs} jobs.`);
+    const lede = page.locator("[data-beat='1'] p").first();
+    expect((await lede.innerText()).split(".")[0], `${width}px`).toBe("The record sets the price, not the seller");
+    await expect(lede).toBeInViewport();
+    await ctx.close();
+  }
+});
+
+test("exam vs real (T-040 / S-018): one body-size line on the page, the same sentence in the README", async ({ browser }) => {
+  for (const width of [390, 1280]) {
+    const ctx = await browser.newContext({ javaScriptEnabled: false, viewport: { width, height: 900 } });
+    const page = await ctx.newPage();
+    await page.goto("/");
+    const line = page.locator("[data-exam-line]");
+    await expect(line).toHaveCount(1);
+    await expect(line).toHaveText(EXAM_LINE);
+    await line.scrollIntoViewIfNeeded();
+    await expect(line).toBeVisible();
+    const px = await line.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(px, `${width}px: exam line at least body size`).toBeGreaterThanOrEqual(16);
+    await noHorizontalScroll(page);
+    await ctx.close();
+  }
+  // README "Exam jobs vs real jobs" paragraph (soft-wrapped in the file, so compare collapsed whitespace)
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  expect(readme).toContain(`**Exam jobs vs real jobs.** ${EXAM_LINE}`);
+  expect(readme).toContain("Only graded exam jobs count toward the record");
+});
+
+test("copy guard (S-011 AC 2): no bond / slash / portable reputation wording on any page", async ({ page }) => {
+  for (const path of ["/", "/verify", "/live"]) {
+    await page.goto(path);
+    const text = await page.locator("body").innerText();
+    expect(text, path).not.toMatch(/\bbond|\bslash|portable reputation/i);
+  }
 });
 
 test("on load (before the stage starts): reduced motion runs no transform animation; R1 holds for anything that animates", async ({ browser }) => {

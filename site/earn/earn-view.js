@@ -12,6 +12,7 @@ import {
   esc, num, isPh, fmtM, fmtDelta, fmtSec, mmss, quoteOf, txUrl, acctUrl, shortHash, packLabel, isSandboxRun, isTestnetRun,
   waitOf, outcomeOf, stageStateOf, headlineOf, kickerOf, railStepOf, runSummary, chipsOf, ACTIONS, EXPLORER,
 } from './earn-core.js';
+import { chartOf, chartHTML } from './earn-chart.js';
 
 const ACT = { create: 'Lock in escrow', accept: 'Seller accepts', submit_review: 'Signed review on-chain', reveal: 'Reveal key · grade · settle' };
 const ICON = {
@@ -40,17 +41,30 @@ function idHTML(v, f, { kind = 'tx', explorer = EXPLORER, what = 'transaction' }
 const noLinkWhy = (tx, f) => isPh(tx) ? 'no explorer link: placeholder' : isSandboxRun(f) ? 'sandbox tx: not on testnet' : '';
 
 /* ---------- slots --------------------------------------------------------- */
+/** "· verified live" never splits across lines at 390 (Designer L1). */
+const VL = ' · verified live';
+const chipText = t => (t.endsWith(VL) ? `${esc(t.slice(0, -VL.length))} <span class="vl">· verified live</span>` : esc(t));
+/** Why the escrow moved, from settled.reason (schema v1.1 adds the timeout and decline closings, m001 §8). */
+const WHY = { settle: 'on a graded pass', grade_fail: 'on a graded fail', no_reveal: 'on a reveal timeout', no_review: 'on a review timeout',
+  not_accepted: 'on an accept timeout', decline: 'on a seller decline', payout_failed: 'after a failed payout' };
+const whyOf = st => WHY[st && st.reason] || (st && st.outcome === 'paid_seller' ? WHY.settle : WHY.grade_fail);
+const graded = st => !st || st.reason === undefined || st.reason === 'settle' || st.reason === 'grade_fail';
 function chipsHTML(v, o) {
-  return chipsOf(v.story, o.live).map(c => `<span class="chip ${esc(c.kind)}"${c.kind === 'ph' ? ' title="Placeholder values. This run can never ship." data-chip="placeholder"' : ` data-chip="${esc(c.kind)}"`}>${esc(c.text)}</span>`).join('');
+  return chipsOf(v.story, o.live).map(c => {
+    // S-010 AC 2: the RECORDED chip carries the latest attestation tx, clickable (the data gate resolves it on testnet)
+    // Visible word "signed review", not "attestation": we check nonce + signer binding only (decision 2026-11-12, Designer B1)
+    const att = c.att ? ` <span class="att" data-chip-att="${esc(c.att.tx)}">· signed review ${idHTML(c.att.tx, c.att.f, { explorer: o.explorer, what: 'signed TEE review tx' })}</span>` : '';
+    return `<span class="chip ${esc(c.kind)}"${c.kind === 'ph' ? ' title="Placeholder values. This run can never ship." data-chip="placeholder"' : ` data-chip="${esc(c.kind)}"`}>${chipText(c.text)}${att}</span>`;
+  }).join('');
 }
 function moveLine(s) {
   const qb = s.qb, qa = s.qa, st = s.settled, o = outcomeOf(s);
   if (s.failed) return `tx failed · ${esc(s.failed.action)} · nothing moved, quote unchanged`;
-  if (o === 'earned') return `${fmtM(qa.prev_quote_mnear)} → <b>${fmtM(qa.quote_mnear)}</b> NEAR · ${fmtDelta(qa.delta_mnear)} on a graded pass`;
-  if (o === 'refunded') return `${fmtM(qa.prev_quote_mnear)} → <b>${fmtM(qa.quote_mnear)}</b> NEAR · ${fmtDelta(qa.delta_mnear)} on a graded fail · ${fmtM(st.amount_mnear)} refunded`;
+  if (o === 'earned') return `${fmtM(qa.prev_quote_mnear)} → <b>${fmtM(qa.quote_mnear)}</b> NEAR · ${fmtDelta(qa.delta_mnear)} ${whyOf(st)}`;
+  if (o === 'refunded') return `${fmtM(qa.prev_quote_mnear)} → <b>${fmtM(qa.quote_mnear)}</b> NEAR · ${fmtDelta(qa.delta_mnear)} ${whyOf(st)} · ${fmtM(st.amount_mnear)} refunded`;
   if (o === 'holds') return `<b>${fmtM(qa.quote_mnear)}</b> NEAR holds · repeat buyer · counted once`;
-  if (o === 'paid-flat') return `<b>${fmtM(qa.quote_mnear)}</b> NEAR · unchanged (clamped)`;
-  if (o === 'refund-flat') return `<b>${fmtM(qa.quote_mnear)}</b> NEAR · unchanged · ${fmtM(st.amount_mnear)} refunded`;
+  if (o === 'paid-flat') return `<b>${fmtM(qa.quote_mnear)}</b> NEAR · unchanged ${graded(st) ? '(clamped)' : `· paid ${whyOf(st)}`}`;
+  if (o === 'refund-flat') return `<b>${fmtM(qa.quote_mnear)}</b> NEAR · unchanged · ${fmtM(st.amount_mnear)} refunded${graded(st) ? '' : ` ${whyOf(st)}`}`;
   if (o === 'mismatch') return `quote ${fmtM(qa.quote_mnear)} NEAR · see mismatch on the receipt`;
   if (qb) return `Quote <b>${fmtM(qb.quote_mnear)}</b> NEAR · read from the record, nobody typed it`;
   return 'Quote — · waiting for get_record';
@@ -60,6 +74,14 @@ function lede(s) {
   if (s.failed) return 'The chain rejected the transaction, so no money moved and the record is unchanged.';
   if (o === 'earned') return 'The record moved, so the quote moved. Nobody typed this number.';
   if (o === 'holds') return 'Same buyer, second pass. The seller is paid, but unique buyers stay at 1, so a repeat pass can’t pump the price.';
+  const TIMEOUT_LEDE = {
+    no_reveal: 'The buyer didn’t reveal the key by the deadline, so the signed review pays the seller. The record doesn’t change.',
+    no_review: 'The seller put no signed review on-chain by the deadline, so the buyer gets the escrow back and the seller takes a fail.',
+    not_accepted: 'The seller didn’t accept in time, so the buyer gets the escrow back. The record doesn’t change.',
+    decline: 'The seller declined the job, so the buyer gets the escrow back. The record doesn’t change.',
+    payout_failed: 'The payout to the seller failed, so the escrow went back to the buyer. The record doesn’t change.',
+  };
+  if (s.settled && !graded(s.settled) && TIMEOUT_LEDE[s.settled.reason]) return TIMEOUT_LEDE[s.settled.reason];
   if (o === 'refunded' || o === 'refund-flat') {
     const cost = s.qa.delta_mnear < 0 ? `the fail costs the seller ${fmtM(-s.qa.delta_mnear)}` : 'the quote stays: it’s already at the contract’s floor';
     if (isSandboxRun(s.f)) return `The README contract test, run in a local sandbox: the buyer gets the full escrow back and ${cost}.`;
@@ -127,7 +149,7 @@ function ledgerHTML(s) {
   return `${box('YOU', 'you')}${box('ESCROW', 'esc')}${box('SELLER', 'sel')}`;
 }
 function capHTML(s) {
-  if (s.settled) return s.settled.outcome === 'paid_seller' ? 'escrow released to the seller on a graded pass' : 'escrow refunded to the buyer on a graded fail';
+  if (s.settled) return `${s.settled.outcome === 'paid_seller' ? 'escrow released to the seller' : 'escrow refunded to the buyer'} ${whyOf(s.settled)}`;
   return s.locked && !s.failed ? 'held by the contract until the grade' : 'nothing locked yet';
 }
 function recordHTML(s) {
@@ -236,7 +258,8 @@ function closerHTML(o) {
   const safe = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/.test(o.repoUrl || '') ? o.repoUrl : '';
   const repo = safe ? `<a class="lnk" href="${esc(safe)}"><b>${esc(safe.replace(/^https:\/\//, ''))}</b></a>` : '<b>not public yet</b> <span class="ph">PLACEHOLDER URL</span>';
   return `<div><h2 id="closer-heading">Earned Price.<em>Price earned, not claimed.</em></h2></div>
-    <div><div class="cmd"><span aria-hidden="true">$</span>node scripts/self-check.mjs</div>
+    <div><div class="cap2 try">Try it, no key:</div><div class="cmd"><span aria-hidden="true">$</span>node scripts/self-check.mjs</div>
+    <p class="vfy"><a class="lnk" href="/verify">Verify the receipt yourself →</a><span>offline, in your browser · change one byte and it fails</span></p>
     <div class="cmeta">Repo ${repo}<br>Sister project: <b>NEAR Real-World Money</b> (realworld track)</div></div>`;
 }
 
@@ -250,7 +273,7 @@ export function slotsOf(v, opts = {}) {
       chips: chipsHTML(v, o), kick: esc(kickerOf(v.story, v.cur)), hd: h.t, mv: moveLine(s), lede: lede(s), note: noteHTML(v, o),
       ldg: ledgerHTML(s), cap: capHTML(s), rec: recordHTML(s), reg: registerHTML(v, o),
       rtop: receiptTop(v, o), proc: procHTML(v, o), tee: teeHTML(v), dots: dotsHTML(s), rows: rowsHTML(s), onetx: onetxHTML(s), sum: sumHTML(s),
-      q: quoteHTML(v, o), tx: txHTML(v, o),
+      q: quoteHTML(v, o), tx: txHTML(v, o), chart: chartHTML(chartOf(v), o),
     },
     flags: { wait: h.wait, closer: o.live ? !!oc : v.last, residue: anyEarned, state: stageStateOf(s, v.step), outcome: oc || '',
       seq: v.step && v.step.group ? v.step.group.map(e => e.seq).join(',') : '', run: v.cur, rail: railStepOf(v.story, v.cur) },
@@ -278,6 +301,7 @@ export function renderStage(v, opts = {}) {
       ${slot('cap', 'div', 'cap2')}
       ${slot('rec', 'div', 'recd', ' aria-label="Seller record"')}
       <div class="reg"><small>RUN REGISTER</small>${slot('reg', 'ol', 'rgl')}</div>
+      <figure class="qcw" aria-labelledby="qc-cap"><figcaption id="qc-cap">QUOTE CHART · ONE STEP PER SETTLE TX</figcaption>${slot('chart', 'div', 'qc')}</figure>
     </div>
     <div class="er" aria-label="Review receipt"><div class="rcw"><div class="rw"><i class="psh" aria-hidden="true"></i><div class="paper rc">
       ${slot('rtop', 'div', 'r-top')}

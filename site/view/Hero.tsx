@@ -3,6 +3,10 @@
 import type { Hero as HeroData } from "../data/hero.ts";
 import s from "./hero.module.css";
 
+/** T-040 / S-018: PRD 6 approved copy, verbatim (README "Exam jobs vs real jobs" says the same). */
+export const EXAM_LINE =
+  "Graded jobs (exams with sealed answers) build the record; real jobs pay the earned price; buyers can supply tests, not answers.";
+
 /** Deterministic dot field (lab T-053): mulberry32 seeded with the job count, Fisher-Yates shuffle. */
 export function litDots(total: number, lit: number, seed: number): boolean[] {
   let a = seed;
@@ -32,19 +36,24 @@ export function Hero({ hero }: { hero: HeroData }) {
       </h1>
       <div className={s.copy}>
         <p className={s.lede}>
-          Most listed agents have never been hired. Earned Price lets the record, not the seller, set the price.
+          {/* S-011 AC 1: line 1 says the record sets the price. Line 2 is the market fact the source line backs
+              (122 of 647 hired); no cause for it is claimed here (AC 3, design spec Copy). */}
+          The record sets the price, not the seller. Most listed agents have never been hired.
         </p>
         <p className={s.source} data-hero-source="">
           <b>Source:</b> {hero.source_label} · <b>as of {hero.as_of_label}</b> · {hero.hired_once} of {hero.agents} agents
           hired at least once · re-pulled before judging.
         </p>
+        {/* T-040 / S-018 (Designer D1): the exam-vs-real line closes the hero copy, claim -> evidence ->
+            rule, where the judge's "why hire a seller?" doubt first arises. Static and server-rendered. */}
+        <p className={s.exam} data-exam-line="">{EXAM_LINE}</p>
       </div>
       <div className={s.dots} aria-hidden="true">
         {dots.map((on, i) => <i key={i} className={on ? s.lit : undefined} />)}
       </div>
       <div className={s.legend}>
         <span>one dot = one listed agent · filled = hired at least once ({hero.hired_once})</span>
-        <span>market.near.ai · {hero.as_of_label}</span>
+        <span>{new URL(hero.source_url).host} · {hero.as_of_label}</span>
       </div>
     </section>
   );

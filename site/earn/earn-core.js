@@ -85,7 +85,7 @@ export function applyEvent(s, e) {
       break;
     case 'tx_confirmed': {
       // Live seller txs may confirm with no prior tx_submitted (schema §3): accept that.
-      const r = s.rows[d.action] || { actor: d.action === 'accept' || d.action === 'submit_review' ? 'seller' : 'buyer', seenOnConfirm: true };
+      const r = s.rows[d.action] || { actor: d.action === 'accept' || d.action === 'submit_review' || d.action === 'decline' ? 'seller' : 'buyer', seenOnConfirm: true };
       r.tx = e.tx_hash; r.st = d.status === 'success' ? 'ok' : 'bad'; r.err = d.error; r.confirmT = e.t_ms;
       r.wait_ms = e.t_ms - (r.submitT != null ? r.submitT : s.prevT); // the REAL wait, for "+N s on chain"
       s.rows[d.action] = r;
@@ -121,6 +121,7 @@ export function waitOf(s) {
   if (s.failed || s.qa) return null;
   const w = Object.entries(s.rows).find(([, r]) => r.st === 'wait');
   if (w) return { kind: 'tx', action: w[0], tx: w[1].tx, actor: w[1].actor, dl: w[1].dl, since: w[1].submitT };
+  if (s.settled) return { kind: 'view', label: 'reading the new quote from get_record', since: s.t }; // any closing (v1.1: timeout, decline too)
   if (!s.qb) return null;
   const r = s.rows;
   if (!r.create) return { kind: 'ready' };
@@ -271,11 +272,59 @@ export function runSummary(story, r, s) {
 /** True when any run is not a real recorded run (the page must say so; a ship build refuses it). */
 export const isPlaceholderRun = f => !!f.placeholder || !f.recorded || findPlaceholders(f).length > 0;
 
-/** Header/stage chips. The TESTNET chip never appears on a sandbox run. */
+/** The tx each derived event comes from (schema.ts: the accept / submit_review / reveal EVENT_JSON). Shared by the bus and the data gate.
+ *  `settled` names its reveal-path default; v1.1 closings (timeout, decline) come from SETTLE_REASONS via derivedFromOf(). */
+export const DERIVED_FROM = { accepted: 'accept', attested: 'submit_review', check_graded: 'reveal', settled: 'reveal' };
+/** Schema v1.1 settled.reason -> outcome, record change, the closing tx it may come from, and whether a grade exists
+ *  (true = required, false = must be null, null = either). Mirrors contract/src/lib.rs reveal / timeout / decline. */
+export const SETTLE_REASONS = {
+  settle:        { outcome: 'paid_seller',    record: 'pass', from: ['reveal'],            grade: true },
+  grade_fail:    { outcome: 'refunded_buyer', record: 'fail', from: ['reveal'],            grade: true },
+  no_reveal:     { outcome: 'paid_seller',    record: 'none', from: ['timeout'],           grade: false },
+  no_review:     { outcome: 'refunded_buyer', record: 'fail', from: ['timeout'],           grade: false },
+  not_accepted:  { outcome: 'refunded_buyer', record: 'none', from: ['timeout'],           grade: false },
+  decline:       { outcome: 'refunded_buyer', record: 'none', from: ['decline'],           grade: false },
+  payout_failed: { outcome: 'refunded_buyer', record: 'none', from: ['reveal', 'timeout'], grade: null },
+};
+/** The actions whose confirmed tx a derived event may carry ([] = not a derived event, or an unknown reason). */
+export function derivedFromOf(e) {
+  if (!e || typeof e !== 'object') return [];
+  if (e.type === 'settled') { const r = e.data && Object.prototype.hasOwnProperty.call(SETTLE_REASONS, e.data.reason) ? SETTLE_REASONS[e.data.reason] : null; return r ? r.from : []; }
+  return Object.prototype.hasOwnProperty.call(DERIVED_FROM, e.type) ? [DERIVED_FROM[e.type]] : [];
+}
+
+const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+/** "2026-11-12T13:25:05.495Z" -> "12 NOV 13:25 UTC" (the RECORDED chip). '' when there is no real time. */
+export function recLabel(iso) {
+  const d = typeof iso === 'string' ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return '';
+  const p2 = n => String(n).padStart(2, '0');
+  return `${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())} UTC`;
+}
+/** The latest log's attestation: the newest `attested` event (the submit_review tx that put the signed TEE review on-chain). */
+export function latestAttestation(story) {
+  for (let r = story.runs.length - 1; r >= 0; r--) {
+    const evs = story.runs[r].events || [];
+    for (let i = evs.length - 1; i >= 0; i--) if (evs[i].type === 'attested') return { tx: evs[i].tx_hash, run: r, f: story.runs[r] };
+  }
+  return null;
+}
+
+/**
+ * Header/stage chips (S-010 AC 2). The TESTNET chip never appears on a sandbox run.
+ * LIVE: "TESTNET · LIVE". RECORDED: "TESTNET · RECORDED <time of the log's last event> · verified live", with the
+ * latest attestation tx to click. It describes the whole recorded log, so it is the same at every replay step.
+ * "verified live" is only claimed for real recorded data: every hash behind it is one the ship-mode data gate
+ * resolves on testnet RPC before a ship build. Placeholder data drops the claim and the link.
+ */
 export function chipsOf(story, liveMode) {
-  const f = story.runs[0], out = [];
+  const f = story.runs[0], out = [], ph = story.runs.some(isPlaceholderRun);
   if (isSandboxRun(f)) out.push({ kind: 'sbx', text: 'CONTRACT TEST · LOCAL SANDBOX' });
-  else out.push({ kind: 'net', text: `TESTNET · ${liveMode ? 'LIVE' : 'RECORDED'}` });
-  if (story.runs.some(isPlaceholderRun)) out.push({ kind: 'ph', text: 'PLACEHOLDER DATA' });
+  else if (liveMode) out.push({ kind: 'net', text: 'TESTNET · LIVE' });
+  else {
+    const evs = story.runs[story.runs.length - 1].events || [], at = recLabel(evs.length ? evs[evs.length - 1].at : null);
+    out.push({ kind: 'net', text: `TESTNET · RECORDED${at ? ` ${at}` : ''}${ph ? '' : ' · verified live'}`, att: ph ? null : latestAttestation(story) });
+  }
+  if (ph) out.push({ kind: 'ph', text: 'PLACEHOLDER DATA' });
   return out;
 }
