@@ -21,8 +21,10 @@ import { canonicalJson, commit, sha256Hex, validateKey } from "../grader/grade.j
 export const PACKS_DIR = fileURLToPath(new URL(".", import.meta.url));
 export const INDEX_FILE = join(PACKS_DIR, "index.json");
 
+// The reads below carry /* turbopackIgnore: true */: under the site's Next.js build a dynamic path would make Turbopack
+// trace the whole project into the /api/review function (T-100). next.config.ts ships packs/** there explicitly.
 export function readIndex(file = INDEX_FILE) {
-  return JSON.parse(readFileSync(file, "utf8")).packs;
+  return JSON.parse(readFileSync(/* turbopackIgnore: true */ file, "utf8")).packs;
 }
 
 /** The files a pack folder holds, sorted (results and caches are not part of a pack). */
@@ -40,15 +42,18 @@ export function packHash(entry) {
   return sha256Hex(canonicalJson({ pack_id: `pack-${entry.id}`, files }));
 }
 
-/** A pack ready to review and grade: { id, name, level, hash, key, reviewFiles: [{path, source}] }. */
-export function loadPack(id, index = readIndex()) {
+/**
+ * A pack ready to review and grade: { id, name, level, hash, key, reviewFiles: [{path, source}] }.
+ * `dir` = the packs folder; pass it when import.meta.url can't be trusted (a bundled server build, T-100).
+ */
+export function loadPack(id, index = readIndex(), dir = PACKS_DIR) {
   const entry = index.find((p) => p.id === String(id));
   if (!entry) throw new Error(`no pack ${id}; packs are ${index.map((p) => p.id).join(", ")}`);
-  const key = JSON.parse(readFileSync(join(PACKS_DIR, entry.dir, "answer-key.json"), "utf8"));
+  const key = JSON.parse(readFileSync(/* turbopackIgnore: true */ join(dir, entry.dir, "answer-key.json"), "utf8"));
   validateKey(key);
   const reviewFiles = entry.review_files.map((path) => ({
     path,
-    source: readFileSync(join(PACKS_DIR, entry.dir, path), "utf8"),
+    source: readFileSync(/* turbopackIgnore: true */ join(dir, entry.dir, path), "utf8"),
   }));
   return { id: entry.id, name: entry.name, level: entry.level, hash: entry.hash, key, reviewFiles };
 }

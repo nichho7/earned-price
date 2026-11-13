@@ -5,11 +5,18 @@ import assert from "node:assert/strict";
 import { KeyPair } from "near-api-js";
 import { ACCEPT_GAS, SUBMIT_GAS, SELLER_KEY_METHODS, classifyOutcome, sellerChain, sellerKeyScope, viewAccessKey } from "../site-api/chain.js";
 import { memoryStore } from "../site-api/caps.js";
-import { depsFromEnv, liveAllowed } from "../site-api/vercel.js";
+import { depsFromEnv, liveAllowed, packsDirFor } from "../site-api/vercel.js";
+import { PACKS_DIR, readIndex } from "../packs/packs.js";
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fcKeyCommand } from "../scripts/seller-fc-key.mjs";
 
 const CONTRACT = "earned-price.testnet";
 const SELLER = "seller.earned-price.testnet";
+const noNetFetch = async () => {
+  throw new Error("no network in tests");
+};
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
 
 function rpc(valueByMethod) {
@@ -182,9 +189,21 @@ test("liveAllowed: memory store never on Vercel (production or preview); Upstash
   assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", VERCEL: "1" }, mem), false, "opt-in ignored on any Vercel deployment (N-1)");
   assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", NODE_ENV: "production" }, mem), false, "opt-in ignored in a production build even with no Vercel system env exposed (N-1)");
   assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", NODE_ENV: "development" }, mem), true, "next dev keeps the local opt-in");
-  assert.equal(liveAllowed({ VISITOR_HASH_SECRET: secret }, up), true);
-  assert.equal(liveAllowed({ VISITOR_HASH_SECRET: "short" }, up), false);
+  assert.equal(liveAllowed({ EARNED_LIVE_REVIEWS: "1", VISITOR_HASH_SECRET: secret }, up), true);
+  assert.equal(liveAllowed({ EARNED_LIVE_REVIEWS: "1", VISITOR_HASH_SECRET: "short" }, up), false);
+  assert.equal(liveAllowed({ EARNED_LIVE_REVIEWS: "1" }, up), false);
   assert.equal(liveAllowed({}, up), false);
+});
+
+test("T-100 liveAllowed: EARNED_LIVE_REVIEWS is the off-switch for the durable store; the memory opt-in ignores it", () => {
+  const up = { kind: "upstash" };
+  const mem = { kind: "memory" };
+  const secret = "s".repeat(32);
+  assert.equal(liveAllowed({ VISITOR_HASH_SECRET: secret }, up), false, "unset = replay only");
+  for (const off of ["0", "", "true", "yes", " 1", "1 "]) assert.equal(liveAllowed({ EARNED_LIVE_REVIEWS: off, VISITOR_HASH_SECRET: secret }, up), false, JSON.stringify(off));
+  assert.equal(liveAllowed({ EARNED_LIVE_REVIEWS: "1", VISITOR_HASH_SECRET: secret }, up), true);
+  assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1" }, mem), true, "memory branch unchanged (local dev)");
+  assert.equal(liveAllowed({ EARNED_ALLOW_MEMORY_CAPS: "1", EARNED_LIVE_REVIEWS: "1", VERCEL: "1" }, mem), false, "the switch never enables the memory store on Vercel");
 });
 
 test("depsFromEnv: liveEnabled false without Upstash env, true with Upstash + secret", () => {
@@ -193,7 +212,8 @@ test("depsFromEnv: liveEnabled false without Upstash env, true with Upstash + se
   };
   assert.equal(depsFromEnv({ NEAR_AI_API_KEY: "k", EARNED_SELLER_PRIVATE_KEY: "ed25519:x" }, noNet).liveEnabled, false);
   const env = { UPSTASH_REDIS_REST_URL: "https://x.upstash.io", UPSTASH_REDIS_REST_TOKEN: "t", VISITOR_HASH_SECRET: "v".repeat(40) };
-  assert.equal(depsFromEnv(env, noNet).liveEnabled, true);
+  assert.equal(depsFromEnv(env, noNet).liveEnabled, false, "T-100: secrets alone do not switch live on");
+  assert.equal(depsFromEnv({ ...env, EARNED_LIVE_REVIEWS: "1" }, noNet).liveEnabled, true);
 });
 
 // ---- M-2 deploy helper ----
@@ -208,4 +228,49 @@ test("seller-fc-key: near CLI command adds a function-call key for the escrow's 
   assert.ok(!argv.includes("grant-full-access"));
   assert.equal(at("network-config"), "testnet");
   assert.throws(() => fcKeyCommand(PK, { seller: "seller.near" }), /testnet/);
+});
+
+// T-100 / code review S-3: in the Next.js (Turbopack) route bundle packs.js's PACKS_DIR is an emitted index.json copy,
+// not a folder, so the function reads the packs from its working directory and fails fast when they are missing.
+test("T-100 packsDirFor: <cwd>/packs when it holds index.json, else packs.js PACKS_DIR", () => {
+  const root = mkdtempSync(join(tmpdir(), "t100-cwd-"));
+  try {
+    assert.equal(packsDirFor(root), PACKS_DIR, "no packs/ under cwd: fall back");
+    cpSync(PACKS_DIR, join(root, "packs"), { recursive: true });
+    assert.equal(packsDirFor(root), join(root, "packs"));
+    assert.equal(packsDirFor(process.cwd()), join(process.cwd(), "packs"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("T-100 depsFromEnv: loadPack reads from the given packs dir, never packs.js's own folder", () => {
+  const root = mkdtempSync(join(tmpdir(), "t100-packs-"));
+  try {
+    const dir = join(root, "packs");
+    cpSync(PACKS_DIR, dir, { recursive: true });
+    const [entry] = readIndex(join(dir, "index.json"));
+    writeFileSync(join(dir, entry.dir, entry.review_files[0]), "# marker: read from the cwd copy\n");
+    const d = depsFromEnv({}, noNetFetch, { packsDir: dir });
+    const pack = d.loadPack(entry.id);
+    assert.equal(pack.reviewFiles[0].source, "# marker: read from the cwd copy\n");
+    assert.equal(pack.id, entry.id);
+    assert.deepEqual(["1", "2", "3"].map((id) => d.loadPack(id).id), ["1", "2", "3"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("T-100 depsFromEnv: packs missing or broken throws at instance start (the route then replays every request)", () => {
+  const root = mkdtempSync(join(tmpdir(), "t100-nopacks-"));
+  try {
+    assert.throws(() => depsFromEnv({}, noNetFetch, { packsDir: join(root, "packs") }));
+    const dir = join(root, "packs");
+    cpSync(PACKS_DIR, dir, { recursive: true });
+    const [entry] = readIndex(join(dir, "index.json"));
+    rmSync(join(dir, entry.dir, "answer-key.json"));
+    assert.throws(() => depsFromEnv({}, noNetFetch, { packsDir: dir }), "a pack without its key fails now, not mid-request");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

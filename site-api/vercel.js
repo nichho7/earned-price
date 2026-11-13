@@ -13,10 +13,12 @@
 // (https://vercel.com/docs/functions/configuring-functions/duration, read 2026-11-12.)
 // The function reads packs/ from disk: include packs/** in the function bundle
 // (Next: outputFileTracingIncludes { "/api/review": ["./packs/**"] }; vercel.json: includeFiles).
-// Code review S-3 (not verified): packs/packs.js finds packs through import.meta.url. Under the
-// Next.js webpack server build that URL can point at the build-time path, not /var/task at runtime.
-// T-033 must run a `next build` (or `vercel build`) + invoke smoke test before relying on an App
-// Router route; if it breaks, pass a process.cwd()-based packs dir into loadPack.
+// Code review S-3 (confirmed and fixed in T-100): under the Next.js 16 (Turbopack) server build, packs/packs.js's
+// `new URL(".", import.meta.url)` becomes an emitted copy of packs/index.json (.next/server/assets/index.<hash>.json),
+// so its PACKS_DIR is a FILE and every loadPack throws. depsFromEnv therefore reads the packs from the working
+// directory (packsDirFor), which is the project root under `next start` and /var/task on Vercel, and loads all three
+// once per instance so a missing packs/ bundle shows up at once (every request replays, logged stage "deps").
+// Smoke: scripts/review-route-smoke.mjs against the built server.
 //
 // What T-033 must also wire (code review M-2, S-4):
 //   - Treat as replay: mode "replay" (incl. codes JOB_BUSY, ACCEPT_REFUSED, JOB_EXPIRED), any 5xx,
@@ -31,6 +33,11 @@
 //
 // Environment (Vercel project settings, never in code or the repo). Set the secrets for the
 // PRODUCTION environment only (not Preview / Development):
+//   EARNED_LIVE_REVIEWS=1      NOT secret: the on/off switch (T-100). Set every secret below ahead of time;
+//                              EARNED_LIVE_REVIEWS=1 + a redeploy turns live reviews on, removing it + a
+//                              redeploy turns them off. Unset (or anything but "1") = every request replays
+//                              not_configured, with no accept, no decline and no NEAR AI call. Applies to the
+//                              durable store only; the local memory-store opt-in below is unchanged.
 //   NEAR_AI_API_KEY            secret. A DEDICATED NEAR AI key for this function only, loaded with at
 //                              most $2 of credit (Nicho, A-003; security H-1). It is the real hard
 //                              spend stop: NEAR AI answers 402 (= replay) once it is empty, and
@@ -53,10 +60,12 @@
 //                              Ignored on any Vercel deployment (VERCEL set), when VERCEL_ENV is
 //                              "production", and when NODE_ENV is "production" (security N-1).
 import { randomBytes } from "node:crypto";
+import { statSync } from "node:fs";
+import { join } from "node:path";
 import { RPC_URLS } from "../cli/init.js";
 import { CONTRACT_ACCOUNT } from "../cli/names.js";
 import { DEMO_SELLER } from "../cli/pick.js";
-import { loadPack } from "../packs/packs.js";
+import { PACKS_DIR, loadPack, readIndex } from "../packs/packs.js";
 import { reviewJob } from "../seller/review.js";
 import { storeFromEnv } from "./caps.js";
 import { nearSend, sellerChain, sellerKeyScope, viewAccessKey } from "./chain.js";
@@ -105,21 +114,40 @@ export function toWebResponse({ status, body }) {
 }
 
 /**
- * May this deployment run live reviews? Only with a durable cap store and a real visitor secret
- * (security H-1 + L-2, Nicho 2026-11-12). The memory store is for local dev only: never on any
+ * May this deployment run live reviews? Only with a durable cap store, a real visitor secret
+ * (security H-1 + L-2, Nicho 2026-11-12) and the switch EARNED_LIVE_REVIEWS=1 (T-100). The memory store is for local dev only: never on any
  * Vercel deployment (Vercel sets VERCEL=1 on Production and Preview alike, security N-1), and
  * never in a production build: NODE_ENV=production is set by Next.js whether or not Vercel's system
  * env vars are exposed at runtime, so the opt-out does not hang on that one project setting.
  */
 export function liveAllowed(env, store) {
   if (store.kind === "memory") return env.EARNED_ALLOW_MEMORY_CAPS === "1" && !env.VERCEL && env.VERCEL_ENV !== "production" && env.NODE_ENV !== "production";
+  // T-100: the named off-switch. Secrets can all be set ahead; live reviews run only while EARNED_LIVE_REVIEWS=1.
+  if (env.EARNED_LIVE_REVIEWS !== "1") return false;
   return typeof env.VISITOR_HASH_SECRET === "string" && env.VISITOR_HASH_SECRET.length >= MIN_SECRET_CHARS;
+}
+
+/**
+ * The packs folder at runtime (S-3, T-100): <cwd>/packs when it holds index.json, else packs.js's own PACKS_DIR (a plain
+ * Node run from another directory). Never trust PACKS_DIR first: in the bundled route it is not a directory.
+ */
+export function packsDirFor(cwd = process.cwd()) {
+  const fromCwd = join(cwd, "packs");
+  try {
+    if (statSync(/* turbopackIgnore: true */ join(fromCwd, "index.json")).isFile()) return fromCwd;
+  } catch {
+    // not there: fall back
+  }
+  return PACKS_DIR;
 }
 
 let instanceDeps = null; // one per function instance, so the memory store lives across invocations
 
 /** Real dependencies from the environment. Nothing secret is copied anywhere but these closures. */
-export function depsFromEnv(env = process.env, fetch = globalThis.fetch) {
+export function depsFromEnv(env = process.env, fetch = globalThis.fetch, { packsDir = packsDirFor() } = {}) {
+  // S-3: load every pack once now; unreadable packs throw here (handleWebRequest replays, stage "deps").
+  const packIndex = readIndex(join(packsDir, "index.json"));
+  for (const p of packIndex) loadPack(p.id, packIndex, packsDir);
   const privateKey = typeof env.EARNED_SELLER_PRIVATE_KEY === "string" && env.EARNED_SELLER_PRIVATE_KEY.startsWith("ed25519:") ? env.EARNED_SELLER_PRIVATE_KEY : null;
   const apiKey = typeof env.NEAR_AI_API_KEY === "string" && env.NEAR_AI_API_KEY.trim() ? env.NEAR_AI_API_KEY.trim() : undefined;
   const urls = RPC_URLS;
@@ -145,7 +173,7 @@ export function depsFromEnv(env = process.env, fetch = globalThis.fetch) {
     // T-084: POST /v1/check_api_key before each accept; down / 401 / 402 declines the open job.
     teeProbe: ({ timeoutMs } = {}) => probeNearAi({ apiKey, fetch, timeoutMs }),
     review: (args) => reviewJob({ ...args, fetch, log: () => {} }), // module logs stay out of Vercel logs
-    loadPack,
+    loadPack: (id) => loadPack(id, packIndex, packsDir),
     visitorSecret: env.VISITOR_HASH_SECRET || randomBytes(32).toString("hex"),
   };
 }
@@ -155,11 +183,13 @@ export function depsFromEnv(env = process.env, fetch = globalThis.fetch) {
  * (e.g. a bad Upstash URL in env) is a fixed replay body, never a raw 500 (S-1).
  */
 export async function handleWebRequest(request, deps) {
+  let stage = "deps";
   try {
     const d = deps ?? (instanceDeps ??= depsFromEnv());
+    stage = "handler";
     return toWebResponse(await handleReview(await fromWebRequest(request), d));
   } catch {
-    console.log(JSON.stringify({ at: "review-fn", outcome: "replay", code: "INTERNAL" }));
+    console.log(JSON.stringify({ at: "review-fn", outcome: "replay", code: "INTERNAL", stage }));
     return toWebResponse({ status: 200, body: INTERNAL_REPLAY });
   }
 }
