@@ -7,7 +7,9 @@
 //   review "fn": the T-028 function is the seller. On POST it checks the buyer's signature with T-028's own checkReviewAuth,
 //     accepts on chain, "reviews" for reviewDelayMs, lands submit_review (get_job.review = the body's hashes) and answers live.
 //   review "no_review": accepts, then answers replay tee_unavailable / accepted_no_review (no review ever lands).
-//   review "down": 503. review "off" (default): not routed (the production build has no /api/review yet: 404).
+//   review "down": 503. review "off" (default): a 404, as before T-100 added the real route. Routed on purpose so the
+//     real /api/review in the build is never reached from an e2e (it would read the real testnet).
+//   review "not_configured" (T-100): the real function's answer when EARNED_LIVE_REVIEWS is off: a replay, job left open.
 // reveal is graded by the real grader against the revealed key (commit checked); a pass settles and moves the record.
 // Defaults are beat 2's: nothing changes for live-beat2.spec.ts.
 // Skills used: webapp-testing, test-driven-development
@@ -20,6 +22,8 @@ import { CONTRACT_ID, DEMO_SELLER } from "../live/account.js";
 import { commit, findingsFromResponse, grade, sha256Hex } from "../../grader/grade.js";
 // @ts-expect-error plain module, no type declarations
 import { checkReviewAuth } from "../../site-api/buyer-auth.js";
+// @ts-expect-error plain module, no type declarations
+import { COPY } from "../../site-api/review.js";
 
 export const FAUCET = "https://helper.nearprotocol.com/account";
 export const RPCS = ["https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"];
@@ -42,7 +46,7 @@ export const evt = (event: string, data: Record<string, unknown>) => `EVENT_JSON
 export const reviewBody = (findings: unknown[]) => JSON.stringify({ choices: [{ message: { content: JSON.stringify({ findings }) } }] });
 
 export type SellerPlan = "accept" | "decline" | "none";
-export type ReviewPlan = "off" | "fn" | "no_review" | "down";
+export type ReviewPlan = "off" | "fn" | "no_review" | "down" | "not_configured";
 export type Sent = { method: string; receiver: string; deposit: bigint; args: Record<string, unknown>; hash: string };
 type Review = { model: string; request_sha256: string; response_sha256: string; signed_text: string; signature: string; signing_address: string };
 type Rec = { passes: number; fails: number; unique_buyers: number; jobs: number };
@@ -116,15 +120,20 @@ export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<
     return route.fulfill(ok({ status: { SuccessValue: "" }, transaction: { hash: "J4dHYPypVYJkVeL4pbgGDrDKLnm2n9fPyvpidMmFmCJ6" } }));
   });
 
-  // T-036: the review function (T-028 contract). Off by default: the build has no /api/review route, so the page gets a 404.
-  if (c.review !== "off") {
+  // T-036: the review function (T-028 contract). Always routed (T-100): "off" is a 404, never the build's real route.
+  {
     await page.route((u) => u.pathname === "/api/review", async (route: Route) => {
       const body = JSON.parse(route.request().postData() ?? "{}");
       c.posts.push(body);
+      if (c.review === "off") return route.fulfill({ status: 404, contentType: "text/html", body: "<html>not found</html>" });
       if (c.review === "down") return route.fulfill({ status: 503, contentType: "text/html", body: "<html>unavailable</html>" });
       const authed = checkReviewAuth(body, Date.now()) === null && c.exists.get(c.job?.buyer ?? "") === body.public_key;
       c.authOk.push(authed);
       if (!authed) return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ mode: "error", code: "BAD_SIGNATURE" }) });
+      if (c.review === "not_configured") {
+        // site-api/review.js step 4 with liveEnabled false: no accept, no decline tx, the job stays open.
+        return route.fulfill(ok({ mode: "replay", label: "RECORDED", reason: "not_configured", review_submitted: false, job_id: JOB_ID, job_state: "open", message: COPY.not_configured, decline_tx: null }));
+      }
       const j = c.job!;
       let acceptTx: string | null = null;
       if (j.status === "open") {

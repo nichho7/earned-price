@@ -147,6 +147,19 @@ test("beat 3: one countdown to reveal_deadline; nobody reveals -> the page signs
   await expect(step3(page).locator("[data-countdown]")).toHaveCount(0); // no countdown once the job is closed
 });
 
+test("T-100: live reviews switched off (EARNED_LIVE_REVIEWS unset) -> the honest not_configured reason, RECORDED plays, nothing revealed", async ({ page }) => {
+  test.setTimeout(60_000);
+  const chain = await mockChain(page, { review: "not_configured", seller: "none" });
+  await lockPack2(page);
+  await expect(step3(page)).toHaveAttribute("data-mode", "recorded", { timeout: 20_000 });
+  await expect(step3(page).locator('[data-chip="recorded"]')).toHaveText("RECORDED · verified live");
+  await expect(step3(page)).toContainText("Live reviews are off on this deployment.");
+  await expect(step3(page)).not.toContainText("The live review didn't answer.");
+  expect(chain.posts).toHaveLength(1);
+  expect(chain.authOk).toEqual([true]);
+  expect(chain.sent.filter((s) => s.method === "reveal")).toHaveLength(0); // never reveal while replaying
+});
+
 test("beat 3: the function replays accepted_no_review -> RECORDED plays; the live job counts down to review_by, then the no_review refund", async ({ page }) => {
   test.setTimeout(90_000);
   const chain = await mockChain(page, { review: "no_review", reviewDelayMs: 1000, reviewWindowMs: 16_000 });
