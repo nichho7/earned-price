@@ -45,7 +45,7 @@ export interface SignRequest {
 }
 export interface TxEvent { event: string; data: Record<string, unknown>; blockHash: string | null }
 export interface ParsedTx { txHash: string | null; failure: string | null; events: TxEvent[] }
-export interface ClosingOutcome { kind: string; line: string; graded: boolean; refundYocto: string | null; reveal: unknown }
+export interface ClosingOutcome { kind: string; line: string; graded: boolean; refundYocto: string | null; reveal: unknown; recordBlock?: string | null }
 export interface KV { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void }
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 export type AccountStep =

@@ -43,6 +43,24 @@ export async function readQuoteFull(fetchFn) {
   }
 }
 
+/**
+ * T-037: get_record + quote pinned to `blockHash`, the block of the closing receipt that wrote the record, accepted only
+ * if get_job(jobId) is already null at that block (cli/hire.js pinnedAfter, review R-1). null when the RPC doesn't know
+ * the block yet, answers for another block, or the job was still open there: the caller reads again or falls back.
+ */
+export async function readRecordAt(fetchFn, blockHash, jobId) {
+  let q;
+  let job;
+  try {
+    q = await fetchQuote({ fetch: fetchFn, urls: RPC_URLS, contractId: CONTRACT_ID, seller: DEMO_SELLER, blockId: blockHash });
+    job = await viewFunction({ fetch: fetchFn, urls: RPC_URLS, contractId: CONTRACT_ID, method: "get_job", args: { id: jobId }, blockId: blockHash });
+  } catch {
+    return null;
+  }
+  if (q.blockHash !== blockHash) return null; // not the block we asked for: never compare it
+  return job === null ? q : null;
+}
+
 /** get_job while the job is live (status open | accepted), else null. */
 export async function readJobView(fetchFn, jobId) {
   try {
