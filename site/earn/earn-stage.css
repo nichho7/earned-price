@@ -283,10 +283,10 @@ html.ep-js .ep:not([data-ep-mounted]){opacity:0;animation:ep-failsafe 1ms linear
 .ep .qc-x{grid-column:2;list-style:none;margin:var(--s2) 0 0;padding:0;display:grid;grid-template-columns:repeat(var(--qc-slots),minmax(0,1fr))}
 .ep .qc-x li{display:flex;flex-direction:column;align-items:center;gap:2px;text-align:center;font:400 var(--fs-row)/1.35 var(--mono);color:var(--cream);min-width:0}
 .ep .qc-x li b{font-weight:500}
-.ep .qc-x li.pend,.ep .qc-x .qc-src{color:var(--cream-2)}
+.ep .qc-x li.pend,.ep .qc-x .qc-src,.ep .qc-x .qc-read{color:var(--cream-2)}
 .ep .qc-x .lnk{color:var(--cream);white-space:nowrap}
 .ep .qc-note{margin:var(--s3) 0 0;font:400 var(--fs-row)/1.45 var(--mono);color:var(--cream-2)}
-.ep .chip .att{white-space:nowrap}
+.ep .chip .att,.ep .chip .vl{white-space:nowrap}
 .ep .chip .att .lnk{color:inherit}
 @container (max-width:760px){
   .ep .qcw{order:11}

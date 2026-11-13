@@ -29,11 +29,13 @@ export function chartOf(v) {
     if (s.qb) {
       const last = points[points.length - 1];
       if (!last) points.push({ kind: 'start', slot: 0, run: r, mnear: s.qb.quote_mnear, tx: null, f: s.f });
-      else if (last.mnear !== s.qb.quote_mnear) points.push({ kind: 'read', slot: r, run: r, mnear: s.qb.quote_mnear, tx: null, f: s.f });
+      // Someone else's job moved the quote between two of ours (live only). It gets its own x, on the boundary
+      // before run r, and its own label, so the previous settle's riser shows only that settle's move (review R-3).
+      else if (last.mnear !== s.qb.quote_mnear) points.push({ kind: 'read', slot: r + 0.5, run: r, mnear: s.qb.quote_mnear, prev: last.mnear, tx: null, f: s.f });
     }
     if (s.settled && s.qa) {
       points.push({ kind: s.settled.outcome === 'paid_seller' ? 'settle' : 'refund', slot: r + 1, run: r, mnear: s.qa.quote_mnear,
-        prev: s.qa.prev_quote_mnear, delta: s.qa.delta_mnear, tx: s.settled.tx, f: s.f, outcome: outcomeOf(s) });
+        prev: s.qa.prev_quote_mnear, delta: s.qa.delta_mnear, tx: s.settled.tx, f: s.f, outcome: outcomeOf(s), reason: s.settled.reason });
     }
   });
   // the latest get_record read: the Quote and Pass % figures (they move only when a quote event lands)
@@ -46,14 +48,15 @@ export function chartOf(v) {
     if (!s) return { run: r, st: 'pend' };
     if (s.failed) return { run: r, st: 'failed', action: s.failed.action };
     if (s.settled && s.qa) return { run: r, st: 'done' };
-    return { run: r, st: s.settled ? 'reading' : 'open' };
+    return { run: r, st: s.settled ? 'reading' : s.rows.create ? 'open' : 'unsent' };
   });
   return { points, slots: story.runs.length + 1, quote: read ? read.quote_mnear : null, pass, labels };
 }
 
-/** Fixed y scale in mNEAR: 20..50 unless a real value is outside it (the contract clamps to 25..100). */
+/** Fixed y scale in mNEAR: 20..50 unless a real value is outside it. Values are clamped to the contract's 25..100
+ *  domain first, so a bad value can never make the tick loop long (review O-3; the bus already refuses one). */
 export function scaleOf(points) {
-  const vals = points.map(p => p.mnear);
+  const vals = points.map(p => Math.min(100, Math.max(25, p.mnear)));
   const lo = Math.min(20, ...vals.map(m => Math.floor((m - 5) / 10) * 10));
   const hi = Math.max(50, ...vals.map(m => Math.ceil((m + 5) / 10) * 10));
   const ticks = [];
@@ -70,10 +73,13 @@ export function stepPath(points, slots, y) {
   return d;
 }
 
+/** Which closing tx a step comes from (schema v1.1): a reveal settles or refunds; a timeout or decline closes the job. */
+const CLOSE = { no_reveal: 'timeout', no_review: 'timeout', not_accepted: 'timeout', decline: 'decline' };
+const stepWhat = p => (p.kind === 'refund' ? 'refund' : 'settle') + (CLOSE[p.reason] ? ` · ${CLOSE[p.reason]}` : '');
 function txLink(p, explorer) {
   if (!p.tx) return '';
   if (isPh(p.tx)) return '<span class="ph">PLACEHOLDER</span>';
-  const url = txUrl(p.tx, p.f, explorer), what = p.kind === 'refund' ? 'refund tx' : 'settle tx';
+  const url = txUrl(p.tx, p.f, explorer), what = `${CLOSE[p.reason] || (p.kind === 'refund' ? 'refund' : 'settle')} tx`;
   if (!url) return `<span title="${esc(p.tx)}">${esc(shortHash(p.tx))}</span>`;
   return `<a class="lnk" href="${esc(url)}" target="_blank" rel="noopener" title="${esc(p.tx)}" data-qc-tx="${esc(p.tx)}">${esc(shortHash(p.tx))}<span aria-hidden="true"> ↗</span><span class="sr"> (${what} on the testnet explorer)</span></a>`;
 }
@@ -85,13 +91,15 @@ function labelHTML(c, i, explorer) {
   }
   const r = i - 1, l = c.labels[r], p = c.points.find(x => x.slot === i && x.kind !== 'read');
   const name = `Run ${r + 1}`;
+  // a quote move from another job before this run: its own line, sourced to the view read (no tx to link)
+  const rd = c.points.find(x => x.kind === 'read' && x.run === r);
+  const read = rd ? `<span class="qc-read" data-qc-read="${r + 1}">before run ${r + 1}: ${fmtM(rd.prev)} → ${fmtM(rd.mnear)} · get_record (moved by another job)</span>` : '';
   if (p) {
-    const what = p.kind === 'refund' ? 'refund' : 'settle';
     const move = p.delta ? `${fmtM(p.prev)} → ${fmtM(p.mnear)}` : `${fmtM(p.mnear)} holds`;
-    return `<li data-qc-slot="${i}" data-qc-step="${r + 1}"><b>${name} · ${what}</b><span>${move}</span>${txLink(p, explorer)}</li>`;
+    return `<li data-qc-slot="${i}" data-qc-step="${r + 1}"><b>${name} · ${esc(stepWhat(p))}</b><span>${move}</span>${txLink(p, explorer)}${read}</li>`;
   }
-  const why = !l || l.st === 'pend' ? 'not played yet' : l.st === 'failed' ? `tx failed · ${esc(l.action)} · no step` : l.st === 'reading' ? 'settled · reading quote' : 'waiting for the settle';
-  return `<li class="pend" data-qc-slot="${i}"><b>${name}</b><span>${why}</span></li>`;
+  const why = !l || l.st === 'pend' ? 'not played yet' : l.st === 'failed' ? `tx failed · ${esc(l.action)} · no step` : l.st === 'reading' ? 'settled · reading quote' : l.st === 'unsent' ? 'not sent yet' : 'waiting for the settle';
+  return `<li class="pend" data-qc-slot="${i}"><b>${name}</b><span>${why}</span>${read}</li>`;
 }
 
 /** The chart slot's HTML for a chart model (chartOf). */
@@ -99,7 +107,7 @@ export function chartHTML(c, { explorer } = {}) {
   const sc = scaleOf(c.points), last = c.points[c.points.length - 1];
   const grid = sc.ticks.map(t => `<path d="M0 ${sc.y(t)} H100"/>`).join('');
   const floor = sc.lo < 25 ? `<path class="qc-floor" d="M0 ${sc.y(25)} H100"/>` : '';
-  const ylab = sc.ticks.map(t => `<span style="top:${sc.y(t)}%">${fmtM(t)}</span>`).join('') + (sc.lo < 25 ? `<span class="qc-fl" style="top:${sc.y(25)}%">floor</span>` : '');
+  const ylab = sc.ticks.map(t => `<span style="top:${sc.y(t)}%">${fmtM(t)}</span>`).join('') + (sc.lo < 25 ? `<span class="qc-fl" style="top:${sc.y(25)}%">floor 0.025</span>` : '');
   const dots = c.points.map(p => `<i class="qc-pt ${esc(p.kind)}${p === last ? ' now' : ''}" data-qc-pt="${esc(p.kind)}" data-mnear="${num(p.mnear)}" style="left:${xOf(p.slot, c.slots)}%;top:${sc.y(p.mnear)}%"></i>`).join('');
   const labels = Array.from({ length: c.slots }, (_, i) => labelHTML(c, i, explorer)).join('');
   const quote = c.quote == null ? '—' : fmtM(c.quote);

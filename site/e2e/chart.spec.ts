@@ -8,12 +8,13 @@ import { expect, test, type Page } from "@playwright/test";
 const SETTLE = ["9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB", "3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw"];
 const ATTEST = "B9cCSY47Wo7hsvBkyw4DuaW8x5SmR6Udgjf824dX6GpF"; // run 2's submit_review tx (the latest attestation)
 const CHIP = "TESTNET · RECORDED 12 NOV 13:25 UTC · verified live";
+const CHIP_HTML = 'TESTNET · RECORDED 12 NOV 13:25 UTC <span class="vl">· verified live</span>'; // L1: "verified live" never splits
 const explorer = (h: string) => `https://testnet.nearblocks.io/txns/${h}`;
 
 test("AC 5: no-JS HTML (what crawlers get) holds the final chart, quote, Pass %, chip and every tx link", async ({ request }) => {
   const html = (await (await request.get("/")).text()).replace(/<!-- -->/g, "");
   // must-contain list for S-010 (kept apart from the R6 list in static-final.spec.ts)
-  for (const s of ["QUOTE CHART", 'data-qc-steps="2"', "<b data-qc-quote>0.040</b>", "<b data-qc-pass>100%</b>", "2 of 2 graded jobs", CHIP, "· attestation"])
+  for (const s of ["QUOTE CHART", 'data-qc-steps="2"', "<b data-qc-quote>0.040</b>", "<b data-qc-pass>100%</b>", "2 of 2 graded jobs", CHIP_HTML, "· signed review "])
     expect(html, `missing "${s}"`).toContain(s);
   for (const [i, h] of SETTLE.entries()) {
     const li = new RegExp(`<li data-qc-slot="${i + 1}" data-qc-step="${i + 1}">[^]*?</li>`).exec(html)?.[0] ?? "";
@@ -22,6 +23,8 @@ test("AC 5: no-JS HTML (what crawlers get) holds the final chart, quote, Pass %,
   expect(html).toContain(`data-chip-att="${ATTEST}"`);
   expect(html).toContain(`href="${explorer(ATTEST)}"`);
   expect(html).not.toContain("TESTNET · LIVE");
+  const chip = /<span class="chip net"[^]*?<\/span><\/span>/.exec(html)?.[0] ?? "";
+  expect(chip, "B1: the chip names the submit_review tx a signed review, never an attestation").not.toMatch(/attestation/i);
 });
 
 for (const width of [390, 1280]) {

@@ -20,6 +20,7 @@ const SETTLE_2 = "3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw";
 const ATTESTED = (r: LabFixture) => r.events.find((e) => e.type === "attested")!.tx_hash as string;
 const finalView = (runs: readonly LabFixture[]) => { const st = buildStory(runs); return storyStateAt(st, finalIndex(st)); };
 const hrefs = (html: string) => [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+const CHIP_HTML = 'TESTNET · RECORDED 12 NOV 13:25 UTC <span class="vl">· verified live</span>';
 
 test("AC 4: the final chart of the recorded log steps once per settle, each step labelled with its settle tx", () => {
   const c = chartOf(finalView(RUNS));
@@ -114,6 +115,9 @@ test("AC 2: RECORDED chip reads 'TESTNET · RECORDED <time> · verified live' wi
   const html = slotsOf(storyStateAt(story, 0)).slots.chips;
   assert.ok(html.includes(`href="https://testnet.nearblocks.io/txns/${ATTESTED(RUNS[1])}"`), "attestation link");
   assert.ok(html.includes(`data-chip-att="${ATTESTED(RUNS[1])}"`));
+  assert.ok(html.includes("· signed review "), "B1: visible label");
+  assert.ok(!/attestation/i.test(html.replace(/<[^>]*>/g, "")), "B1: no visible 'attestation' in the chip");
+  assert.ok(html.includes(CHIP_HTML), "L1: 'verified live' sits in a nowrap span");
   // the chip describes the whole log, so it is identical at every replay step (no layout shift)
   for (let k = 0; k <= finalIndex(story); k++) assert.equal(slotsOf(storyStateAt(story, k)).slots.chips, html);
   assert.equal(recLabel(null), "");
@@ -130,7 +134,7 @@ test("AC 2: LIVE chip reads 'TESTNET · LIVE' and claims no recording", () => {
 
 test("AC 5: the server's final stage HTML carries the chart (both steps, links, quote, Pass %) and the chip", () => {
   const html = renderStage(finalView(RUNS), { odometer: true });
-  for (const s of ["QUOTE CHART", 'data-qc-steps="2"', "<b data-qc-quote>0.040</b>", "<b data-qc-pass>100%</b>", "TESTNET · RECORDED 12 NOV 13:25 UTC · verified live",
+  for (const s of ["QUOTE CHART", 'data-qc-steps="2"', "<b data-qc-quote>0.040</b>", "<b data-qc-pass>100%</b>", CHIP_HTML, "· signed review ",
     `data-qc-tx="${SETTLE_1}"`, `data-qc-tx="${SETTLE_2}"`, `data-chip-att="${ATTESTED(RUNS[1])}"`])
     assert.ok(html.includes(s), `missing ${s}`);
 });
@@ -146,4 +150,46 @@ test("AC 3 reach: every explorer link the chart and chip add is a hash the ship-
     assert.ok(m, h);
     assert.ok(txs.has(m[1]), `${m[1]} is not in the gate's RPC check`);
   }
+});
+
+/* ---------- fix round 1 (review R-3, Designer L3 / L5, review O-3) ---------- */
+
+test("R-3: a quote move from another job sits on its own x before the run and is labelled with exactly its own move", () => {
+  const runs = JSON.parse(JSON.stringify(RUNS)) as LabFixture[];
+  // live: between run 1 and run 2, someone else's job moved the seller's quote 0.040 -> 0.050
+  const qb = runs[1].events[0] as Extract<LabEvent, { type: "quote" }>;
+  Object.assign(qb.data, { record: { passes: 1, fails: 0, unique_buyers: 2, jobs: 1 }, quote_mnear: 50 });
+  const c = chartOf(finalView(runs));
+  const read = c.points.find((p) => p.kind === "read")!;
+  assert.deepEqual([read.slot, read.prev, read.mnear], [1.5, 40, 50], "on the boundary between run 1's settle (slot 1) and run 2 (slot 2)");
+  const settle1 = c.points.find((p) => p.kind === "settle" && p.run === 0)!;
+  assert.equal(settle1.slot, 1);
+  const html = chartHTML(c);
+  const li = (i: number) => new RegExp(`<li[^>]*data-qc-slot="${i}"[^>]*>[^]*?</li>`).exec(html)?.[0] ?? "";
+  assert.match(li(1), /Run 1 · settle<\/b><span>0\.030 → 0\.040<\/span>/, "run 1's riser is labelled with its own move only");
+  assert.ok(!li(1).includes("0.050"), "the outside move is not on run 1's label");
+  assert.match(li(2), /before run 2: 0\.040 → 0\.050 · get_record \(moved by another job\)/);
+  // the path holds 0.040 to the boundary, rises there (no tx), then holds to run 2's settle
+  const x = (slot: number) => +(((slot + 0.5) / c.slots) * 100).toFixed(2);
+  const d = /class="qc-line" d="([^"]+)"/.exec(html)![1];
+  assert.deepEqual([...d.matchAll(/H([\d.]+)/g)].map((m) => +m[1]), [x(1), x(1.5), x(2)], d);
+  const ys = [...d.matchAll(/V([\d.]+)/g)].map((m) => +m[1]);
+  assert.equal(ys.length, 3);
+  assert.ok(ys[0] > ys[1] && ys[2] > ys[1], "rise to 0.040 at run 1, to 0.050 at the boundary, back to 0.040 at run 2");
+});
+
+test("L3 / L5: READY says 'not sent yet'; the floor line names its value", () => {
+  const story = buildStory(RUNS);
+  const html = chartHTML(chartOf(storyStateAt(story, 0)));
+  assert.match(html, /<b>Run 1<\/b><span>not sent yet<\/span>/);
+  const low = JSON.parse(JSON.stringify(RUNS)) as LabFixture[];
+  for (const e of low[0].events) if (e.type === "quote") Object.assign(e.data, { record: { passes: 0, fails: 1, unique_buyers: 0, jobs: 1 }, quote_mnear: 25 });
+  assert.match(chartHTML(chartOf(finalView(low))), />floor 0\.025</);
+});
+
+test("O-3: the y scale is bounded to the contract's 25..100 even if a bad value got through", () => {
+  const huge = JSON.parse(JSON.stringify(RUNS)) as LabFixture[];
+  for (const e of huge[0].events) if (e.type === "quote" && e.data.phase === "after") e.data.quote_mnear = 5e6;
+  const html = chartHTML(chartOf(finalView(huge)));
+  assert.ok(html.length < 20000, `chart HTML ${html.length} bytes`);
 });
