@@ -24,6 +24,8 @@ const VERIFY_CSP = [
 const config: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  // T-100: the /api/review function reads the exam packs from disk (packs/packs.js); ship them in its bundle.
+  outputFileTracingIncludes: { "/api/review": ["./packs/**"] },
   async headers() {
     return [
       {

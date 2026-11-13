@@ -177,7 +177,7 @@ export async function createViaFaucet(fetchFn, accountId, publicKey) {
 /** Packs 1-3 with their frozen hashes, from packs/index.json once T-013 freezes them. */
 export function readPacks(file = new URL("../packs/index.json", import.meta.url)) {
   try {
-    const { packs } = JSON.parse(readFileSync(file, "utf8"));
+    const { packs } = JSON.parse(readFileSync(/* turbopackIgnore: true */ file, "utf8")); // no whole-project trace in the site build (T-100)
     return Array.isArray(packs) ? packs : [];
   } catch {
     return [];
