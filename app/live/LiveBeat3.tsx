@@ -30,7 +30,7 @@ import {
   AccountError, CONTRACT_ID, DEMO_SELLER, MAX_CLOSE_TRIES, loadJob, near3, pickStorage, readPublicBuyer, signJobAction,
 } from "../../site/live/account.js";
 import type { ClosingOutcome, Job, KV, ParsedTx, PublicBuyer } from "../../site/live/account.d.ts";
-import { DEADLINE_MARGIN_MS, blockByHash, chainHead, lookupTx, mmss, readJobView, readQuoteFull, readRecordAt } from "../../site/live/job.js";
+import { DEADLINE_MARGIN_MS, blockByHash, chainHead, finalHead, lookupTx, mmss, readJobView, readQuoteFull, readRecordAt } from "../../site/live/job.js";
 import type { FullQuote, JobView, Record4 } from "../../site/live/job.d.ts";
 import { SLOW_MS, checksOf, findingsCount, recoverReviewBody, reviewMatches, saveReviewBody, stageOf, txHeight } from "../../site/live/review.js";
 import type { CheckRow, ReviewAnswer } from "../../site/live/review.d.ts";
@@ -396,19 +396,23 @@ export function LiveBeat3({ buyer, job, run, answer, recorded, onBuyer, beat = 3
         if (!q) await sleep(1500);
       }
     }
+    // fallback (review L-13): read at the latest FINAL block, again only if get_job(jobId) is null there, so the record
+    // includes OUR close and a jobs +1 can only be this job. An unpinned read is shown, but never attributed ("unclear").
     let last: FullQuote | null = null;
     for (let i = 0; i < 8 && !q; i++) {
       try {
+        const at = await readRecordAt(fetchFn(), (await finalHead(fetchFn())).hash, jobId);
+        if (at && (!o.graded || !before || at.record.jobs > before.record.jobs)) { q = at; break; }
         last = await readQuoteFull(fetchFn());
-        if (!o.graded || !before || last.record.jobs > before.record.jobs) { q = last; break; }
       } catch { /* the view lags or the RPC blinked: read again */ }
       await sleep(1500);
     }
+    const attributable = q !== null;
     q ??= last;
     if (!q) return;
     const p = run?.quoteAfter({ record: q.record, quoteMilli: q.quoteMilli, formula: formulaLine(q.record), blockHeight: null, prevMilli: before?.quoteMilli ?? null });
     // the record change attributed to THIS job only when it moved by exactly this job (else "unclear": nothing claimed)
-    const kind = (classifyClose(o, before?.record ?? null, q.record) as { kind: Kind4 }).kind;
+    const kind: Kind4 = attributable ? (classifyClose(o, before?.record ?? null, q.record) as { kind: Kind4 }).kind : "unclear";
     setRecord({ before, after: q, bus: p?.ok ? p.seq : null, kind });
   }
 

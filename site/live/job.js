@@ -81,6 +81,11 @@ export async function chainHead(fetchFn) {
   return header(await rpcCall(fetchFn, RPC_URLS, "block", { finality: "optimistic" }));
 }
 
+/** The latest FINAL block: its height, time and hash (T-037 review L-13: a record read pinned to it). */
+export async function finalHead(fetchFn) {
+  return header(await rpcCall(fetchFn, RPC_URLS, "block", { finality: "final" }));
+}
+
 /** A block by hash (a receipt's block_hash): { height, timestampNs }. */
 export async function blockByHash(fetchFn, hash) {
   return header(await rpcCall(fetchFn, RPC_URLS, "block", { block_id: hash }));

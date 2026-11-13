@@ -25,7 +25,7 @@
 import { BUG_COUNT, findingsFromResponse, grade, sha256Hex } from "../../grader/grade.js";
 import { parseTxOutcome } from "../../cli/tx.js";
 import { AccountError, CONTRACT_ID, DEMO_SELLER } from "./account.js";
-import { RPC_FAILS_BEFORE_DOWN, POLL_MS, blockByHash, chainHead, lookupTx, sellerTxsAt } from "./job.js";
+import { RPC_FAILS_BEFORE_DOWN, POLL_MS, UNSEEN_ROUNDS, blockByHash, chainHead, lookupTx, sellerTxsAt } from "./job.js";
 
 export const REVIEW_URL = "/api/review";
 export const REVIEW_FN_MAX_MS = 300_000; // site-api/review.js MAX_DURATION_MS (Vercel maxDuration 300; drift test)
@@ -244,7 +244,8 @@ export async function txHeight(fetchFn, txHash, sender) {
  *                                               a lying RPC; the body is dropped and never offered to the gate
  *   { ok: false, reason: "not_found" }          maxBlocks scanned and no submit_review for this job
  *   { ok: false, reason: "no_review" }          wantSha256 isn't a sha256 (get_job shows no review)
- * Throws RPC_UNAVAILABLE after repeated failed rounds, and an AbortError when `signal` aborts.
+ * Throws RPC_UNAVAILABLE after repeated failed rounds, or after UNSEEN_ROUNDS rounds stuck on a listed tx no RPC will
+ * return (review MUST-1), and an AbortError when `signal` aborts. Every round that makes no progress sleeps first.
  */
 export async function recoverReviewBody({ fetch: fetchFn, jobId, fromHeight, wantSha256, signal, sleep, maxBlocks = RECOVER_MAX_BLOCKS, pollMs = POLL_MS }) {
   const want = lcHex(wantSha256);
@@ -254,9 +255,11 @@ export async function recoverReviewBody({ fetch: fetchFn, jobId, fromHeight, wan
   const seen = new Set();
   let cursor = fromHeight;
   let fails = 0;
+  let stalls = 0; // rounds stuck on a listed tx that no RPC returns (review MUST-1); reset when the cursor moves
   for (;;) {
     if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
     let caughtUp = false;
+    let stalled = false;
     try {
       const head = await chainHead(fetchFn);
       const to = Math.min(head.height, last);
@@ -265,7 +268,7 @@ export async function recoverReviewBody({ fetch: fetchFn, jobId, fromHeight, wan
         for (const txHash of await sellerTxsAt(fetchFn, h)) {
           if (seen.has(txHash)) continue;
           const outcome = await lookupTx(fetchFn, txHash, DEMO_SELLER);
-          if (!outcome) break scan; // not executed yet: this block is read again next round
+          if (!outcome) { stalled = true; break scan; } // not executed yet (or an RPC error): this block is read again next round, after a sleep
           seen.add(txHash);
           const found = submitReviewOf(outcome, jobId);
           if (!found) continue;
@@ -274,15 +277,18 @@ export async function recoverReviewBody({ fetch: fetchFn, jobId, fromHeight, wan
             : { ok: false, reason: "mismatch", txHash: found.txHash };
         }
         cursor = h + 1;
+        fails = 0; // review L-11: progress clears earlier transient errors
+        stalls = 0;
       }
       fails = 0;
       if (cursor > last) return { ok: false, reason: "not_found" };
-      caughtUp = cursor > head.height;
+      caughtUp = stalled || cursor > head.height;
     } catch (err) {
       if (err?.name === "AbortError") throw err;
       if (++fails >= RPC_FAILS_BEFORE_DOWN) throw new AccountError("RPC_UNAVAILABLE", "testnet RPC stopped answering while the page looked for the signed review");
       caughtUp = true;
     }
+    if (stalled && ++stalls >= UNSEEN_ROUNDS) throw new AccountError("RPC_UNAVAILABLE", "testnet RPC keeps failing to return a seller tx while the page looks for the signed review");
     if (caughtUp) await wait(pollMs);
   }
 }

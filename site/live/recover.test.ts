@@ -10,6 +10,7 @@ import {
   AccountError, CONTRACT_ID, DEMO_SELLER, JOB_GAS_RESERVE_YOCTO, MAX_CLOSE_TRIES, REVEAL_GAS, loadJob, saveBuyer, saveJob, signJobAction,
 } from "./account.js";
 import type { Job, KV } from "./account.d.ts";
+import { UNSEEN_ROUNDS } from "./job.js";
 import { RECOVER_MAX_BLOCKS, loadReviewBody, loadReviewTx, recoverReviewBody, reviewMatches, saveReviewBody, submitReviewOf, txHeight } from "./review.js";
 // @ts-expect-error plain module, no type declarations
 import { canonicalJson, commit, sha256Hex } from "../../grader/grade.js";
@@ -86,6 +87,8 @@ const view = (body: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 const noSleep = async () => {};
+/** A sleep that counts its calls (review MUST-1: noSleep can't see a spin). */
+const counting = () => { const c = { n: 0, fn: async () => { c.n++; } }; return c; };
 
 /* ---------- submitReviewOf: only the seller's own successful submit_review for THIS job ---------- */
 
@@ -128,9 +131,33 @@ test("L-2 recover: scans the seller's access-key changes from the accept's block
 test("L-2 recover: tampered args (a lying RPC) -> mismatch, the body is dropped; a tx not executed yet is read again", async () => {
   const tampered = BODY.replace("12", "13");
   const net = rpc({ head: 510, txs: { 505: [{ hash: H(3), outcome: sellerTx(H(3), { args: { job_id: JOB, response: tampered } }) }] }, unexecuted: { [H(3)]: 2 } });
-  const r = await recoverReviewBody({ fetch: net.fn, jobId: JOB, fromHeight: 500, wantSha256: sha256Hex(BODY), sleep: noSleep });
+  const sleeps = counting();
+  const r = await recoverReviewBody({ fetch: net.fn, jobId: JOB, fromHeight: 500, wantSha256: sha256Hex(BODY), sleep: sleeps.fn });
   assert.deepEqual(r, { ok: false, reason: "mismatch", txHash: H(3) });
   assert.ok(net.calls.filter((c) => c === "tx").length === 3, "looked up again until executed");
+  assert.equal(sleeps.n, 2, "one sleep after each round stuck on the unexecuted tx (review MUST-1)");
+});
+
+test("L-2 recover (review MUST-1): a listed tx the RPC never returns -> one sleep per stuck round, then RPC_UNAVAILABLE after UNSEEN_ROUNDS; no spin", async () => {
+  const net = rpc({ head: 510, txs: { 505: [{ hash: H(3), outcome: sellerTx(H(3)) }] }, unexecuted: { [H(3)]: Number.MAX_SAFE_INTEGER } });
+  const sleeps = counting();
+  await assert.rejects(recoverReviewBody({ fetch: net.fn, jobId: JOB, fromHeight: 500, wantSha256: sha256Hex(BODY), sleep: sleeps.fn }),
+    (e: unknown) => e instanceof AccountError && e.code === "RPC_UNAVAILABLE");
+  const rounds = net.calls.filter((c) => c === "tx").length;
+  assert.equal(rounds, UNSEEN_ROUNDS, "bounded: one lookup per round");
+  assert.equal(sleeps.n, UNSEEN_ROUNDS - 1, "a sleep after every stuck round but the last (which gives up)");
+  assert.ok(net.calls.length < 100, `bounded RPC calls (${net.calls.length})`);
+});
+
+test("L-2 recover (review L-11): transient errors spread over a long scan don't add up once the cursor moves on", async () => {
+  let n = 0;
+  const base = rpc({ head: 700, txs: { 690: [{ hash: H(3), outcome: sellerTx(H(3)) }] } });
+  const flaky = (async (u: string | URL | Request, init?: RequestInit) => {
+    if (JSON.parse(String(init?.body ?? "{}")).method === "EXPERIMENTAL_changes" && ++n % 40 === 0) throw new Error("blip");
+    return base.fn(u, init);
+  }) as typeof fetch;
+  const r = await recoverReviewBody({ fetch: flaky, jobId: JOB, fromHeight: 500, wantSha256: sha256Hex(BODY), sleep: counting().fn });
+  assert.ok(r.ok, "4+ one-off errors across ~190 blocks still find the review");
 });
 
 test("L-2 recover: bounded (not_found after maxBlocks), no_review without a hash, RPC_UNAVAILABLE after repeated failures, AbortError on abort", async () => {
