@@ -23,9 +23,11 @@ import { CONTRACT_ACCOUNT, NETWORK } from "./names.js";
 import { RPC_RETRIES, RPC_URLS, assertTestnet, assertTestnetRpc, loadState, redact, saveState, stateDir } from "./init.js";
 import { formatNear } from "./spend-cap.js";
 import { YOCTO_PER_MNEAR, fetchQuote, formatMilli, parseRecord, quoteMilli, viewFunction } from "./quote.js";
-import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, defaultPickDeps, jobFilePath, loadJob, reconcileCreate, releaseSpend, runPick, saveJob, sendCreateTx } from "./pick.js";
+import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, defaultPickDeps, jobFilePath, loadJob, reconcileCreate, runPick, saveJob, sendCreateTx } from "./pick.js";
+import { releaseSpend } from "./spend-cap.js";
 import { STEP4_PACK, step4Report } from "./step4.js";
-import { REVEAL_GAS, TIMEOUT_GAS, TxError, parseTxOutcome } from "./tx.js";
+import { REVEAL_GAS, TIMEOUT_GAS, TxError, outcomeOf, parseTxOutcome } from "./tx.js";
+export { outcomeOf } from "./tx.js"; // moved to the browser-safe tx.js in T-035 (the /live page shares it)
 import { makeLocalSeller } from "./seller-local.js";
 import { fileURLToPath } from "node:url";
 import { readReceipt, writeReceipt } from "./receipt-file.js";
@@ -192,37 +194,6 @@ export function stageLine(view, nowMs) {
   const s = stageOf(view);
   const at = nsToMs(s.deadlineNs);
   return `Stage: ${view.status}${s.key === "reviewed" ? ", review on-chain" : ""}. ${s.what} by ${new Date(at).toISOString()} (${s.field}, ${fmtLeft(at - nowMs)})`;
-}
-
-/**
- * The outcome of a closing tx (reveal or timeout) from its events, for this job only. Returns
- * { kind, line, graded, refundYocto, reveal } or null when the tx carries no closing event.
- */
-export function outcomeOf(events, jobId, buyer) {
-  const ev = (name) => events.find((e) => e.event === name && String(e.data.job_id) === jobId) ?? null;
-  const reveal = ev("reveal");
-  const timeout = ev("timeout");
-  const payout = ev("payout");
-  const failedPayout = ev("payout_failed_refunded");
-  const refund = ev("refund");
-  const refunded = (e) => (e && e.data.buyer === buyer && /^\d+$/.test(String(e.data.amount)) ? String(e.data.amount) : null);
-  if (failedPayout) {
-    return { kind: "payout_failed_refunded", line: "The payout to the seller failed, so you were refunded. The seller's record is unchanged.", graded: false, refundYocto: refunded(failedPayout), reveal };
-  }
-  if (reveal) {
-    // recordBlock: the block of the receipt that wrote the record (payout callback = record_pass;
-    // the reveal's own receipt = record_fail), so the after-read can be pinned to it (review R-1).
-    if (reveal.data.outcome === "pass" && payout) return { kind: "settled", line: "Passed. The seller was paid from escrow.", graded: true, refundYocto: null, reveal, recordBlock: payout.blockHash ?? null };
-    if (reveal.data.outcome === "fail" && refund) return { kind: "refunded_fail", line: "Failed. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal, recordBlock: refund.blockHash ?? null };
-    return null;
-  }
-  if (timeout) {
-    const reason = timeout.data.reason;
-    if (reason === "not_accepted" && refund) return { kind: "timeout_refund", line: "Timed out: the seller did not accept by accept_by. You were refunded; the seller's record is unchanged.", graded: false, refundYocto: refunded(refund), reveal: null };
-    if (reason === "no_review" && refund) return { kind: "timeout_refund_fail", line: "Timed out: no signed review by review_by. You were refunded and the seller takes a fail.", graded: true, refundYocto: refunded(refund), reveal: null, recordBlock: refund.blockHash ?? null };
-    if (reason === "no_reveal" && payout) return { kind: "timeout_paid_seller", line: "Timed out: no valid reveal by reveal_deadline, so the signed review paid the seller. The record is unchanged.", graded: false, refundYocto: null, reveal: null };
-  }
-  return null;
 }
 
 /** Per-bug lines: our regrade of the signed findings against the revealed key. */

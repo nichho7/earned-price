@@ -47,6 +47,24 @@ export function recordSpend(state, amount) {
   return { ...state, spent_yocto: total.toString() };
 }
 
+/**
+ * Returns a new state with an amount that was ALREADY spent added, never refusing (T-035, security M-2).
+ * The cap is checked before signing (assertCanSpend / recordSpend); after a tx lands, the truth is
+ * recorded even if it crosses the cap (e.g. gas burnt above the reserve), so the count never under-counts.
+ */
+export function recordBurn(state, amount) {
+  const amt = toYocto(amount);
+  if (amt < 0n) throw new SpendCapError("amount must be positive");
+  return { ...state, spent_yocto: (spentYocto(state) + amt).toString() };
+}
+
+/** Returns state with a reservation released (never below 0). Moved here from cli/pick.js in T-035. */
+export function releaseSpend(state, priceYocto) {
+  const spent = BigInt(state.spent_yocto ?? "0");
+  const price = /^\d+$/.test(String(priceYocto ?? "")) ? BigInt(priceYocto) : 0n;
+  return { ...state, spent_yocto: (spent > price ? spent - price : 0n).toString() };
+}
+
 export function formatNear(yocto) {
   const whole = yocto / YOCTO_PER_NEAR;
   const frac = (yocto % YOCTO_PER_NEAR).toString().padStart(24, "0").replace(/0+$/, "");

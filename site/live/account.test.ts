@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  AccountError, CONTRACT_ID, CREATE_GAS, DEMO_SELLER, FAUCET_URL, JOB_GAS_RESERVE_YOCTO, REVEAL_GAS, RPC_URLS,
+  AccountError, CONTRACT_ID, CREATE_GAS, DEMO_SELLER, FAUCET_URL, JOB_GAS_RESERVE_YOCTO, REVEAL_GAS, RPC_URLS, TIMEOUT_GAS,
   KEY_CHECK_TRIES, SPEND_CAP_NEAR, SPEND_CAP_YOCTO, STORAGE_KEY, accountExists, capStatus, checkJobBudget, createViaFaucet,
   keyOnAccount, loadBuyer, near3,
   newAccountId, pickStorage, readLiveQuote, recordSpend, saveBuyer, startAccount, validBuyer,
@@ -19,7 +19,7 @@ import { FAUCET_URL as CLI_FAUCET, RPC_URLS as CLI_RPCS } from "../../cli/init.j
 // @ts-expect-error plain CLI module, no type declarations
 import { CREATE_GAS as CLI_CREATE_GAS, DEMO_SELLER as CLI_SELLER } from "../../cli/pick.js";
 // @ts-expect-error plain CLI module, no type declarations
-import { REVEAL_GAS as CLI_REVEAL_GAS } from "../../cli/tx.js";
+import { REVEAL_GAS as CLI_REVEAL_GAS, TIMEOUT_GAS as CLI_TIMEOUT_GAS } from "../../cli/tx.js";
 
 const NEAR = 10n ** 24n;
 const MILLI = 10n ** 21n;
@@ -72,7 +72,10 @@ test("drift: faucet URL, RPC list, seller, contract and gas match the CLI; the c
   assert.equal(REVEAL_GAS, CLI_REVEAL_GAS);
   assert.equal(SPEND_CAP_YOCTO, spendCap.SPEND_CAP_YOCTO); // same binding, not a copy
   assert.equal(SPEND_CAP_NEAR, spendCap.SPEND_CAP_NEAR);
-  assert.equal(JOB_GAS_RESERVE_YOCTO, 33n * MILLI); // 330 Tgas at 1e8 yocto/gas = 0.033 NEAR
+  assert.equal(TIMEOUT_GAS, CLI_TIMEOUT_GAS);
+  // T-035 / security M-2: the reserve covers the timeout path too: 430 Tgas at 1e8 yocto/gas = 0.043 NEAR.
+  assert.equal(JOB_GAS_RESERVE_YOCTO, (CREATE_GAS + REVEAL_GAS + TIMEOUT_GAS) * 100_000_000n);
+  assert.equal(JOB_GAS_RESERVE_YOCTO, 43n * MILLI);
 });
 
 /** "0.2" -> 2n * 10n ** 23n: exact decimal NEAR -> yocto, no float. */
@@ -261,6 +264,20 @@ test("L-1: a CREATED account whose key is gone is refused but never dropped sile
   assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)!).status, "created");
 });
 
+test("O-7 (T-035): a CREATED account is given up only when EVERY RPC says the key is gone", async () => {
+  // One RPC says "not yours", the other is down: not enough to offer "Start a fresh account" (an open job's
+  // reveal / timeout needs this key). The answer is RPC_UNAVAILABLE (Try again), and nothing is dropped.
+  const storage = memory();
+  saveBuyer(storage, buyer({ create_tx: TX }));
+  const oneDown = stub((url, body) => (url === RPC_URLS[1] ? Promise.reject(new Error("down")) : rpcBy(accountFound, keyMissing)(body)));
+  await assert.rejects(startAccount({ storage, fetch: oneDown.fn, keyGen, randomBytes: bytes, now }), (e: AccountError) => e.code === "RPC_UNAVAILABLE");
+  assert.equal(JSON.parse(storage.getItem(STORAGE_KEY)!).status, "created");
+  // The first RPC lies, the second sees our key: the account is kept and used.
+  const split = stub((url, body) => rpcBy(accountFound, url === RPC_URLS[0] ? keyMissing : keyFound)(body));
+  const r = await startAccount({ storage, fetch: split.fn, keyGen, randomBytes: bytes, now });
+  assert.equal(r.state.account_id, buyer().account_id);
+});
+
 test("L-1: the faucet's 'success' is checked on chain: a key that never shows = FAUCET_BAD_RESPONSE, key kept pending", async () => {
   const storage = memory();
   let sleeps = 0;
@@ -320,20 +337,20 @@ test("cap: the cap, spent and left come from cli/spend-cap.js and the saved spen
   assert.equal(capStatus(buyer({ spent_yocto: String(CAP + 50n * MILLI) })).leftYocto, 0n);
 });
 
-test("pre-job check: quote + 0.033 gas reserve must fit what is left (boundary is the CLI's: total <= cap)", () => {
-  // Fresh account at today's 0.040 quote: needs 0.073.
+test("pre-job check: quote + 0.043 gas reserve must fit what is left (boundary is the CLI's: total <= cap)", () => {
+  // Fresh account at today's 0.040 quote: needs 0.083 (T-035: the reserve covers create + reveal + timeout).
   const fresh = checkJobBudget(buyer(), 40n * MILLI);
-  assert.equal(fresh.fits, CAP >= 73n * MILLI);
-  assert.equal(fresh.needYocto, 73n * MILLI);
+  assert.equal(fresh.fits, CAP >= 83n * MILLI);
+  assert.equal(fresh.needYocto, 83n * MILLI);
   // Two jobs at 0.040 fit (after job 1 the page has recorded 0.040 + real gas, well under the reserve).
-  assert.equal(checkJobBudget(buyer({ spent_yocto: String(45n * MILLI) }), 40n * MILLI).fits, CAP >= 118n * MILLI);
-  // CFO T-076 shape: with 0.095 left, a job at the 0.100 ceiling (0.133 needed) does not fit.
+  assert.equal(checkJobBudget(buyer({ spent_yocto: String(45n * MILLI) }), 40n * MILLI).fits, CAP >= 128n * MILLI);
+  // CFO T-076 shape: with 0.095 left, a job at the 0.100 ceiling (0.143 needed) does not fit.
   const second = checkJobBudget(buyer({ spent_yocto: String(CAP - 95n * MILLI) }), 100n * MILLI);
   assert.equal(second.fits, false);
   assert.equal(second.leftYocto, 95n * MILLI);
   // Exactly at the cap still fits; one yocto over does not.
-  assert.equal(checkJobBudget(buyer({ spent_yocto: String(CAP - 73n * MILLI) }), 40n * MILLI).fits, true);
-  assert.equal(checkJobBudget(buyer({ spent_yocto: String(CAP - 73n * MILLI + 1n) }), 40n * MILLI).fits, false);
+  assert.equal(checkJobBudget(buyer({ spent_yocto: String(CAP - 83n * MILLI) }), 40n * MILLI).fits, true);
+  assert.equal(checkJobBudget(buyer({ spent_yocto: String(CAP - 83n * MILLI + 1n) }), 40n * MILLI).fits, false);
   assert.throws(() => checkJobBudget(buyer(), 0n), (e: AccountError) => e.code === "BAD_QUOTE");
 });
 
