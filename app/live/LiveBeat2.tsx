@@ -24,6 +24,7 @@ import { FLOOR_MNEAR, evaluateOffer, formatMilli, formulaLine, parseNearToMilli 
 import { parseTxOutcome } from "../../cli/tx.js";
 import { shortHash, txUrl } from "../../site/stage/format.ts";
 import type { PackInfo } from "./LiveFlow.tsx";
+import { loadNear } from "./load-near.ts";
 import s from "./live.module.css";
 import b from "./beat2.module.css";
 
@@ -41,12 +42,18 @@ const HEAD: Record<Phase, string> = {
 };
 const RECORDED_LINE = "Watch the recorded run instead: the same flow, real testnet data, labelled RECORDED.";
 
-// R4: wallet code is imported only here, in app/live/, lazily, when something is signed.
-const loadNear = async () => ({ near: await import("near-api-js"), rpcErrors: await import("near-api-js/rpc-errors") });
 const randomBytes = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 const nsToMs = (ns: bigint) => Number(ns / 1_000_000n);
 
-export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer: PublicBuyer; onBuyer: (b: PublicBuyer) => void }) {
+type Beat2Props = {
+  packs: PackInfo[]; buyer: PublicBuyer; onBuyer: (b: PublicBuyer) => void;
+  /** T-036: the create landed (or a live job was resumed): the review request starts (the function accepts). */
+  onCreated?: (job: Job, run: LiveRun | null) => void;
+  /** T-036: the seller's accept was seen on chain: step 3 opens. */
+  onAccepted?: (job: Job, run: LiveRun | null) => void;
+};
+
+export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted }: Beat2Props) {
   const store = useRef<KV | null>(null);
   const run = useRef<LiveRun | null>(null);
   const abort = useRef<AbortController | null>(null);
@@ -111,6 +118,8 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
       if (cur.status === "accepted" && cur.accept_tx) {
         setSeller({ st: "ok", label: "Seller accepted", note: "", tx: cur.accept_tx });
         setPhase("accepted");
+        onCreated?.(cur, run.current);
+        onAccepted?.(cur, run.current);
         return;
       }
       if (cur.status !== "open" || !cur.create_tx) {
@@ -203,6 +212,7 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
   /** The create landed: publish it, read get_job for accept_by, then wait for the seller's move on chain. */
   async function afterCreate(j: Job, parsed: ParsedTx, publish: boolean) {
     setJob(j);
+    onCreated?.(j, run.current);
     setCreateTx(parsed.txHash ?? j.create_tx);
     const ev = createEventOf(parsed, buyer.account_id, j.commit_hash);
     const blockHash = parsed.events.find((e) => e.event === "create")?.blockHash ?? null;
@@ -242,9 +252,10 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
       if (r.kind === "accepted") {
         const block = r.blockHash ? await blockByHash(fetchFn(), r.blockHash).catch(() => null) : null;
         const p = run.current?.accepted(r.parsed, block, r.acceptedAtNs);
-        await recordJobAccepted({ storage: storage(), nav: navigator }, r.parsed.txHash!);
+        const accepted = await recordJobAccepted({ storage: storage(), nav: navigator }, r.parsed.txHash!);
         setSeller({ st: "ok", label: "Seller accepted", note: "", tx: r.parsed.txHash, bus: p?.ok ? p.seq : null });
         setPhase("accepted");
+        if (accepted) onAccepted?.(accepted, run.current);
       } else if (r.kind === "declined") {
         const res = await recordJobClosed({ storage: storage(), nav: navigator }, r.closed, r.parsed.txHash);
         onBuyer(res.buyer);
@@ -496,7 +507,7 @@ function noticeOf(code: string, err: unknown, retry: Notice["retry"]): Notice {
 }
 const lc = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
 
-function Line({ st, data, label, note, href, hrefText, title, bus, countdown }: {
+export function Line({ st, data, label, note, href, hrefText, title, bus, countdown }: {
   st: "todo" | "wait" | "ok" | "bad"; data: string; label: string; note: string; href?: string; hrefText?: string; title?: string; bus?: number | null; countdown?: boolean;
 }) {
   return (
@@ -516,7 +527,7 @@ function Line({ st, data, label, note, href, hrefText, title, bus, countdown }: 
 const Check = () => <svg viewBox="0 0 14 14"><path d="M2.5 7.4l2.9 2.9 6-6.3" fill="none" stroke="currentColor" strokeWidth="1.6" /></svg>;
 const Cross = () => <svg viewBox="0 0 14 14"><path d="M3 3l8 8M11 3l-8 8" fill="none" stroke="currentColor" strokeWidth="1.6" /></svg>;
 const Dash = () => <svg viewBox="0 0 14 14"><path d="M3.5 7h7" fill="none" stroke="currentColor" strokeWidth="1.4" /></svg>;
-const Alert = () => (
+export const Alert = () => (
   <svg className={s.alert} viewBox="0 0 14 14" aria-hidden="true">
     <path d="M7 1.8l5.6 10H1.4z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
     <path d="M7 5.6v3M7 9.9v.4" fill="none" stroke="currentColor" strokeWidth="1.4" />

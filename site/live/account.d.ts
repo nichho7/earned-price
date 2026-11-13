@@ -138,3 +138,12 @@ export function signJobAction(
   req: SignRequest,
 ): Promise<{ outcome: unknown; parsed: ParsedTx; job: Job; buyer: PublicBuyer; closed?: ClosingOutcome | null }>;
 export function reconcileCreate(deps: { storage: KV; nav: Navigator | undefined; fetch: FetchFn }): Promise<Job | null>;
+/** T-036: the /api/review caller binding, signed inside the gate for this browser's live job only. */
+export const REVIEW_AUTH_PREFIX: string;
+export const REVIEW_AUTH_TTL_MS: number;
+export function reviewAuthText(jobId: string, packId: string, expiresMs: string): string;
+export interface ReviewAuth { job_id: string; pack_id: string; public_key: string; signature: string; expires_ms: string }
+export function signReviewAuth(
+  deps: { storage: KV; nav: Navigator | undefined; loadNear: () => Promise<{ near: unknown; rpcErrors?: unknown }>; now?: () => number },
+  req: { job_id: string },
+): Promise<ReviewAuth>;

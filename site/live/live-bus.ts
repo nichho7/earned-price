@@ -11,8 +11,9 @@
 // record_change none, grade null, at the closing tx's moment. The run header says version 1.1 (it may use v1.1 values).
 // Types: v1.1 lives in t-038-chart's schema.ts, not merged yet; the v1.1 events below are typed locally (LiveEvent).
 // Skills used: api-and-interface-design, karpathy-guidelines
-import type { LabEvent, LabFixture, Record4 } from "../stage/schema.ts";
-import { createBus } from "../bus/bus.ts";
+import type { Action, Grade, LabEvent, LabFixture, Record4, SettleReason } from "../stage/schema.ts";
+import { createBus, type EventBus } from "../bus/bus.ts";
+import { SETTLE_REASONS } from "../earn/earn-core.js";
 
 export type RunHeader = Omit<LabFixture, "events" | "version"> & { version: 1 | 1.1 };
 export type PublishResult = { ok: true; added: number } | { ok: false; errors: string[] };
@@ -41,7 +42,12 @@ export function pendingBus(): BusLike & { batches: LiveEvent[][]; headers: RunHe
 }
 
 /** The bus the /live page publishes to: T-038's typed bus (validates per type, isolates subscribers). Review L-7. */
-export const LIVE_BUS: BusLike = createBus();
+export const LIVE_BUS: BusLike & Pick<EventBus, "subscribe" | "runs"> = createBus();
+
+/** The settle-reason table (schema v1.1), the one the bus enforces: outcome and record_change follow from the reason. */
+const SETTLE = SETTLE_REASONS;
+/** get_job.review: the signed review the escrow stored (m001 §8 M-007). */
+export type Attested = { model: string; signing_address: string; request_sha256: string; response_sha256: string; signed_text: string; signature: string };
 
 const MILLI = 10n ** 21n;
 const mnear = (yocto: string | bigint): number => Number(BigInt(yocto) / MILLI);
@@ -81,13 +87,21 @@ export function liveRun(bus: BusLike, header: { buyer: string; contract: string;
   const common = (m: { t_ms: number; at: string }, i: number, source: "testnet" | "view") =>
     ({ seq: seq + i, t_ms: m.t_ms, at: m.at, job_id: jobId, source, recorded: true, placeholder: false }) as const;
 
-  /** A refunding close with no grade: its tx_confirmed and its settled share the closing tx's hash and moment. */
-  const closing = (action: "decline" | "timeout", p: TxParsed, block: Block | null, refundYocto: string): Published => {
+  const confirmed = (m: { t_ms: number; at: string }, action: Action, p: TxParsed, block: Block | null): LiveEvent =>
+    ({ ...common(m, 0, "testnet"), type: "tx_confirmed", tx_hash: p.txHash!, data: { action, status: "success", error: null, block_height: block?.height ?? null, block_timestamp_ns: block ? String(block.timestampNs) : null, chain_events: p.events.map((e) => e.event) } }) as LiveEvent;
+  /** A settled event (schema v1.1 SETTLE_REASONS): outcome and record_change follow from the reason. */
+  const settled = (m: { t_ms: number; at: string }, i: number, p: TxParsed, reason: SettleReason, amountYocto: string, grade: Grade | null): LiveEvent => {
+    const rule = SETTLE[reason];
+    return { ...common(m, i, "testnet"), type: "settled", tx_hash: p.txHash!, data: { outcome: rule.outcome as "paid_seller" | "refunded_buyer", amount_mnear: mnear(amountYocto), to: rule.outcome === "paid_seller" ? header.seller : header.buyer, reason, record_change: rule.record as "pass" | "fail" | "none", grade } } as LiveEvent;
+  };
+  /** A close with no grade (decline, any timeout): its tx_confirmed and its settled share the closing tx's hash and moment. */
+  const closing = (action: "decline" | "timeout", p: TxParsed, block: Block | null, reason: SettleReason, amountYocto: string): Published => {
     const m = moment();
-    return push([
-      { ...common(m, 0, "testnet"), type: "tx_confirmed", tx_hash: p.txHash!, data: { action, status: "success", error: null, block_height: block?.height ?? null, block_timestamp_ns: block ? String(block.timestampNs) : null, chain_events: p.events.map((e) => e.event) } },
-      { ...common(m, 1, "testnet"), type: "settled", tx_hash: p.txHash!, data: { outcome: "refunded_buyer", amount_mnear: mnear(refundYocto), to: header.buyer, reason: action === "decline" ? "decline" : "not_accepted", record_change: "none", grade: null } },
-    ], m.t_ms);
+    return push([confirmed(m, action, p, block), settled(m, 1, p, reason, amountYocto, null)], m.t_ms);
+  };
+  const submitted = (action: Action, txHash: string, holdDeadlineNs: string | null): Published => {
+    const m = moment();
+    return push([{ ...common(m, 0, "testnet"), type: "tx_submitted", tx_hash: txHash, data: { action, actor: "buyer", signer: header.buyer, deposit_mnear: 0, hold_deadline_ns: holdDeadlineNs } } as LiveEvent], m.t_ms);
   };
 
   return {
@@ -126,16 +140,56 @@ export function liveRun(bus: BusLike, header: { buyer: string; contract: string;
     },
     /** The seller's decline, found on chain: tx_confirmed(decline) + settled(decline), ONE publish at its moment. */
     declined(p: TxParsed, block: Block | null, refundYocto: string): Published {
-      return closing("decline", p, block, refundYocto);
+      return closing("decline", p, block, "decline", refundYocto);
     },
-    /** This page's timeout, signed and about to broadcast: tx_submitted, alone. */
-    timeoutSubmitted(txHash: string): Published {
-      const m = moment();
-      return push([{ ...common(m, 0, "testnet"), type: "tx_submitted", tx_hash: txHash, data: { action: "timeout", actor: "buyer", signer: header.buyer, deposit_mnear: 0, hold_deadline_ns: null } }], m.t_ms);
+    /** This page's timeout, broadcast: tx_submitted, alone. hold_deadline_ns = the stage deadline it closes (or null). */
+    timeoutSubmitted(txHash: string, holdDeadlineNs: string | null = null): Published {
+      return submitted("timeout", txHash, holdDeadlineNs);
     },
     /** The timeout landed (not accepted by accept_by): tx_confirmed(timeout) + settled(not_accepted), ONE publish. */
     timedOut(p: TxParsed, block: Block | null, refundYocto: string): Published {
-      return closing("timeout", p, block, refundYocto);
+      return closing("timeout", p, block, "not_accepted", refundYocto);
+    },
+
+    /* ---------- T-036 · beat 3 ---------- */
+    /** The seller's submit_review, observed on chain: tx_confirmed(submit_review) + attested (from get_job.review), ONE publish. */
+    reviewLanded(p: TxParsed, block: Block | null, review: Attested, findingsCount: number): Published {
+      const m = moment();
+      const confirmedEv = confirmed(m, "submit_review", p, block);
+      return push([
+        confirmedEv,
+        { ...common(m, 1, "testnet"), type: "attested", tx_hash: p.txHash!, data: {
+          model: review.model, signing_address: review.signing_address, request_sha256: review.request_sha256, response_sha256: review.response_sha256,
+          signed_text: review.signed_text, signature: review.signature, findings_count: findingsCount,
+        } } as LiveEvent,
+      ], m.t_ms);
+    },
+    /** This page's reveal, broadcast: tx_submitted, alone (hold = reveal_deadline_ns). */
+    revealSubmitted(txHash: string, revealDeadlineNs: string | null): Published {
+      return submitted("reveal", txHash, revealDeadlineNs);
+    },
+    /**
+     * The reveal landed: tx_confirmed(reveal) + 5 check_graded (titles from the revealed key) + settled, ONE publish at
+     * the reveal's moment. reason settle | grade_fail | payout_failed comes from the reveal's EVENT_JSON (outcomeOf).
+     */
+    revealed(p: TxParsed, block: Block | null, checks: { bug_id: string; title: string; hit: boolean }[], reason: "settle" | "grade_fail" | "payout_failed", amountYocto: string, grade: Grade): Published {
+      const m = moment();
+      let found = 0;
+      const graded = checks.map((c, i) => {
+        if (c.hit) found++;
+        return { ...common(m, 1 + i, "testnet"), type: "check_graded", tx_hash: p.txHash!, data: { index: i + 1, of: 5, bug_id: c.bug_id, title: c.title, hit: c.hit, found_so_far: found } } as LiveEvent;
+      });
+      return push([confirmed(m, "reveal", p, block), ...graded, settled(m, 1 + checks.length, p, reason, amountYocto, grade)], m.t_ms);
+    },
+    /** A beat-3 timeout landed: no_review (refund + fail) or no_reveal (the signed review pays the seller), ONE publish. */
+    closedByTimeout(p: TxParsed, block: Block | null, reason: "no_review" | "no_reveal" | "payout_failed", amountYocto: string): Published {
+      return closing("timeout", p, block, reason, amountYocto);
+    },
+    /** quote(after): get_record read after the close, alone, with the step from the quote before it. */
+    quoteAfter(q: { record: Record4; quoteMilli: number; formula: string; blockHeight: number | null; prevMilli: number | null }): Published {
+      const m = moment();
+      const prev = q.prevMilli === null ? {} : { prev_quote_mnear: q.prevMilli, delta_mnear: q.quoteMilli - q.prevMilli };
+      return push([{ ...common(m, 0, "view"), type: "quote", data: { phase: "after", block_height: q.blockHeight, record: q.record, quote_mnear: q.quoteMilli, formula: q.formula, ...prev } } as LiveEvent], m.t_ms);
     },
   };
 }

@@ -20,9 +20,9 @@
 // right before create, the spend reserved and the tx hash saved before broadcast (the cli/pick.js pattern).
 // Skills used: security-and-hardening, api-and-interface-design, karpathy-guidelines
 import { SPEND_CAP_NEAR, SPEND_CAP_YOCTO, SpendCapError, assertCanSpend, formatNear, recordBurn, recordSpend, releaseSpend, spentYocto } from "../../cli/spend-cap.js";
-import { fetchQuote } from "../../cli/quote.js";
+import { fetchQuote, viewFunction } from "../../cli/quote.js";
 import { outcomeOf, parseTxOutcome, sendCreateTx } from "../../cli/tx.js";
-import { canonicalJson, commit } from "../../grader/grade.js";
+import { canonicalJson, commit, sha256Hex } from "../../grader/grade.js";
 
 // Same values as cli/init.js FAUCET_URL / RPC_URLS, cli/pick.js DEMO_SELLER and names.json (drift tests in
 // account.test.ts). Copied, not imported: those modules read files with node:fs and can't ship to a browser.
@@ -506,6 +506,56 @@ export async function recordJobAccepted({ storage, nav }, acceptTx) {
 }
 
 /**
+ * T-036: a reveal makes the key public even when the escrow rejects it (m001 §8), so the gate sends one only when
+ * get_job (RPC_URLS, final) shows THIS job accepted with a signed review on-chain whose response_sha256 is the
+ * sha256 of the response being revealed (the CLI's revealStage check). Anything else: nothing is signed.
+ */
+async function assertReviewOnChain(fetchFn, jobId, response) {
+  let view;
+  try {
+    view = await viewFunction({ fetch: fetchFn, urls: RPC_URLS, contractId: CONTRACT_ID, method: "get_job", args: { id: jobId } });
+  } catch {
+    throw new AccountError("RPC_UNAVAILABLE", `couldn't read job ${jobId} before the reveal`);
+  }
+  const want = typeof view?.review?.response_sha256 === "string" ? view.review.response_sha256.toLowerCase().replace(/^0x/, "") : null;
+  if (!view || view.status !== "accepted" || !want) throw refuse(`job ${jobId} has no signed review on-chain yet; the key stays sealed`);
+  if (sha256Hex(response) !== want) throw refuse("the review body doesn't hash to the response_sha256 the escrow stored; the key stays sealed");
+}
+
+/** The exact text the buyer signs for /api/review (site-api/buyer-auth.js reviewAuthMessage; drift test in gate.test.ts). */
+export const REVIEW_AUTH_PREFIX = "earned-review-v1";
+export const REVIEW_AUTH_TTL_MS = 5 * 60_000; // buyer-auth.js allows at most 10 min ahead
+export const reviewAuthText = (jobId, packId, expiresMs) => `${REVIEW_AUTH_PREFIX}:${jobId}:${packId}:${expiresMs}`;
+
+/**
+ * T-036: the /api/review caller binding (T-028 security M-1). Signs ONLY the fixed text
+ * "earned-review-v1:<job_id>:<pack_id>:<expires_ms>" for THIS browser's saved job (open or accepted), with the buyer
+ * key, inside the gate (no second signer: the key never leaves this module). No tx, no spend. deps: { storage, nav,
+ * loadNear, now? }. Returns { job_id, pack_id, public_key, signature (base64, 64 bytes), expires_ms }.
+ */
+export async function signReviewAuth(deps, { job_id }) {
+  if (typeof job_id !== "string" || !JOB_ID_RE.test(job_id)) throw refuse("review auth needs a job_id");
+  if (typeof deps.loadNear !== "function") throw new AccountError("WALLET_LOAD_FAILED", "no near-api-js loader");
+  const now = deps.now ?? Date.now;
+  return withBuyerLock(deps.nav, async () => {
+    const state = loadBuyer(deps.storage);
+    if (!state || state.status !== "created") throw new AccountError("NO_BUYER", "no testnet buyer in this browser yet");
+    const job = loadJob(deps.storage);
+    if (!job || job.job_id !== job_id || (job.status !== "open" && job.status !== "accepted")) throw new AccountError("NO_JOB", `job ${job_id} is not this browser's live job`);
+    let near;
+    try {
+      ({ near } = await deps.loadNear());
+    } catch {
+      throw new AccountError("WALLET_LOAD_FAILED", "near-api-js failed to load");
+    }
+    const expires_ms = String(now() + REVIEW_AUTH_TTL_MS);
+    const pair = near.KeyPair.fromString(state.private_key);
+    const { signature } = pair.sign(new TextEncoder().encode(reviewAuthText(job.job_id, job.pack_id, expires_ms)));
+    return { job_id: job.job_id, pack_id: job.pack_id, public_key: state.public_key, signature: btoa(String.fromCharCode(...signature)), expires_ms };
+  });
+}
+
+/**
  * THE signing gate (security M-2): the only code on the site that signs with the buyer key.
  * deps: { storage, nav, fetch, loadNear } (loadNear = the page's lazy import of near-api-js + its rpc-errors, R4: wallet
  * code is imported only from app/live/; it is loaded BEFORE anything is booked, so a failed load leaves no reservation). req: { method, args, depositYocto, seal? (create), onSigned? }.
@@ -541,6 +591,7 @@ export async function signJobAction(deps, req) {
       if (method === "reveal" && (job.status !== "accepted" || args.key !== job.K || args.salt !== job.salt)) {
         throw refuse("reveal sends only the key and salt this job committed, on an accepted job");
       }
+      if (method === "reveal") await assertReviewOnChain(fetchFn, args.job_id, args.response);
       if (job.close_txs.length >= MAX_CLOSE_TRIES) {
         throw Object.assign(new AccountError("RETRY_LIMIT", `this page already signed ${job.close_txs.length} closing txs for job ${job.job_id}; it signs no more`), { tries: job.close_txs.length });
       }
