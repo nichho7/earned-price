@@ -228,8 +228,9 @@ export function mountHome(root: HTMLElement, jobs: DemoJob[]): () => void {
     if (!t) return;
     const words = postWords(J), two = words.length > 1;
     t.setAttribute("y", two ? "66" : "76");
-    t.setAttribute("font-size", two ? "13" : "16");
-    t.innerHTML = words.map((w, i) => `<tspan x="70" dy="${i ? 17 : 0}">${esc(w)}</tspan>`).join("");
+    t.setAttribute("font-size", two ? "11" : "16");
+    t.setAttribute("letter-spacing", two ? "0.4" : "1");
+    t.innerHTML = words.map((w, i) => `<tspan x="70" dy="${i ? 14 : 0}">${esc(w)}</tspan>`).join("");
   }
   function selectTab(j: number) {
     D.tabs.forEach((t, i) => { t.setAttribute("aria-selected", String(i === j)); t.tabIndex = i === j ? 0 : -1; });

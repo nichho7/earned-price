@@ -53,8 +53,9 @@ function Postmark({ id, ring, words, className, size = 17 }: { id: string; ring:
       <circle cx="70" cy="70" r="66" fill="none" stroke="currentColor" strokeWidth="3" />
       <circle cx="70" cy="70" r="40" fill="none" stroke="currentColor" strokeWidth="2" />
       <text fontSize="11.5" letterSpacing="2.2" fill="currentColor"><textPath href={`#${id}-ring`} startOffset="2%">{ring}</textPath></text>
-      <text data-post-words="" x="70" y={two ? 66 : 76} textAnchor="middle" fontSize={two ? 13 : size} fill="currentColor" letterSpacing="1">
-        {words.map((w, i) => <tspan key={w} x="70" dy={i ? 17 : 0}>{w}</tspan>)}
+      {/* Two lines must sit inside the r=40 inner ring: 11 / 0.4 keeps "PRICE SAME" 68 wide where the ring is 77 wide (T-098 QA). */}
+      <text data-post-words="" x="70" y={two ? 66 : 76} textAnchor="middle" fontSize={two ? 11 : size} fill="currentColor" letterSpacing={two ? 0.4 : 1}>
+        {words.map((w, i) => <tspan key={w} x="70" dy={i ? 14 : 0}>{w}</tspan>)}
       </text>
     </svg>
   );
