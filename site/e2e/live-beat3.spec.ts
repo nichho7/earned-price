@@ -93,8 +93,8 @@ test("beat 3: review in the function -> Check 1..5 sealed -> reveal through the 
   await expect(line3(page, "reveal")).toHaveAttribute("data-bus-seq", "7");
   await expect(line3(page, "settle")).toHaveAttribute("data-bus-seq", "8");
   await expect(line3(page, "record")).toHaveAttribute("data-bus-seq", "15");
-  await expect(line3(page, "sum")).toContainText("PASS");
-  await expect(step3(page).locator("[role=status]")).toContainText("step 3 PASS");
+  await expect(line3(page, "sum")).toContainText("done");
+  await expect(step3(page).locator("[role=status]")).toContainText("step 3 done");
   await shot(page, "t036-settled-390.png");
 
   // the spend: the price went to the seller, the unused gas reserve came back (create + reveal gas only)
@@ -117,8 +117,8 @@ test("beat 3: the review function is down -> the RECORDED run plays (chip 'RECOR
   await expect(step3(page).locator("[data-check]").first()).toContainText(KEY2.bugs[0].title);
   await expect(line3(page, "record")).toContainText("Next quote 0.030 → 0.040 NEAR");
   await expect(page.locator('[data-live-chart="Recorded job"] [data-qc-quote]')).toHaveText("0.040");
-  await expect(line3(page, "sum")).toContainText("PASS");
-  await expect(step3(page).locator("[role=status]")).toContainText("step 3 PASS");
+  await expect(line3(page, "sum")).toContainText("done");
+  await expect(step3(page).locator("[role=status]")).toContainText("step 3 done");
   await expect(step3(page).getByRole("link", { name: "Verify it yourself →" })).toHaveAttribute("href", "/verify");
   await expect(line3(page, "settle").getByRole("link")).toHaveAttribute("href", "https://testnet.nearblocks.io/txns/9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB");
   expect(chain.posts).toHaveLength(1);

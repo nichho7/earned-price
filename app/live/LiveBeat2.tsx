@@ -372,7 +372,7 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted, beat =
           <span className={s.chip} data-chip="live">TESTNET · LIVE</span>
         </div>
         <h2 id={headId} className={s.head} tabIndex={-1} ref={headRef}>{head}</h2>
-        <p className="sr" role="status" aria-live="polite">{four ? `Step 4: ${head}${pass ? " seller accepted" : ""}` : `Step 2: ${head}${pass ? " step 2 PASS" : ""}`}</p>
+        <p className="sr" role="status" aria-live="polite">{four ? `Step 4: ${head}${pass ? " seller accepted" : ""}` : `Step 2: ${head}${pass ? " step 2 done" : ""}`}</p>
         {four && (phase === "pick" || phase === "quote") && (
           <p className={s.lede}>Hire the same seller again, for pack 3, from the same account. The seller is reading its record for the quote.</p>
         )}
@@ -380,7 +380,8 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted, beat =
           <>
             <p className={s.lede}>Each pack is about 150 lines of Python with 5 planted bugs. The answer key is sealed: its hash goes into escrow before the seller sees the code, so nobody can move the goalposts.</p>
             <div className={b.packs} role="radiogroup" aria-label="Exam packs">
-              {packs.map((p) => (
+              {/* PM 2026-11-13 (T-037 L-16): step 2 offers pack 2 only; pack 3 opens from "Hire again" (step 4), packs 1/3 stay in the CLI */}
+              {packs.filter((p) => p.id === "2").map((p) => (
                 <label key={p.id} className={`${b.pack} ${p.id === packId ? b.on : ""}`} data-pack={p.id}>
                   <input type="radio" name="pack" value={p.id} checked={p.id === packId} onChange={() => setPackId(p.id)} disabled={!p.hashOk} />
                   <span className={b.pname}>Pack {p.id}</span>
@@ -468,7 +469,7 @@ export function LiveBeat2({ packs, buyer, onBuyer, onCreated, onAccepted, beat =
             </div>
             <div className={s.sum} data-line="sum">
               <span>{four ? "step 4 · hire" : "step 2"}</span>
-              <b>{pass ? (four ? "accepted" : "PASS") : phase === "declined" || phase === "timed_out" ? "refunded" : phase === "error" || phase === "cap" || phase === "unseen" ? "not passed" : "—"}</b>
+              <b>{pass ? (four ? "accepted" : "done") : phase === "declined" || phase === "timed_out" ? "refunded" : phase === "error" || phase === "cap" || phase === "unseen" ? "not done" : "—"}</b>
             </div>
             {closed && <p className={b.outcome} data-outcome={closed.o.kind}>{closed.o.line}</p>}
             {notice && (

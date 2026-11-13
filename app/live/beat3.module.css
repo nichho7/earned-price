@@ -33,7 +33,7 @@
 }
 .rlabel { font-size: var(--fs-micro); letter-spacing: var(--track-label); color: var(--ink-2); text-transform: uppercase; }
 .rrec { color: var(--ink-2); }
-.rquote b { font: 400 var(--fs-data)/1.2 var(--serif); font-variant-numeric: tabular-nums; }
+.rquote b { font: 400 var(--fs-record)/1.1 var(--serif); font-variant-numeric: tabular-nums; } /* payoff figure: readable, not data-row size (Nicho audit "text isn't visible") */
 .rdelta { margin-left: var(--s2); color: var(--violet); font-weight: 500; }
 .rformula { color: var(--ink-2); font-size: var(--fs-micro); overflow-wrap: anywhere; }
 

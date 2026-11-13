@@ -229,7 +229,7 @@ export function LiveStart({ onReady, onNext, buyer: fresher }: {
             </div>
             <div className={s.sum} data-line="sum">
               <span>step 1</span>
-              <b>{phase === "ready" || phase === "cap" ? "PASS" : phase === "error" ? "not started" : "—"}</b>
+              <b>{phase === "ready" || phase === "cap" ? "done" : phase === "error" ? "not started" : "—"}</b>
             </div>
             {notice && (
               <div className={s.notice} role="alert" data-notice={notice.code} tabIndex={-1} ref={noticeRef}>

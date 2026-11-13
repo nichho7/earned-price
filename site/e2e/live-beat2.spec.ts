@@ -62,7 +62,7 @@ test("beat 2: pack 2, refused 0.02, deal at 0.03, create through the gate, commi
   await expect(line(page, "seller")).toHaveAttribute("data-st", "ok");
   const accept = [...chain.txs.entries()].find(([, o]) => (o as { transaction: { signer_id: string } }).transaction.signer_id === DEMO_SELLER)![0];
   await expect(line(page, "seller").getByRole("link")).toHaveAttribute("href", `https://testnet.nearblocks.io/txns/${accept}`);
-  await expect(line(page, "sum")).toContainText("PASS");
+  await expect(line(page, "sum")).toContainText("done");
   await expect(page.getByRole("heading", { name: "Seller accepted." })).toBeVisible();
   // each observed tx outcome was one publish on the bus: quote 0, create submitted 1, create confirmed 2, accept 3(+4)
   await expect(line(page, "escrow")).toHaveAttribute("data-bus-seq", "2");
