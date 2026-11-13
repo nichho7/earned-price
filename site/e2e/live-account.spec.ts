@@ -81,7 +81,7 @@ test("AC1: start makes a testnet account in this browser; only the public key le
   await expect(line(page, "cap")).toContainText(`${CAP} NEAR · spent 0.000`);
   await expect(line(page, "budget")).toContainText(`quote 0.040 + gas ${GAS}`);
   await expect(line(page, "budget")).toContainText(`fits · ${CAP} left`);
-  await expect(line(page, "sum")).toContainText("PASS");
+  await expect(line(page, "sum")).toContainText("done");
   expect(chain.faucetCalls).toBe(1);
 
   // The key lives in this browser's storage...

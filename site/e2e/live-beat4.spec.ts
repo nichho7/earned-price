@@ -101,8 +101,8 @@ test("beat 4: same buyer, pack 3 -> 4/5 with B5 missed next to the key -> settle
   await expect(line4(page, "formula")).toHaveText("0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR");
   await expect(line4(page, "fail-line")).toContainText("A fail subtracts 0.005.");
   await expect(line4(page, "fail-line")).toContainText("README contract test");
-  await expect(line4(page, "sum")).toContainText("PASS · counted once");
-  await expect(step4(page).locator("[role=status]")).toContainText("step 4 PASS");
+  await expect(line4(page, "sum")).toContainText("done · counted once");
+  await expect(step4(page).locator("[role=status]")).toContainText("step 4 done");
   // the step-4 chart follows step 4's run (quote holds: no step); step 3's chart still shows its own 0.030 -> 0.040
   await expect(step4(page).locator('[data-live-chart="This job"] [data-qc-quote]')).toHaveText("0.040");
   await expect(step3(page).locator('[data-live-chart="This job"] [data-qc-steps]')).toHaveAttribute("data-qc-steps", "1");
@@ -152,7 +152,7 @@ test("beat 4: the review function is down for pack 3 -> RECORDED job 2 (pack 3, 
   await expect(step4(page).locator('[data-check="5"]')).toContainText("missed");
   await expect(line4(page, "settle").getByRole("link")).toHaveAttribute("href", "https://testnet.nearblocks.io/txns/3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw");
   await expect(line4(page, "inputs")).toHaveText("P = 1 unique buyer (2 passes) · F = 0 fails");
-  await expect(line4(page, "sum")).toContainText("PASS · counted once");
+  await expect(line4(page, "sum")).toContainText("done · counted once");
   await expect(line4(page, "live-job")).toContainText(`Your job ${Number(JOB_ID) + 1}`);
   expect(chain.sent.filter((s) => s.method === "reveal")).toHaveLength(1); // step 3's only
   await shot(page, "t037-recorded-390.png");

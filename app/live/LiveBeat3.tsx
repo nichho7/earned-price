@@ -454,9 +454,9 @@ export function LiveBeat3({ buyer, job, run, answer, recorded, onBuyer, beat = 3
   const revealSt: St = closed && reveal ? (closed.o.kind === "settled" || closed.o.kind === "refunded_fail" ? "ok" : "bad") : phase === "revealing" ? "wait" : "todo";
   const stepAttr = four ? { "data-step4": phase, "data-kind": kind ?? undefined } : { "data-step3": phase };
   const sum = four
-    ? (pass ? (kind === "repeat" ? "PASS · counted once" : "done · an honest fail") : phase === "settled" ? (kind === "first_pass" ? "pass · new buyer" : "settled") : phase === "refunded" ? "refunded · fail"
-      : phase === "closed" ? (closed?.o.kind === "timeout_paid_seller" ? "seller paid" : "refunded") : phase === "error" || phase === "unseen" ? "not passed" : "—")
-    : (pass ? "PASS" : phase === "refunded" ? "refunded · fail" : phase === "closed" ? (closed?.o.kind === "timeout_paid_seller" ? "seller paid" : "refunded") : phase === "error" || phase === "unseen" ? "not passed" : "—");
+    ? (pass ? (kind === "repeat" ? "done · counted once" : "done · an honest fail") : phase === "settled" ? (kind === "first_pass" ? "settled · new buyer counted" : "settled") : phase === "refunded" ? "refunded · fail"
+      : phase === "closed" ? (closed?.o.kind === "timeout_paid_seller" ? "seller paid" : "refunded") : phase === "error" || phase === "unseen" ? "not done" : "—")
+    : (pass ? "done" : phase === "refunded" ? "refunded · fail" : phase === "closed" ? (closed?.o.kind === "timeout_paid_seller" ? "seller paid" : "refunded") : phase === "error" || phase === "unseen" ? "not done" : "—");
   const next = !four && onNext && closed && (phase === "settled" || phase === "refunded" || phase === "closed");
 
   return (
@@ -467,7 +467,7 @@ export function LiveBeat3({ buyer, job, run, answer, recorded, onBuyer, beat = 3
           <span className={s.chip} data-chip="live">TESTNET · LIVE</span>
         </div>
         <h2 id={`step${beat}-head`} className={s.head} tabIndex={-1} ref={headRef}>{head}</h2>
-        <p className="sr" role="status" aria-live="polite">{`Step ${beat}: ${head}${pass ? ` step ${beat} PASS` : ""}`}</p>
+        <p className="sr" role="status" aria-live="polite">{`Step ${beat}: ${head}${pass ? ` step ${beat} done` : ""}`}</p>
         <p className={s.lede}>{lede}</p>
         {phase === "reviewing" && (
           <p className={s.fine} data-progress={slow ? "slow" : "running"}>
@@ -728,7 +728,7 @@ export function Recorded({ beat = 3, recorded, reason, jobId, view, countdown, c
           <span className={`${s.chip} ${b.recChip}`} data-chip="recorded">RECORDED · verified live</span>
         </div>
         <h2 id={`step${beat}-head`} className={s.head} tabIndex={-1} ref={headRef}>{head}</h2>
-        <p className="sr" role="status" aria-live="polite">{`Step ${beat}, recorded run: ${head}${pass ? ` step ${beat} PASS` : ""}`}</p>
+        <p className="sr" role="status" aria-live="polite">{`Step ${beat}, recorded run: ${head}${pass ? ` step ${beat} done` : ""}`}</p>
         <p className={s.lede}>
           {four
             ? `${why} is the recorded repeat buyer: job ${recorded.job_id}, the same buyer as job 1 hiring pack 3, real testnet transactions from ${when} UTC, replayed. The grade and the quote are the ones the escrow wrote.`
@@ -785,7 +785,7 @@ export function Recorded({ beat = 3, recorded, reason, jobId, view, countdown, c
             </div>
             <div className={s.sum} data-line="sum">
               <span>step {beat} · recorded</span>
-              <b>{pass ? (four ? (kind === "repeat" ? "PASS · counted once" : "done · an honest fail") : "PASS") : "—"}</b>
+              <b>{pass ? (four ? (kind === "repeat" ? "done · counted once" : "done · an honest fail") : "done") : "—"}</b>
             </div>
             {jobId && (
               <div className={b.yours} data-line="your-job">
