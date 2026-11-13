@@ -12,6 +12,7 @@
 // Types: v1.1 lives in t-038-chart's schema.ts, not merged yet; the v1.1 events below are typed locally (LiveEvent).
 // Skills used: api-and-interface-design, karpathy-guidelines
 import type { LabEvent, LabFixture, Record4 } from "../stage/schema.ts";
+import { createBus } from "../bus/bus.ts";
 
 export type RunHeader = Omit<LabFixture, "events" | "version"> & { version: 1 | 1.1 };
 export type PublishResult = { ok: true; added: number } | { ok: false; errors: string[] };
@@ -39,8 +40,8 @@ export function pendingBus(): BusLike & { batches: LiveEvent[][]; headers: RunHe
   };
 }
 
-/** The bus the /live page publishes to. T-038 merge: `export const LIVE_BUS: BusLike = createBus();`. */
-export const LIVE_BUS: BusLike = pendingBus();
+/** The bus the /live page publishes to: T-038's typed bus (validates per type, isolates subscribers). Review L-7. */
+export const LIVE_BUS: BusLike = createBus();
 
 const MILLI = 10n ** 21n;
 const mnear = (yocto: string | bigint): number => Number(BigInt(yocto) / MILLI);
