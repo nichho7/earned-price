@@ -454,7 +454,7 @@ export function LiveBeat3({ buyer, job, run, answer, recorded, onBuyer, beat = 3
   const revealSt: St = closed && reveal ? (closed.o.kind === "settled" || closed.o.kind === "refunded_fail" ? "ok" : "bad") : phase === "revealing" ? "wait" : "todo";
   const stepAttr = four ? { "data-step4": phase, "data-kind": kind ?? undefined } : { "data-step3": phase };
   const sum = four
-    ? (pass ? (kind === "repeat" ? "PASS · counted once" : "PASS · the honest fail") : phase === "settled" ? (kind === "first_pass" ? "pass · new buyer" : "settled") : phase === "refunded" ? "refunded · fail"
+    ? (pass ? (kind === "repeat" ? "PASS · counted once" : "done · an honest fail") : phase === "settled" ? (kind === "first_pass" ? "pass · new buyer" : "settled") : phase === "refunded" ? "refunded · fail"
       : phase === "closed" ? (closed?.o.kind === "timeout_paid_seller" ? "seller paid" : "refunded") : phase === "error" || phase === "unseen" ? "not passed" : "—")
     : (pass ? "PASS" : phase === "refunded" ? "refunded · fail" : phase === "closed" ? (closed?.o.kind === "timeout_paid_seller" ? "seller paid" : "refunded") : phase === "error" || phase === "unseen" ? "not passed" : "—");
   const next = !four && onNext && closed && (phase === "settled" || phase === "refunded" || phase === "closed");
@@ -785,7 +785,7 @@ export function Recorded({ beat = 3, recorded, reason, jobId, view, countdown, c
             </div>
             <div className={s.sum} data-line="sum">
               <span>step {beat} · recorded</span>
-              <b>{pass ? (four ? (kind === "repeat" ? "PASS · counted once" : "PASS · the honest fail") : "PASS") : "—"}</b>
+              <b>{pass ? (four ? (kind === "repeat" ? "PASS · counted once" : "done · an honest fail") : "PASS") : "—"}</b>
             </div>
             {jobId && (
               <div className={b.yours} data-line="your-job">

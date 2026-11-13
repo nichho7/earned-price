@@ -128,7 +128,7 @@ test("beat 4: a real fail (3/5) renders the refund/drop state from the refund ev
   await expect(line4(page, "record")).toContainText("−0.005 on fail");
   await expect(line4(page, "inputs")).toHaveText("P = 1 unique buyer (1 pass) · F = 1 fail");
   await expect(line4(page, "formula")).toHaveText("0.030 + 0.010×1 − 0.005×1 = 0.035 NEAR");
-  await expect(line4(page, "sum")).toContainText("PASS · the honest fail");
+  await expect(line4(page, "sum")).toContainText("done · an honest fail");
   await expect(step4(page).locator('[data-live-chart="This job"] [data-qc-quote]')).toHaveText("0.035");
   await shot(page, "t037-fail-390.png");
 });
