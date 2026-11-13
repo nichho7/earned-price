@@ -6,7 +6,8 @@
 //   R2      no feTurbulence, mix-blend-mode, backdrop-filter
 //   R3      no three / R3F / Rive / GSAP / OGL / Pixi in package.json; no WebGL context
 //   R4      near-api-js, @near-js/*, @near-wallet-selector/* only via dynamic import() under app/live/,
-//           also when they come in through a repo module outside app/ and site/ (e.g. site-api/)
+//           also when they come in through a repo module outside app/ and site/ (e.g. site-api/).
+//           Server-only API route handlers (app/api/**/route.js|ts) are exempt (T-100): they never reach a page bundle.
 // Test files (*.test.ts, *.spec.ts) and site/e2e/ are never bundled, so they are not scanned: they hold
 // the rules' own known-bad inputs (code review H-1).
 // Skills used: ci-cd-and-automation, security-and-hardening, karpathy-guidelines
@@ -84,6 +85,9 @@ export function walletChain(rel, read, seen = new Set()) {
   return null;
 }
 
+/** app/api/<...>/route.{js,ts,mjs}: a server-only route handler (Next App Router). */
+export const isServerRoute = (rel) => rel.split(sep).join("/").match(/^app\/api\/(?:[^/]+\/)*route\.(?:[cm]?js|ts)$/) !== null;
+
 // Strip comments so a rule can be named in a comment without tripping itself.
 const stripComments = (src, file) =>
   /\.css$/.test(file) ? src.replace(/\/\*[\s\S]*?\*\//g, "") : src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
@@ -119,6 +123,9 @@ export function checkFile(rel, raw, read) {
     errs.push(`${rel}:${line(m.index)} R2 "${m[0]}" (grain is a pre-rendered still tile)`);
   for (const m of src.matchAll(/getContext\(\s*["'`](?:webgl|webgl2|experimental-webgl)/g))
     errs.push(`${rel}:${line(m.index)} R3 WebGL context`);
+  // T-100: an API route handler (app/api/**/route.js|ts) runs only on the server and is never in a client bundle, so
+  // R4 (which keeps wallet code out of the pages' JS) does not apply to it. The colour / R2 / R3 rules still do.
+  if (isServerRoute(rel)) return errs;
   const inLive = rel.startsWith(join("app", "live") + sep);
   // A relative import that leaves app/ and site/ is followed: wallet code reached through it counts.
   const via = (spec) => {

@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // @ts-expect-error plain .mjs build scripts, no type declarations
-import { checkFile, checkPackage, scanned } from "../scripts/site-rules-lib.mjs";
+import { checkFile, checkPackage, isServerRoute, scanned } from "../scripts/site-rules-lib.mjs";
 // @ts-expect-error plain .mjs build scripts, no type declarations
 import { codepointsOf, rangeHits, measure } from "../scripts/site-size-gate-lib.mjs";
 
@@ -83,4 +83,20 @@ test("size gate: unicode-range matching and script accounting", () => {
 test("R4: an import binding with $ in its name is still caught (code review L-8)", () => {
   assert.equal(checkFile("site/view/X.tsx", 'import $w from "near-api-js";').length, 1);
   assert.equal(checkFile("site/view/X.tsx", 'import { $a, b$ } from "@near-js/accounts";').length, 1);
+});
+
+test("R4: server-only API route handlers are exempt; pages, layouts and look-alikes are not (T-100)", () => {
+  const files: Record<string, string> = { "site-api/vercel.js": 'export async function POST() { return (await import("near-api-js")).KeyPair; }' };
+  const read = (rel: string) => files[rel] ?? null;
+  const route = 'export const runtime = "nodejs";\nexport { POST } from "../../../site-api/vercel.js";';
+  assert.equal(checkFile("app/api/review/route.js", route, read).length, 0);
+  assert.equal(checkFile("app/api/review/route.ts", 'import { KeyPair } from "near-api-js";', read).length, 0);
+  assert.equal(checkFile("app/page.tsx", 'export { POST } from "../site-api/vercel.js";', read).length, 1); // a page still fails
+  assert.equal(checkFile("app/api/review/helper.js", 'import { KeyPair } from "near-api-js";', read).length, 1); // only route.*
+  assert.equal(checkFile("app/live/route.js", 'import { KeyPair } from "near-api-js";', read).length, 1); // outside app/api/
+  assert.equal(checkFile("site/api/x/route.js", 'import { KeyPair } from "near-api-js";', read).length, 1);
+  assert.equal(checkFile("app/api/review/route.js", ".a{color:#fff}").length, 1); // colour rule still applies
+  assert.equal(isServerRoute("app/api/route.js"), true);
+  assert.equal(isServerRoute("app/api/a/b/route.mjs"), true);
+  assert.equal(isServerRoute("app/api/review/route.tsx"), false);
 });
