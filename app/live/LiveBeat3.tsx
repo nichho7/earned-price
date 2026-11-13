@@ -63,7 +63,7 @@ type Beat = 3 | 4;
 type Kind4 = "repeat" | "first_pass" | "fail" | "unclear" | "other";
 type Rec = { before: FullQuote | null; after: FullQuote; bus: number | null; kind: Kind4 | null };
 
-const RECORDED_HREF = "/";
+const RECORDED_HREF = "/#demo"; // the home page's recorded demo section (T-098)
 const VERIFY_HREF = "/verify";
 const LOOP_MS = 3000;
 const RPC_FAILS_BEFORE_NOTICE = 4;

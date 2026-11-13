@@ -130,7 +130,7 @@ test("AC3: faucet down = a clear message + the RECORDED path; Try again works on
   await expect(alert).toContainText("Testnet faucet is unreachable");
   // O-4: the faucet may have made the account before the connection dropped, so "Nothing was created" is not claimed.
   await expect(alert).toContainText("Nothing was charged. If the faucet made the account, Try again picks it up.");
-  await expect(alert.getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
+  await expect(alert.getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/#demo");
   await expect(line(page, "account")).toHaveAttribute("data-st", "bad");
   await expect(line(page, "account")).toContainText("faucet unreachable");
   await expect(line(page, "sum")).toContainText("not started");
@@ -188,7 +188,7 @@ test("T-076: quote + gas reserve over what is left of the cap = 'Spend cap reach
   await expect(alert).toContainText("Spend cap reached");
   await expect(alert).toContainText(`The next job needs ${near3(100n * MILLI + JOB_GAS_RESERVE_YOCTO, true)} NEAR`);
   await expect(alert).toContainText(`0.095 NEAR left of its ${CAP} NEAR cap, so nothing will be sent`);
-  await expect(alert.getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
+  await expect(alert.getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/#demo");
   expect(chain.faucetCalls).toBe(0);
   // Designer QA B3: the cap notice takes focus, so its reason is in view (checked at 390 below).
   await expect(alert).toBeFocused();

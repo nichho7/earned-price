@@ -108,7 +108,7 @@ test("beat 2: the seller declines -> the outcome comes from the decline tx, the 
   await expect(line(page, "seller")).toContainText("Seller declined · refund");
   await expect(line(page, "seller")).toHaveAttribute("data-bus-seq", "3"); // tx_confirmed(decline) + settled(decline), one publish
   await expect(line(page, "sum")).toContainText("refunded");
-  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
+  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/#demo");
   expect((await stored(page, JOB_KEY)).status).toBe("closed");
   expect(BigInt((await stored(page, KEY)).spent_yocto)).toBe(BURNT); // only the create's gas stays spent
   expect(chain.sent.map((s) => s.method)).toEqual(["create"]);
@@ -143,7 +143,7 @@ test("beat 2: cap reached between step 1 and Lock -> the gate refuses under the 
   await expect(step2(page)).toHaveAttribute("data-step2", "cap");
   await expect(notice(page)).toContainText("Spend cap reached");
   await expect(notice(page)).toContainText(`needs ${near3(30n * MILLI + JOB_GAS_RESERVE_YOCTO, true)} NEAR`);
-  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
+  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/#demo");
   expect(chain.sent).toEqual([]);
   expect(await stored(page, JOB_KEY)).toBeNull();
 });
@@ -156,7 +156,7 @@ test("beat 2: testnet RPC down -> a clear notice and the RECORDED path; Try agai
   await expect(notice(page)).toHaveAttribute("data-notice", "RPC_UNAVAILABLE");
   await expect(notice(page)).toContainText("Testnet RPC didn't answer");
   await expect(notice(page)).toContainText("labelled RECORDED");
-  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
+  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/#demo");
   await expect(notice(page)).toBeFocused();
   await shot(page, "t035-rpc-down-390.png");
   chain.rpc = "ok";
@@ -178,7 +178,7 @@ test("review MUST-2: a refused timeout re-reads the job and offers a bounded ret
   await notice(page).getByRole("button", { name: "Try again" }).click();
   await expect(notice(page)).toContainText("This page stops after 3 tries so gas can't run past the cap");
   await expect(notice(page).getByRole("button", { name: "Try again" })).toHaveCount(0);
-  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
+  await expect(notice(page).getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/#demo");
   expect(chain.sent.filter((x) => x.method === "timeout")).toHaveLength(3);
   // every refused try's gas is inside what the cap counts (quote + gas held >= quote + gas burnt)
   const b = await stored(page, KEY);

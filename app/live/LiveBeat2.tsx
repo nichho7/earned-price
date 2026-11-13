@@ -35,7 +35,7 @@ type Tape = { who: "SELLER" | "YOU"; kind: "quote" | "offer" | "refused" | "deal
 type Notice = { code: string; title: string; body: string; retry?: "haggle" | "lock" | "watch" | "pick" | "timeout" };
 type SellerLine = { st: "todo" | "wait" | "ok" | "bad"; label: string; note: string; tx?: string | null; bus?: number | null };
 
-const RECORDED_HREF = "/";
+const RECORDED_HREF = "/#demo"; // the home page's recorded demo section (T-098)
 const MIN_OFFER_MILLI = 5;
 const CAP_MILLI = Number(SPEND_CAP_YOCTO / 10n ** 21n);
 const HEAD4: Partial<Record<Phase, string>> = { pick: "Again.", quote: "Again.", haggle: "Again.", deal: "Again.", locking: "Locking." };

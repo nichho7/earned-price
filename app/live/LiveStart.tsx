@@ -28,7 +28,7 @@ type Budget =
   | { st: "fits" | "over"; quote: bigint; need: bigint; left: bigint };
 type Notice = { code: AccountErrorCode | "UNEXPECTED"; title: string; body: string; fresh?: boolean };
 
-const RECORDED_HREF = "/";
+const RECORDED_HREF = "/#demo"; // the home page's recorded demo section (T-098)
 const NOTHING = "Nothing was created and nothing was charged.";
 // Code review O-4: after a timeout, a lost answer, a 5xx or a bad answer the faucet MAY have made the account.
 const MAYBE = "Nothing was charged. If the faucet made the account, Try again picks it up.";
