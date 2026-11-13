@@ -86,4 +86,44 @@
   --focus-on-violet: 2px solid var(--canary);
   --focus-on-sheet: 2px solid var(--violet);
   --focus-offset: 3px;
+
+  /* ---------- T-098 home rework (A-032, Designer site-v2/notes.md §2-3). Every token above keeps its name
+     and value, so /live and /verify render exactly as before; the home reads the tokens below. ---------- */
+  /* grounds (new) */
+  --night: #16112E;        /* dark "postal ink" ground: what-it-is, trust, footer */
+  --night-2: #241C4C;      /* raised surface on night */
+  --paper: #F1EBDD;        /* second light ground; formula wells, step art */
+  --lilac: #ECE6FF;        /* soft ground (FAQ); ±0 chips */
+  --night-mute: #B9B0E3;   /* secondary text on night (9.00:1) */
+  /* accents with one meaning each: canary = the price, mint = paid / pass, coral = held / fail (never on violet) */
+  --mint: #3ED89C;
+  --coral: #FF7A57;
+  /* decorative rules only, never text */
+  --hair-night: #3B3270;
+  --hair-lilac: #C9BDF5;
+  --hair-canary: #B89E1F;
+  --shadow-coin: 0 6px 14px -6px #1B1A1773;
+
+  /* type (fluid; px at 390 -> 1440). New names: the --fs-* set above stays for /live and /verify. */
+  --type-display: clamp(44px, 6.3vw, 96px); /* hero h1 (copy v2 builder note: ~44 px on phones) */
+  --type-h2: clamp(42px, 5.4vw, 78px);
+  --type-h3: clamp(27px, 2.3vw, 34px);
+  --type-price: clamp(84px, 11vw, 168px);
+  --type-lead: clamp(20px, 1.75vw, 24px);
+  --type-body: 18px;       /* paragraphs; floor 17 */
+  --type-ui: 17px;         /* buttons, tabs, labels (sans, semibold) */
+  --type-small: 15px;      /* captions, sources: the floor, nothing smaller */
+  --type-data: 15px;       /* mono: hashes, accounts, formulas, the command */
+  --weight-ui: 500;        /* Designer asked for Plex Sans 600; 500 keeps B5 at 6 font files (handoff note) */
+
+  /* space, layout, radius (home) */
+  --s10: 128px;
+  --sec-y: clamp(64px, 10vw, 152px);
+  --gutter: clamp(20px, 4.4vw, 64px);
+  --maxw: 1240px;
+  --r-md: 6px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+  --perf-hole: 9px;        /* section perforation radius */
 }
