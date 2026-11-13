@@ -1,0 +1,55 @@
+/* [CTO] T-035 · /live step 2 (pick + haggle + seller accept). Tokens only (app/tokens.css). Layout reuses
+   live.module.css (grid, receipt, lines, notices); this file adds the pack list, the offer field and the haggle tape.
+   Motion: transform / opacity only; none under reduced motion. */
+.step { border-top: var(--hairline) dashed var(--cream-2); }
+
+/* pack list on violet */
+.packs { display: grid; gap: var(--s2); margin-top: var(--s5); }
+.pack {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: var(--s3); row-gap: var(--s1); align-items: baseline;
+  padding: var(--s3) var(--s4); border: var(--hairline) solid var(--cream-2); border-radius: var(--r1); cursor: pointer;
+  font: 400 var(--fs-small)/1.35 var(--mono); color: var(--cream);
+}
+.pack input { grid-row: span 2; margin: 0; accent-color: var(--canary); width: 16px; height: 16px; }
+.pack:has(input:focus-visible) { outline: var(--focus-on-violet); outline-offset: var(--focus-offset); }
+.pack:has(input:disabled) { cursor: not-allowed; opacity: .6; }
+.on { border-color: var(--canary); background: var(--violet-deep); }
+.pname { font-weight: 500; font-size: var(--fs-data); }
+.plevel { font-size: var(--fs-micro); letter-spacing: var(--track-wide); color: var(--cream-2); }
+.pmeta, .pdesc { color: var(--cream-2); font-size: var(--fs-micro); }
+.pdesc { grid-column: 2 / -1; }
+
+/* offer field on violet */
+.offer { margin-top: var(--s5); }
+.olabel { display: block; font: 500 var(--fs-micro)/1 var(--mono); letter-spacing: var(--track-wide); text-transform: uppercase; color: var(--cream-2); }
+.orow { display: flex; flex-wrap: wrap; gap: var(--s3); margin-top: var(--s2); }
+.oin {
+  flex: 1 1 8ch; min-width: 0; max-width: 16ch; min-height: 44px; padding: 0 var(--s3); border-radius: var(--r1);
+  border: var(--hairline) solid var(--cream-2); background: var(--violet-deep); color: var(--cream);
+  font: 500 var(--fs-data)/1 var(--mono);
+}
+.oin:focus-visible { outline: var(--focus-on-violet); outline-offset: var(--focus-offset); }
+.oin[aria-invalid="true"] { border-color: var(--canary); }
+.ohint, .oerr { margin: var(--s2) 0 0; font: 400 var(--fs-small)/1.45 var(--mono); color: var(--cream-2); }
+.oerr { color: var(--canary); }
+
+.rules { margin: var(--s4) 0 0; padding-left: var(--s4); max-width: 52ch; font: 400 var(--fs-small)/1.55 var(--sans); }
+.rules li + li { margin-top: var(--s1); }
+
+/* the haggle tape on the receipt */
+.tape { list-style: none; margin: var(--s2) 0; padding: var(--s2) 0; border-block: var(--hairline) dashed var(--rule); }
+.row {
+  display: grid; grid-template-columns: 7ch minmax(0, 1fr); gap: var(--s2); padding: var(--s1) 0;
+  font: 400 var(--fs-row)/1.4 var(--mono); color: var(--ink); animation: up var(--t-fade) var(--ease-out) both;
+}
+.who { font-size: var(--fs-micro); letter-spacing: var(--track-label); color: var(--ink-2); padding-top: 2px; }
+.body { min-width: 0; overflow-wrap: anywhere; }
+.amt { font-weight: 500; }
+.formula { display: block; color: var(--ink-2); font-size: var(--fs-micro); margin-top: 2px; }
+.struck { text-decoration: line-through; text-decoration-thickness: 1px; color: var(--ink-2); }
+.refused { color: var(--violet); font-weight: 500; }
+.row u { text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.outcome { margin: var(--s3) 0 0; font: 400 var(--fs-small)/1.5 var(--sans); color: var(--ink); }
+
+@keyframes up { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .row { animation: none; } }

@@ -6,13 +6,17 @@
 //   Try again + the RECORDED run (S-009 AC3). The server HTML already has the start card, so never a blank screen.
 // - After the account is ready, the pre-job check reads the live quote: quote + gas reserve must fit what is
 //   left of the spend cap (cli/spend-cap.js; every cap number on the page comes from it, code review R-1), else the "cap reached" state points to RECORDED (CFO T-076).
+// T-035: holds only the key-less buyer (publicBuyer, security M-2 item 4); onReady fires only when a job fits (code
+// review O-1) and hands over the key-less buyer + the budget; the parent's fresher buyer drives the cap line (O-2);
+// "Nothing was created" is no longer claimed when the faucet may have made the account (O-4); "Start a fresh account"
+// is never offered while a job is live in this browser (O-7); the ready slot holds the step-2 control.
 // Skills used: frontend-ui-engineering, security-and-hardening, karpathy-guidelines
 import { useEffect, useRef, useState } from "react";
 import {
-  AccountError, JOB_GAS_RESERVE_YOCTO, SPEND_CAP_NEAR, SPEND_CAP_YOCTO, capStatus, checkJobBudget, clearBuyer, loadBuyer, near3,
-  pickStorage, readLiveQuote, startAccount, withBuyerLock,
+  AccountError, GAS_RESERVE_BASIS, JOB_GAS_RESERVE_YOCTO, SPEND_CAP_NEAR, SPEND_CAP_YOCTO, capStatus, checkJobBudget, clearBuyer, jobIsLive,
+  loadBuyer, loadJob, near3, pickStorage, publicBuyer, readLiveQuote, startAccount, withBuyerLock,
 } from "../../site/live/account.js";
-import type { AccountErrorCode, AccountStep, Buyer, KV } from "../../site/live/account.d.ts";
+import type { AccountErrorCode, AccountStep, KV, PublicBuyer } from "../../site/live/account.d.ts";
 import { accountUrl, shortHash, txUrl } from "../../site/stage/format.ts";
 import s from "./live.module.css";
 
@@ -26,18 +30,22 @@ type Notice = { code: AccountErrorCode | "UNEXPECTED"; title: string; body: stri
 
 const RECORDED_HREF = "/";
 const NOTHING = "Nothing was created and nothing was charged.";
+// Code review O-4: after a timeout, a lost answer, a 5xx or a bad answer the faucet MAY have made the account.
+const MAYBE = "Nothing was charged. If the faucet made the account, Try again picks it up.";
 const RECORDED_LINE = "Try again, or watch the recorded run (real testnet data, labelled RECORDED).";
 
 /** Error code → what the visitor reads. Every message says what happened, what didn't, and what to do. */
 export function noticeOf(code: Notice["code"]): Notice {
   switch (code) {
-    case "FAUCET_TIMEOUT": return { code, title: "Testnet faucet didn't answer", body: `${NOTHING} ${RECORDED_LINE}` };
-    case "FAUCET_UNREACHABLE": return { code, title: "Testnet faucet is unreachable", body: `${NOTHING} ${RECORDED_LINE}` };
+    case "FAUCET_TIMEOUT": return { code, title: "Testnet faucet didn't answer", body: `${MAYBE} ${RECORDED_LINE}` };
+    case "FAUCET_UNREACHABLE": return { code, title: "Testnet faucet is unreachable", body: `${MAYBE} ${RECORDED_LINE}` };
     case "FAUCET_RATE_LIMITED": return { code, title: "Testnet faucet is busy", body: `It limits how many accounts it makes. ${NOTHING} Wait a minute and try again, or watch the recorded run (real testnet data, labelled RECORDED).` };
     case "FAUCET_REFUSED": case "ACCOUNT_TAKEN":
       return { code, title: "That account name was taken", body: `${NOTHING} Try again makes a new name, or watch the recorded run (real testnet data, labelled RECORDED).` };
     case "ACCOUNT_KEY_MISSING": return { code, fresh: true, title: "Saved account can't be used", body: "The testnet account saved in this browser no longer has this browser's key, so it isn't used. Nothing was charged. Start a fresh account, or watch the recorded run (real testnet data, labelled RECORDED)." };
-    case "FAUCET_HTTP": case "FAUCET_BAD_RESPONSE": case "FAUCET_TX_FAILED":
+    case "FAUCET_HTTP": case "FAUCET_BAD_RESPONSE":
+      return { code, title: "Testnet faucet couldn't make the account", body: `${MAYBE} ${RECORDED_LINE}` };
+    case "FAUCET_TX_FAILED":
       return { code, title: "Testnet faucet couldn't make the account", body: `${NOTHING} ${RECORDED_LINE}` };
     case "RPC_UNAVAILABLE": return { code, title: "Testnet RPC didn't answer", body: `${NOTHING} ${RECORDED_LINE}` };
     case "STORAGE_CORRUPT": return { code, fresh: true, title: "Saved account unreadable", body: "The buyer account saved in this browser can't be read, so it isn't used. Start a fresh account, or watch the recorded run (real testnet data, labelled RECORDED)." };
@@ -61,14 +69,18 @@ async function newKey() {
 
 const HEAD: Record<Phase, string> = { idle: "Be the buyer.", working: "Starting.", ready: "Ready.", error: "Not started.", cap: "Cap reached." };
 
-export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
+type Fit = { fits: boolean | null };
+
+export function LiveStart({ onReady, onNext, buyer: fresher }: {
+  onReady?: (buyer: PublicBuyer, budget: Fit) => void; onNext?: () => void; buyer?: PublicBuyer | null;
+}) {
   const store = useRef<{ storage: KV; persistent: boolean } | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
-  const [saved, setSaved] = useState<Buyer | null>(null);
+  const [saved, setSaved] = useState<PublicBuyer | null>(null);
   const [persistent, setPersistent] = useState(true);
   const [keyLine, setKeyLine] = useState<LineSt>("todo");
   const [acct, setAcct] = useState<AccountLine>({ st: "todo", label: "Testnet account", note: "—" });
-  const [buyer, setBuyer] = useState<Buyer | null>(null);
+  const [buyer, setBuyer] = useState<PublicBuyer | null>(null);
   const [budget, setBudget] = useState<Budget>({ st: "todo" });
   const [notice, setNotice] = useState<Notice | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
@@ -80,7 +92,7 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
     store.current = picked;
     setPersistent(picked.persistent);
     try {
-      const b = loadBuyer(picked.storage);
+      const b = publicBuyer(loadBuyer(picked.storage));
       setSaved(b);
       // A returning visitor sees the saved account in its receipt row (fixed height), not in a line under the
       // buttons that appears after hydration and vanishes on start (Designer QA B2: the receipt never moves).
@@ -114,7 +126,7 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
     setKeyLine("wait");
     setAcct({ st: "todo", label: "Testnet account", note: "—" });
     setBudget({ st: "todo" });
-    let state: Buyer;
+    let state: PublicBuyer;
     try {
       const res = await withBuyerLock(navigator, () => startAccount({
         storage: picked.storage,
@@ -123,10 +135,14 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
         randomBytes: (n) => crypto.getRandomValues(new Uint8Array(n)),
         onStep,
       }));
-      state = res.state;
+      state = publicBuyer(res.state);
     } catch (err) {
       const code = err instanceof AccountError ? err.code : "UNEXPECTED";
-      const n = noticeOf(code);
+      let n = noticeOf(code);
+      // O-7: a job still live here needs this key for its timeout / reveal: never offer to replace it.
+      if (n.fresh && code === "ACCOUNT_KEY_MISSING" && liveJobHere(picked.storage)) {
+        n = { ...n, fresh: false, body: "This browser's key didn't show on the saved account just now, and a job of yours is still open on testnet, so the key is kept. Nothing was charged. Try again, or watch the recorded run (real testnet data, labelled RECORDED)." };
+      }
       setKeyLine((k) => (k === "wait" ? (code === "STORAGE_CORRUPT" || code === "WALLET_LOAD_FAILED" ? "bad" : "todo") : k));
       setAcct((a) => (a.st === "wait" ? { ...a, st: "bad", note: noteOf(code) } : a));
       setNotice(n);
@@ -136,20 +152,25 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
     setBuyer(state);
     setSaved(state);
     setBudget({ st: "reading" });
+    let fits: boolean | null = null;
     try {
       const q = await readLiveQuote(window.fetch.bind(window));
       const b = checkJobBudget(state, q.quoteYocto);
+      fits = b.fits;
       setBudget({ st: b.fits ? "fits" : "over", quote: q.quoteYocto, need: b.needYocto, left: b.leftYocto });
       setPhase(b.fits ? "ready" : "cap");
     } catch {
-      // Not blocking: the same check runs again right before any lock (T-035). Say so instead of guessing.
+      // Not blocking: the same check runs again inside the signing gate right before create. Say so instead of guessing.
       setBudget({ st: "unknown" });
       setPhase("ready");
     }
-    onReady?.(state);
+    // O-1: no job can start in the cap phase, so the parent hears about the buyer only when one may fit
+    // (unless a job is already live here: it must be finishable even at the cap).
+    if (fits !== false || liveJobHere(picked.storage)) onReady?.(state, { fits });
   }
 
-  const cap = buyer ? capStatus(buyer) : null;
+  const shown = fresher ?? buyer;
+  const cap = shown ? capStatus(shown) : null;
   const busy = phase === "working";
 
   return (
@@ -180,6 +201,10 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
             <button type="button" className={s.primary} onClick={() => start()} disabled={busy} aria-busy={busy} data-act="start">
               {busy ? "Starting…" : saved ? "Continue as the buyer →" : "Be the buyer →"}
             </button>
+          )}
+          {/* Designer t034 QA loop 2: on ready, the reserved slot holds the step-2 control */}
+          {phase === "ready" && onNext && (
+            <button type="button" className={s.primary} onClick={onNext} data-act="next">Pick a pack →</button>
           )}
           <a className={s.secondary} href={RECORDED_HREF} data-act="recorded">Watch the recorded run</a>
         </div>
@@ -238,6 +263,10 @@ export function LiveStart({ onReady }: { onReady?: (buyer: Buyer) => void }) {
   );
 }
 
+function liveJobHere(storage: KV): boolean {
+  try { return jobIsLive(loadJob(storage)); } catch { return true; } // unreadable: assume it may hold escrow
+}
+
 function noteOf(code: Notice["code"]): string {
   switch (code) {
     case "FAUCET_TIMEOUT": return "faucet timeout";
@@ -256,9 +285,10 @@ function BudgetLine({ b }: { b: Budget }) {
   if (b.st === "reading") return <Line st="wait" data="budget" label="Next job: reading the live quote" note="testnet RPC" />;
   if (b.st === "unknown") return <Line st="todo" data="budget" label="Next job: quote unreadable now" note="checked again before any lock" />;
   const label = `Next job: quote ${near3(b.quote, true)} + gas ${near3(JOB_GAS_RESERVE_YOCTO, true)}`;
+  // M-2 item 3: say how the reserve is priced (the title carries it; the row stays one line at 390)
   return b.st === "fits"
-    ? <Line st="ok" data="budget" label={label} note={`fits · ${near3(b.left)} left`} />
-    : <Line st="bad" data="budget" label={label} note={`over the cap · ${near3(b.left)} left`} />;
+    ? <Line st="ok" data="budget" label={label} title={`gas reserve: ${GAS_RESERVE_BASIS}`} note={`fits · ${near3(b.left)} left`} />
+    : <Line st="bad" data="budget" label={label} title={`gas reserve: ${GAS_RESERVE_BASIS}`} note={`over the cap · ${near3(b.left)} left`} />;
 }
 
 function Line({ st, data, label, note, href, hrefText, title, idHref }: {

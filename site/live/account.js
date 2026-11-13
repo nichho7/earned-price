@@ -619,3 +619,39 @@ export async function signJobAction(deps, req) {
     return { outcome, parsed, job, buyer: publicBuyer(state), closed };
   });
 }
+
+/**
+ * A create whose outcome this page never saw (status sending / unconfirmed with its tx hash saved before broadcast):
+ * look it up by hash, under the lock (cli/pick.js reconcileCreate). Landed = the job is open; refused = failed and
+ * the reservation released (its burnt gas kept); unknown = unchanged. Returns the job.
+ */
+export async function reconcileCreate({ storage, nav, fetch: fetchFn }) {
+  return withBuyerLock(nav, async () => {
+    const state = loadBuyer(storage);
+    let job = loadJob(storage);
+    if (!state || !job || (job.status !== "sending" && job.status !== "unconfirmed") || !job.create_tx) return job;
+    let outcome = null;
+    try {
+      const out = await rpcCall(fetchFn, RPC_URLS, "tx", { tx_hash: job.create_tx, sender_account_id: state.account_id, wait_until: "EXECUTED_OPTIMISTIC" });
+      outcome = out.result && typeof out.result === "object" ? out.result : null;
+    } catch {
+      outcome = null;
+    }
+    if (!outcome) return job;
+    let parsed;
+    try { parsed = parseTxOutcome(outcome, CONTRACT_ID); } catch { return job; }
+    const burnt = burntOf(outcome);
+    if (parsed.failure) {
+      job = { ...job, status: "failed", burnt_yocto: burnt.toString() };
+      saveJob(storage, job);
+      const reserved = BigInt(job.price_yocto) + BigInt(job.reserve_yocto);
+      saveBuyer(storage, recordBurn(releaseSpend(state, reserved.toString()), burnt));
+      return job;
+    }
+    const ev = parsed.events.find((e) => e.event === "create" && e.data.buyer === state.account_id && e.data.commit_hash === job.commit_hash);
+    if (!ev || !JOB_ID_RE.test(String(ev.data.job_id))) return job;
+    job = { ...job, status: "open", job_id: String(ev.data.job_id), burnt_yocto: burnt.toString() };
+    saveJob(storage, job);
+    return job;
+  });
+}

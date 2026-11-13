@@ -120,6 +120,7 @@ export function rpcCall(fetchFn: FetchFn, urls: string[], method: string, params
 export function keyOnAccountEvery(fetchFn: FetchFn, urls: string[], accountId: string, publicKey: string, timeoutMs?: number): Promise<boolean>;
 export function publicBuyer(state: Buyer): PublicBuyer;
 export function publicBuyer(state: null): null;
+export function publicBuyer(state: Buyer | null): PublicBuyer | null;
 export function validJob(j: unknown): j is Job;
 export function loadJob(storage: KV): Job | null;
 export function saveJob(storage: KV, job: Job): void;
@@ -132,3 +133,4 @@ export function signJobAction(
   deps: { storage: KV; nav: Navigator | undefined; fetch: FetchFn; loadNear?: () => Promise<{ near: unknown; rpcErrors: unknown }> },
   req: SignRequest,
 ): Promise<{ outcome: unknown; parsed: ParsedTx; job: Job; buyer: PublicBuyer; closed?: ClosingOutcome | null }>;
+export function reconcileCreate(deps: { storage: KV; nav: Navigator | undefined; fetch: FetchFn }): Promise<Job | null>;
