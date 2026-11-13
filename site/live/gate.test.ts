@@ -8,10 +8,11 @@ import { baseEncode } from "near-api-js";
 import {
   AccountError, CONTRACT_ID, CREATE_GAS, DEMO_SELLER, JOB_GAS_RESERVE_YOCTO, JOB_KEY, MAX_CLOSE_TRIES, REVEAL_GAS, RPC_URLS, SIGNABLE, maxGasYocto,
   SPEND_CAP_YOCTO, STORAGE_KEY, TIMEOUT_GAS, loadJob, publicBuyer, recordJobClosed, saveBuyer, saveJob, signJobAction,
+  REVIEW_AUTH_TTL_MS, reviewAuthText, signReviewAuth,
 } from "./account.js";
 import type { Buyer, Job, KV } from "./account.d.ts";
 // @ts-expect-error plain module, no type declarations
-import { canonicalJson, commit } from "../../grader/grade.js";
+import { canonicalJson, commit, sha256Hex } from "../../grader/grade.js";
 // @ts-expect-error plain CLI module, no type declarations
 import { outcomeOf, parseTxOutcome } from "../../cli/tx.js";
 
@@ -39,7 +40,7 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200
 const enc = (v: unknown) => Array.from(new TextEncoder().encode(JSON.stringify(v)));
 
 /** RPC stub: the key is on the account; get_record/quote answer `quote`. Records every call. */
-function chain(opts: { quoteMilli?: bigint; keyOnAccount?: boolean } = {}) {
+function chain(opts: { quoteMilli?: bigint; keyOnAccount?: boolean; job?: unknown } = {}) {
   const calls: { url: string; body: any }[] = [];
   const q = opts.quoteMilli ?? 30n;
   const fn = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -53,7 +54,7 @@ function chain(opts: { quoteMilli?: bigint; keyOnAccount?: boolean } = {}) {
     }
     const ub = Number((q - 30n) / 10n);
     const record = { passes: ub, fails: 0, unique_buyers: ub, jobs: ub };
-    const value = p.method_name === "get_record" ? record : String(q * MILLI);
+    const value = p.method_name === "get_record" ? record : p.method_name === "get_job" ? (opts.job ?? null) : String(q * MILLI);
     return json({ jsonrpc: "2.0", id: 1, result: { result: enc(value), block_hash: "Bh", block_height: 1, logs: [] } });
   }) as typeof fetch;
   return { fn, calls };
@@ -388,11 +389,18 @@ test("MUST-1: real gas past the gas held is counted at once (not at close), and 
   assert.equal(spent(storage), burnt + 7n * 10n ** 20n);
 });
 
+/** get_job while accepted with a signed review on-chain whose response_sha256 is sha256(body). */
+const reviewedView = (body: string, over: Record<string, unknown> = {}) => ({
+  id: "7", buyer: ACCOUNT, seller: DEMO_SELLER, status: "accepted", pack_id: "pack-2",
+  review: { model: "m", request_sha256: "a".repeat(64), response_sha256: sha256Hex(body), signed_text: "t", signature: "0x00", signing_address: "0x" + "1".repeat(40) },
+  ...over,
+});
+
 test("reveal: only the key + salt this job committed, only on an accepted job, REVEAL_GAS", async () => {
   const storage = setup({ spent_yocto: String(QUOTE + JOB_GAS_RESERVE_YOCTO) });
   openJob(storage, { status: "accepted" });
   const fake = fakeNear(() => ({ status: { SuccessValue: "" }, transaction: { hash: TXH(4) }, transaction_outcome: { id: TXH(4), outcome: { executor_id: ACCOUNT, logs: [] } }, receipts_outcome: [] }));
-  const deps = { storage, nav: undefined, fetch: chain().fn, loadNear: fake.loadNear };
+  const deps = { storage, nav: undefined, fetch: chain({ job: reviewedView("{}") }).fn, loadNear: fake.loadNear };
   await assert.rejects(signJobAction(deps, { method: "reveal", args: { job_id: "7", key: K.replace("pack-2", "pack-3"), salt: SALT, response: "{}" }, depositYocto: 0n }), code("BAD_SIGN_REQUEST"));
   await assert.rejects(signJobAction(deps, { method: "reveal", args: { job_id: "7", key: K, salt: "cd".repeat(32), response: "{}" }, depositYocto: 0n }), code("BAD_SIGN_REQUEST"));
   assert.equal(fake.seen.signed.length, 0);
@@ -455,4 +463,96 @@ test("gas and methods are the fixed constants; publicBuyer drops the key", () =>
   const pb = publicBuyer(buyer());
   assert.equal("private_key" in pb, false);
   assert.equal(pb.public_key, PUB);
+});
+
+/* ---------- T-036: the reveal waits for the signed review on-chain; the review auth is signed inside the gate ---------- */
+
+const BODY = JSON.stringify({ choices: [{ message: { content: JSON.stringify({ findings: [] }) } }] });
+const revealOk = (hash: string, outcome: "pass" | "fail"): Outcome => ({
+  status: { SuccessValue: "" },
+  transaction: { hash },
+  transaction_outcome: { id: hash, outcome: { executor_id: ACCOUNT, logs: [], tokens_burnt: String(3n * 10n ** 20n) } },
+  receipts_outcome: [
+    { block_hash: "B3", outcome: { executor_id: CONTRACT_ID, tokens_burnt: String(9n * 10n ** 20n), logs: [
+      ev("reveal", { job_id: "7", buyer: ACCOUNT, seller: DEMO_SELLER, pack_id: "pack-2", found: outcome === "pass" ? 5 : 2, total: 5, pass_min: 4, passed: outcome === "pass", outcome }),
+      ...(outcome === "fail" ? [ev("refund", { job_id: "7", buyer: ACCOUNT, seller: DEMO_SELLER, amount: String(QUOTE), reason: "grade_fail", record: "fail" })] : []),
+    ] } },
+    ...(outcome === "pass" ? [{ block_hash: "B4", outcome: { executor_id: CONTRACT_ID, tokens_burnt: "0", logs: [ev("payout", { job_id: "7", buyer: ACCOUNT, seller: DEMO_SELLER, amount: String(QUOTE), kind: "settle" })] } }] : []),
+  ],
+});
+const revealReq = (response = BODY) => ({ method: "reveal" as const, args: { job_id: "7", key: K, salt: SALT, response }, depositYocto: 0n });
+
+test("T-036 reveal: refused with nothing signed unless get_job shows THIS review on-chain (no review yet, other hash, job closed, RPC down)", async () => {
+  for (const [why, job, fetchOk] of [
+    ["no review yet", reviewedView(BODY, { review: null }), true],
+    ["review of another body", reviewedView("other"), true],
+    ["job closed (get_job null)", null, true],
+    ["still open", reviewedView(BODY, { status: "open" }), true],
+    ["RPC down", reviewedView(BODY), false],
+  ] as const) {
+    const storage = setup({ spent_yocto: String(QUOTE + JOB_GAS_RESERVE_YOCTO) });
+    openJob(storage, { status: "accepted" });
+    const fake = fakeNear(() => revealOk(TXH(50), "pass"));
+    const fetchFn = fetchOk ? chain({ job }).fn : ((async () => { throw new Error("down"); }) as unknown as typeof fetch);
+    await assert.rejects(signJobAction({ storage, nav: undefined, fetch: fetchFn, loadNear: fake.loadNear }, revealReq()), (e: unknown) => e instanceof AccountError && ["BAD_SIGN_REQUEST", "RPC_UNAVAILABLE"].includes(e.code), why);
+    assert.equal(fake.seen.signed.length, 0, why);
+    assert.equal(spent(storage), QUOTE + JOB_GAS_RESERVE_YOCTO, why);
+  }
+});
+
+test("T-036 reveal pass: REVEAL_GAS, the outcome from EVENT_JSON (settled), job closed, price stays spent (paid), unused gas released", async () => {
+  const storage = setup({ spent_yocto: String(QUOTE + JOB_GAS_RESERVE_YOCTO) });
+  openJob(storage, { status: "accepted" });
+  const fake = fakeNear(() => revealOk(TXH(51), "pass"));
+  const r = await signJobAction({ storage, nav: undefined, fetch: chain({ job: reviewedView(BODY) }).fn, loadNear: fake.loadNear }, revealReq());
+  const tx = fake.seen.signed[0];
+  assert.equal(tx.receiverId, CONTRACT_ID);
+  assert.deepEqual(tx.actions, [{ methodName: "reveal", args: { job_id: "7", key: K, salt: SALT, response: BODY }, gas: REVEAL_GAS, deposit: 0n }]);
+  assert.equal(r.closed?.kind, "settled");
+  assert.equal(r.job.status, "closed");
+  assert.equal(r.job.closing_tx, TXH(51));
+  // spent = the price (paid to the seller) + the gas really burnt (create 0.0005 + reveal 0.0012)
+  assert.equal(spent(storage), QUOTE + 5n * 10n ** 20n + 12n * 10n ** 20n);
+  // a closed job takes no second reveal or timeout
+  await assert.rejects(signJobAction({ storage, nav: undefined, fetch: chain({ job: reviewedView(BODY) }).fn, loadNear: fake.loadNear }, revealReq()), code("BAD_SIGN_REQUEST"));
+});
+
+test("T-036 reveal fail: refunded_fail releases the price; a rejected reveal counts against MAX_CLOSE_TRIES", async () => {
+  const storage = setup({ spent_yocto: String(QUOTE + JOB_GAS_RESERVE_YOCTO) });
+  openJob(storage, { status: "accepted" });
+  const deps = { storage, nav: undefined, fetch: chain({ job: reviewedView(BODY) }).fn };
+  const refused = fakeNear((_tx, i) => timeoutRefused(TXH(60 + i), 3n * 10n ** 20n));
+  await assert.rejects(signJobAction({ ...deps, loadNear: refused.loadNear }, revealReq()), code("TX_REFUSED"));
+  assert.equal(loadJob(storage)!.close_txs.length, 1);
+  const fail = fakeNear(() => revealOk(TXH(70), "fail"));
+  const r = await signJobAction({ ...deps, loadNear: fail.loadNear }, revealReq());
+  assert.equal(r.closed?.kind, "refunded_fail");
+  assert.equal(spent(storage), 5n * 10n ** 20n + 3n * 10n ** 20n + 12n * 10n ** 20n, "only gas: the price came back");
+});
+
+test("T-036 review auth: signs only the fixed text for this browser's live job; checkReviewAuth (T-028) accepts it; nothing else", async () => {
+  const near = await import("near-api-js");
+  // @ts-expect-error plain module, no type declarations
+  const { checkReviewAuth, reviewAuthMessage } = await import("../../site-api/buyer-auth.js");
+  const kp = near.KeyPair.fromRandom("ed25519");
+  const storage = setup({ public_key: kp.getPublicKey().toString(), private_key: kp.toString() });
+  openJob(storage, { status: "accepted" });
+  const deps = { storage, nav: undefined, loadNear: async () => ({ near }), now: () => 1_800_000_000_000 };
+  const a = await signReviewAuth(deps, { job_id: "7" });
+  assert.deepEqual(Object.keys(a).sort(), ["expires_ms", "job_id", "pack_id", "public_key", "signature"]);
+  assert.equal(a.job_id, "7");
+  assert.equal(a.pack_id, "pack-2");
+  assert.equal(a.public_key, kp.getPublicKey().toString());
+  assert.equal(JSON.stringify(a).includes(kp.toString().slice(8)), false, "the private key is not in the answer");
+  assert.equal(checkReviewAuth(a, 1_800_000_000_000), null, "T-028's own check accepts it");
+  // drift: the gate's text is buyer-auth's message, byte for byte
+  assert.deepEqual(new TextEncoder().encode(reviewAuthText("7", "pack-2", a.expires_ms)), reviewAuthMessage(a));
+  assert.equal(REVIEW_AUTH_TTL_MS <= 10 * 60_000, true);
+  // another job, a closed job, no buyer, a bad id: refused
+  await assert.rejects(signReviewAuth(deps, { job_id: "8" }), code("NO_JOB"));
+  await assert.rejects(signReviewAuth(deps, { job_id: "7; drop" }), code("BAD_SIGN_REQUEST"));
+  openJob(storage, { status: "closed" });
+  await assert.rejects(signReviewAuth(deps, { job_id: "7" }), code("NO_JOB"));
+  const empty = memory();
+  await assert.rejects(signReviewAuth({ ...deps, storage: empty }, { job_id: "7" }), code("NO_BUYER"));
 });
