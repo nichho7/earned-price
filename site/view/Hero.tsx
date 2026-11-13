@@ -3,6 +3,10 @@
 import type { Hero as HeroData } from "../data/hero.ts";
 import s from "./hero.module.css";
 
+/** T-040 / S-018: PRD 6 approved copy, verbatim (README "Exam jobs vs real jobs" says the same). */
+export const EXAM_LINE =
+  "Graded jobs (exams with sealed answers) build the record; real jobs pay the earned price; buyers can supply tests, not answers.";
+
 /** Deterministic dot field (lab T-053): mulberry32 seeded with the job count, Fisher-Yates shuffle. */
 export function litDots(total: number, lit: number, seed: number): boolean[] {
   let a = seed;
@@ -38,6 +42,9 @@ export function Hero({ hero }: { hero: HeroData }) {
           <b>Source:</b> {hero.source_label} · <b>as of {hero.as_of_label}</b> · {hero.hired_once} of {hero.agents} agents
           hired at least once · re-pulled before judging.
         </p>
+        {/* T-040 / S-018 (Designer D1): the exam-vs-real line closes the hero copy, claim -> evidence ->
+            rule, where the judge's "why hire a seller?" doubt first arises. Static and server-rendered. */}
+        <p className={s.exam} data-exam-line="">{EXAM_LINE}</p>
       </div>
       <div className={s.dots} aria-hidden="true">
         {dots.map((on, i) => <i key={i} className={on ? s.lit : undefined} />)}
