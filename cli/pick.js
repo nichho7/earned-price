@@ -13,12 +13,15 @@
 // The job file (.earned/job.json, 0600) keeps K and salt byte-for-byte until `earned hire` reveals.
 // A finished job file is archived, never overwritten. T-031 hire must end a job with status "closed".
 // All network access is injected (fetch for views, sendCreate for the tx), so tests never touch it.
-import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONTRACT_ACCOUNT, NETWORK } from "./names.js";
 import { RPC_RETRIES, RPC_URLS, assertTestnet, assertTestnetRpc, loadState, redact, saveState, stateDir } from "./init.js";
-import { assertCanSpend, formatNear, recordSpend } from "./spend-cap.js";
+import { assertCanSpend, formatNear, recordSpend, releaseSpend } from "./spend-cap.js";
+import { sendCreateTx, txHashOf } from "./tx.js";
+// Moved to browser-safe modules in T-035 (the /live signing gate reuses them); re-exported so callers keep working.
+export { releaseSpend } from "./spend-cap.js";
+export { isRejectedBeforeInclusion, sendCreateTx, signedTxHash, txHashOf } from "./tx.js";
 import { assertTestnetAccount, evaluateOffer, fetchQuote, formatMilli, parseNearToMilli, viewFunction } from "./quote.js";
 import { loadPack as loadPackDefault, sealKey } from "../packs/packs.js";
 import { requestSha256 } from "../seller/review-prompt.js";
@@ -230,7 +233,6 @@ export function acquirePickLock(dir, { say = () => {}, now = Date.now() } = {}) 
   };
 }
 
-export const txHashOf = (o) => o?.transaction?.hash ?? o?.transaction_outcome?.id ?? null;
 
 /**
  * FinalExecutionOutcome of create -> { jobId, txHash }. A Failure status is a definite refusal
@@ -261,12 +263,6 @@ export function parseCreateOutcome(outcome) {
 export const REUSABLE_STATUSES = new Set(["failed", "closed"]);
 export const UNRESOLVED_STATUSES = new Set(["sending", "unconfirmed"]);
 
-/** Returns state with a reservation released (never below 0). */
-export function releaseSpend(state, priceYocto) {
-  const spent = BigInt(state.spent_yocto ?? "0");
-  const price = /^\d+$/.test(String(priceYocto ?? "")) ? BigInt(priceYocto) : 0n;
-  return { ...state, spent_yocto: (spent > price ? spent - price : 0n).toString() };
-}
 
 /**
  * An earlier create whose outcome we never saw: look it up by the tx hash saved before broadcast
@@ -478,70 +474,6 @@ async function pickLocked({ n, fetchFn, urls, contractId, seller, sendCreate, lo
     say("SEE: step 2 PASS");
   }
   return { job: done, quote, haggle: answers, txHash: created.txHash };
-}
-
-const notSent = (err) => Object.assign(err instanceof Error ? err : new Error(String(err)), { notSent: true });
-
-/**
- * True when send_tx was refused before the tx could be included (nearcore INVALID_TRANSACTION,
- * which near-api-js 7.4.0 throws as InvalidTransactionError or an InvalidTxError subclass of
- * TransactionExecutionError). ActionExecutionError means it ran, so it is not counted here.
- */
-export function isRejectedBeforeInclusion(err, rpcErrors) {
-  const { TransactionExecutionError, ActionExecutionError, InvalidTransactionError } = rpcErrors;
-  if (err instanceof InvalidTransactionError) return true;
-  return err instanceof TransactionExecutionError && !(err instanceof ActionExecutionError);
-}
-
-/** base58 sha256 of the borsh-encoded transaction: the hash the explorer and `tx` RPC use. */
-export function signedTxHash(signed, near) {
-  return near.baseEncode(createHash("sha256").update(near.encodeTransaction(signed.transaction)).digest());
-}
-
-/**
- * Signs create on the first RPC that answers (views may have failed over), reports the tx hash
- * through onSigned before broadcasting, then broadcasts on that same RPC. Errors tagged notSent
- * cannot have landed: signing failed everywhere, or the RPC refused the tx. One fresh-nonce retry.
- * Anything else (timeout, dropped connection) is rethrown as an unknown outcome.
- */
-export async function sendCreateTx({ urls, makeAccount, state, contractId, methodName, args, depositYocto, gas, onSigned, near, rpcErrors }) {
-  const action = near.actions.functionCall(methodName, args, gas, depositYocto);
-  for (let attempt = 0; ; attempt++) {
-    let account;
-    let signed;
-    let lastErr;
-    for (const url of urls) {
-      try {
-        account = makeAccount(url, state); // fresh account = fresh nonce from the chain
-        signed = await account.createSignedTransaction({ receiverId: contractId, actions: [action] });
-        break;
-      } catch (err) {
-        lastErr = err;
-        signed = undefined;
-      }
-    }
-    if (!signed) throw notSent(lastErr ?? new Error("no RPC to sign with"));
-    try {
-      await onSigned?.(signedTxHash(signed, near));
-    } catch (err) {
-      throw notSent(err); // nothing broadcast yet
-    }
-    try {
-      return await account.provider.sendTransactionUntil(signed, "EXECUTED_OPTIMISTIC");
-    } catch (err) {
-      if (!isRejectedBeforeInclusion(err, rpcErrors)) throw err;
-      if (err instanceof rpcErrors.InvalidNonceError && attempt === 0) {
-        // Review O-1: a provider retry of send_tx may already have landed this exact tx (it used
-        // the nonce). If the chain knows it, that is our create: never re-sign a second one.
-        const landed = await account.provider
-          .viewTransactionStatus({ txHash: signedTxHash(signed, near), accountId: state.account_id, waitUntil: "EXECUTED_OPTIMISTIC" })
-          .catch(() => null);
-        if (landed) return landed;
-        continue;
-      }
-      throw notSent(err);
-    }
-  }
 }
 
 /** Real dependencies: keyless views over the T-014 RPC list; create signed with near-api-js 7.4.0. */
