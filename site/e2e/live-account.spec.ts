@@ -4,7 +4,7 @@
 // a clear message + the RECORDED path, never a blank screen · T-076: cap reached = a clear state + RECORDED.
 // Every cap number below comes from cli/spend-cap.js (code review R-1), so a cap change needs no edit here.
 import { expect, test, type Page, type Request, type Route } from "@playwright/test";
-import { SPEND_CAP_NEAR, SPEND_CAP_YOCTO, near3 } from "../live/account.js";
+import { JOB_GAS_RESERVE_YOCTO, SPEND_CAP_NEAR, SPEND_CAP_YOCTO, near3 } from "../live/account.js";
 
 const FAUCET = "https://helper.nearprotocol.com/account";
 const RPCS = ["https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"];
@@ -12,6 +12,7 @@ const KEY = "earned-price.buyer.v1";
 const TX = "J4dHYPypVYJkVeL4pbgGDrDKLnm2n9fPyvpidMmFmCJ6";
 const MILLI = 10n ** 21n;
 const CAP = near3(SPEND_CAP_YOCTO); // "0.200" today
+const GAS = near3(JOB_GAS_RESERVE_YOCTO, true); // "0.043": create + reveal + timeout (T-035, M-2)
 const SEEDED_PUB = "ed25519:" + "8".repeat(44);
 const enc = (v: unknown) => Array.from(new TextEncoder().encode(JSON.stringify(v)));
 const ok = (body: unknown) => ({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" }, body: JSON.stringify(body) });
@@ -78,7 +79,7 @@ test("AC1: start makes a testnet account in this browser; only the public key le
   await expect(line(page, "account")).toHaveAttribute("data-st", "ok");
   await expect(line(page, "account").getByRole("link", { name: /^tx J4dH…mCJ6$/ })).toHaveAttribute("href", `https://testnet.nearblocks.io/txns/${TX}`);
   await expect(line(page, "cap")).toContainText(`${CAP} NEAR · spent 0.000`);
-  await expect(line(page, "budget")).toContainText("quote 0.040 + gas 0.033");
+  await expect(line(page, "budget")).toContainText(`quote 0.040 + gas ${GAS}`);
   await expect(line(page, "budget")).toContainText(`fits · ${CAP} left`);
   await expect(line(page, "sum")).toContainText("PASS");
   expect(chain.faucetCalls).toBe(1);
@@ -127,7 +128,8 @@ test("AC3: faucet down = a clear message + the RECORDED path; Try again works on
   await expect(live(page)).toHaveAttribute("data-live-state", "error");
   const alert = notice(page);
   await expect(alert).toContainText("Testnet faucet is unreachable");
-  await expect(alert).toContainText("Nothing was created and nothing was charged.");
+  // O-4: the faucet may have made the account before the connection dropped, so "Nothing was created" is not claimed.
+  await expect(alert).toContainText("Nothing was charged. If the faucet made the account, Try again picks it up.");
   await expect(alert.getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
   await expect(line(page, "account")).toHaveAttribute("data-st", "bad");
   await expect(line(page, "account")).toContainText("faucet unreachable");
@@ -181,10 +183,10 @@ test("T-076: quote + gas reserve over what is left of the cap = 'Spend cap reach
   await expect(page.getByRole("heading", { name: "Cap reached." })).toBeVisible();
   await expect(line(page, "cap")).toContainText(`${CAP} NEAR · spent ${near3(spent, true)}`);
   await expect(line(page, "budget")).toHaveAttribute("data-st", "bad");
-  await expect(line(page, "budget")).toContainText("quote 0.100 + gas 0.033");
+  await expect(line(page, "budget")).toContainText(`quote 0.100 + gas ${GAS}`);
   const alert = notice(page);
   await expect(alert).toContainText("Spend cap reached");
-  await expect(alert).toContainText("The next job needs 0.133 NEAR");
+  await expect(alert).toContainText(`The next job needs ${near3(100n * MILLI + JOB_GAS_RESERVE_YOCTO, true)} NEAR`);
   await expect(alert).toContainText(`0.095 NEAR left of its ${CAP} NEAR cap, so nothing will be sent`);
   await expect(alert.getByRole("link", { name: "Watch the recorded run" })).toHaveAttribute("href", "/");
   expect(chain.faucetCalls).toBe(0);

@@ -130,7 +130,7 @@ export function burntOf(outcome: unknown): bigint;
 export function recordJobClosed(deps: { storage: KV; nav: Navigator | undefined }, outcome: ClosingOutcome, txHash: string | null): Promise<{ buyer: PublicBuyer; job: Job }>;
 export function recordJobAccepted(deps: { storage: KV; nav: Navigator | undefined }, acceptTx: string): Promise<Job | null>;
 export function signJobAction(
-  deps: { storage: KV; nav: Navigator | undefined; fetch: FetchFn; loadNear?: () => Promise<{ near: unknown; rpcErrors: unknown }> },
+  deps: { storage: KV; nav: Navigator | undefined; fetch: FetchFn; loadNear: () => Promise<{ near: unknown; rpcErrors: unknown }> },
   req: SignRequest,
 ): Promise<{ outcome: unknown; parsed: ParsedTx; job: Job; buyer: PublicBuyer; closed?: ClosingOutcome | null }>;
 export function reconcileCreate(deps: { storage: KV; nav: Navigator | undefined; fetch: FetchFn }): Promise<Job | null>;

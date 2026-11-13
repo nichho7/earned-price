@@ -160,6 +160,15 @@ test("M-2: a crafted receiver, gas, RPC list, method or deposit is refused; noth
   assert.equal(storage.getItem(JOB_KEY), null);
 });
 
+test("M-2: the wallet code loads before anything is booked: a failed or missing loader leaves no reservation and no job", async () => {
+  const storage = setup();
+  const req = { method: "create", args: CREATE_ARGS, depositYocto: QUOTE, seal: SEAL } as const;
+  await assert.rejects(signJobAction({ storage, nav: undefined, fetch: chain().fn, loadNear: async () => { throw new Error("chunk failed"); } }, req), code("WALLET_LOAD_FAILED"));
+  await assert.rejects(signJobAction({ storage, nav: undefined, fetch: chain().fn } as never, req), code("WALLET_LOAD_FAILED"));
+  assert.equal(spent(storage), 0n);
+  assert.equal(storage.getItem(JOB_KEY), null);
+});
+
 test("M-2: a create deposit must be the live quote the gate reads itself (QUOTE_CHANGED); nothing signed or spent", async () => {
   const storage = setup();
   const fake = fakeNear(() => assert.fail("must not broadcast"));

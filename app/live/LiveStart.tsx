@@ -225,7 +225,7 @@ export function LiveStart({ onReady, onNext, buyer: fresher }: {
                 title={acct.id} idHref={acct.id && acct.st === "ok" ? accountUrl(acct.id) : undefined} />
               <Line st={cap ? "ok" : "todo"} data="cap" label="Spend cap, enforced by this page"
                 note={cap ? `${near3(cap.capYocto)} NEAR · spent ${near3(cap.spentYocto, true)}` : `${near3(SPEND_CAP_YOCTO)} NEAR`} />
-              <BudgetLine b={budget} />
+              <BudgetLine b={budgetFor(budget, fresher)} />
             </div>
             <div className={s.sum} data-line="sum">
               <span>step 1</span>
@@ -278,6 +278,13 @@ function noteOf(code: Notice["code"]): string {
     case "FAUCET_HTTP": case "FAUCET_BAD_RESPONSE": case "FAUCET_TX_FAILED": return "faucet error";
     default: return "failed";
   }
+}
+
+/** Code review O-2: once step 2 spends, the parent's fresher buyer re-derives the budget row too (never a stale "left"). */
+function budgetFor(b: Budget, fresher: PublicBuyer | null | undefined): Budget {
+  if (!fresher || (b.st !== "fits" && b.st !== "over")) return b;
+  const r = checkJobBudget(fresher, b.quote);
+  return { st: r.fits ? "fits" : "over", quote: b.quote, need: r.needYocto, left: r.leftYocto };
 }
 
 function BudgetLine({ b }: { b: Budget }) {

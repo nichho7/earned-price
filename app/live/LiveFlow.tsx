@@ -9,7 +9,8 @@ import type { PublicBuyer } from "../../site/live/account.d.ts";
 import { LiveStart } from "./LiveStart.tsx";
 import { LiveBeat2 } from "./LiveBeat2.tsx";
 
-export type PackInfo = { id: string; name: string; level: string; file: string; lines: number; hash: string; hashOk: boolean; key: unknown };
+import type { PackInfo } from "../../site/live/pack-info.ts";
+export type { PackInfo };
 
 export function LiveFlow({ packs }: { packs: PackInfo[] }) {
   const [buyer, setBuyer] = useState<PublicBuyer | null>(null);

@@ -453,14 +453,6 @@ function checkRequest(req) {
   return { method, args, depositYocto, seal };
 }
 
-const loadNearDefault = async () => {
-  try {
-    return { near: await import("near-api-js"), rpcErrors: await import("near-api-js/rpc-errors") };
-  } catch {
-    throw new AccountError("WALLET_LOAD_FAILED", "near-api-js failed to load");
-  }
-};
-
 /**
  * A closing outcome (decline, timeout or reveal; cli/tx.js outcomeOf) settles the job's spend record. Order (as
  * cli/hire.js M-2): the job is marked closed first, then the spend is released, so a crash in between over-counts,
@@ -511,8 +503,8 @@ export async function recordJobAccepted({ storage, nav }, acceptTx) {
 
 /**
  * THE signing gate (security M-2): the only code on the site that signs with the buyer key.
- * deps: { storage, nav, fetch, loadNear? } (loadNear is injected by the unit tests only; the page uses
- * the lazy near-api-js import, R4). req: { method, args, depositYocto, seal? (create), onSigned? }.
+ * deps: { storage, nav, fetch, loadNear } (loadNear = the page's lazy import of near-api-js + its rpc-errors, R4: wallet
+ * code is imported only from app/live/; it is loaded BEFORE anything is booked, so a failed load leaves no reservation). req: { method, args, depositYocto, seal? (create), onSigned? }.
  *  - receiverId is CONTRACT_ID, gas is SIGNABLE[method], providers come from RPC_URLS: none of them can be passed in.
  *  - method in { create, reveal, timeout }; a deposit only on create, and only === the quote this gate reads itself.
  *  - under withBuyerLock; the buyer and job are re-read from storage inside it (no stale copy, review O-2).
@@ -525,7 +517,7 @@ export async function recordJobAccepted({ storage, nav }, acceptTx) {
 export async function signJobAction(deps, req) {
   const { method, args, depositYocto, seal } = checkRequest(req);
   const { storage, nav, fetch: fetchFn } = deps;
-  const loadNear = deps.loadNear ?? loadNearDefault;
+  if (typeof deps.loadNear !== "function") throw new AccountError("WALLET_LOAD_FAILED", "no near-api-js loader");
   return withBuyerLock(nav, async () => {
     let state = loadBuyer(storage);
     if (!state || state.status !== "created") throw new AccountError("NO_BUYER", "no testnet buyer in this browser yet");
@@ -549,6 +541,12 @@ export async function signJobAction(deps, req) {
     if (!(await keyOnAccount(fetchFn, RPC_URLS, state.account_id, state.public_key))) {
       throw new AccountError("ACCOUNT_KEY_MISSING", "this browser's key is not on the saved account");
     }
+    let near, rpcErrors;
+    try {
+      ({ near, rpcErrors } = await deps.loadNear());
+    } catch {
+      throw new AccountError("WALLET_LOAD_FAILED", "near-api-js failed to load");
+    }
 
     const before = state;
     if (method === "create") {
@@ -567,7 +565,6 @@ export async function signJobAction(deps, req) {
       saveJob(storage, job); // before broadcast: an unknown outcome can be looked up later
       try { req.onSigned?.(txHash); } catch { /* a view callback never stops the send */ }
     };
-    const { near, rpcErrors } = await loadNear();
     const makeAccount = (url, st) => {
       if (!RPC_URLS.includes(url)) throw new Error("refused: provider not in RPC_URLS");
       return new near.Account(st.account_id, new near.JsonRpcProvider({ url }, { retries: 2 }), st.private_key);

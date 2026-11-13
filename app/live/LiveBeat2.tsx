@@ -41,6 +41,8 @@ const HEAD: Record<Phase, string> = {
 };
 const RECORDED_LINE = "Watch the recorded run instead: the same flow, real testnet data, labelled RECORDED.";
 
+// R4: wallet code is imported only here, in app/live/, lazily, when something is signed.
+const loadNear = async () => ({ near: await import("near-api-js"), rpcErrors: await import("near-api-js/rpc-errors") });
 const randomBytes = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 const nsToMs = (ns: bigint) => Number(ns / 1_000_000n);
 
@@ -172,7 +174,7 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
     setNotice(null);
     setPhase("locking");
     try {
-      const r = await signJobAction({ storage: storage(), nav: navigator, fetch: fetchFn() }, {
+      const r = await signJobAction({ storage: storage(), nav: navigator, fetch: fetchFn(), loadNear }, {
         method: "create",
         args: { seller: DEMO_SELLER, commit_hash: seal.commit_hash, pack_id: seal.pack_id },
         depositYocto: quote.quoteYocto,
@@ -262,7 +264,7 @@ export function LiveBeat2({ packs, buyer, onBuyer }: { packs: PackInfo[]; buyer:
     setPhase("timing_out");
     setSeller({ st: "wait", label: "accept_by passed: calling timeout", note: "refund, record unchanged" });
     try {
-      const r = await signJobAction({ storage: storage(), nav: navigator, fetch: fetchFn() }, { method: "timeout", args: { job_id: j.job_id! }, depositYocto: 0n });
+      const r = await signJobAction({ storage: storage(), nav: navigator, fetch: fetchFn(), loadNear }, { method: "timeout", args: { job_id: j.job_id! }, depositYocto: 0n });
       refreshBuyer();
       if (!r.closed) throw new AccountError("SEND_UNCONFIRMED", "the timeout landed without a closing event for this job");
       run.current?.closed(r.closed.kind);
