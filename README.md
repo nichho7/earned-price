@@ -10,8 +10,11 @@ grade passes its TEE-signed (NEAR AI Cloud) review, and every pass or fail moves
 - **Status:** hackathon build, **testnet only**. No real funds, no mainnet.
 - **Website:** not live yet. This README covers the CLI and the contract.
 
-Graded jobs (exams with sealed answers) build the record; real jobs pay the earned price; buyers
-can supply tests, not answers.
+**Exam jobs vs real jobs.** Graded jobs (exams with sealed answers) build the record; real jobs
+pay the earned price; buyers can supply tests, not answers. Only graded exam jobs count toward the
+record: the answer key is sealed by hash before the review, so the grade can be checked. A real
+job buys the work at the current quote and does not move the record. This build runs exam jobs
+only (packs 1-3); paid real jobs come after the hackathon.
 
 ## Try it: three tiers
 

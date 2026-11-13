@@ -11,6 +11,8 @@
 .lede { margin: 0; font: 400 var(--fs-body)/1.5 var(--sans); color: var(--cream); }
 .source { margin: var(--s2) 0 0; font: 400 var(--fs-body)/1.5 var(--sans); color: var(--cream-2); }
 .source b { font-weight: 500; color: var(--cream); }
+/* T-040 / S-018 (Designer D1): the exam-vs-real line, a statement under a hairline, not a footnote. */
+.exam { margin: var(--s4) 0 0; padding-top: var(--s3); border-top: var(--hairline) solid var(--line); font: 400 var(--fs-body)/1.5 var(--sans); color: var(--cream); }
 .dots { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(108, 1fr); gap: 3px; margin-top: var(--s2); }
 .dots i { aspect-ratio: 1; border-radius: 50%; box-shadow: inset 0 0 0 1.2px var(--slot); }
 .dots i.lit { background: var(--cream); box-shadow: none; }

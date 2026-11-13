@@ -244,6 +244,17 @@ test("closer CTA (T-085, S-028 AC10): the README's Tier 1 command, word for word
   assert.doesNotMatch(finalHTML([...RUNS]), /npx|earned-price init/);
 });
 
+test("closer (T-091, S-016 AC5): 'Try it, no key:' sits above the command, outside .cmd; a plain /verify link sits below it", () => {
+  const html = finalHTML([...RUNS]);
+  const cls = html.slice(html.indexOf('data-closer=""'));
+  const label = cls.indexOf('<div class="cap2 try">Try it, no key:</div>'), cmd = cls.indexOf('<div class="cmd">');
+  const link = cls.indexOf('<a class="lnk" href="/verify">Verify the receipt yourself →</a>');
+  const sub = cls.indexOf("offline, in your browser · change one byte and it fails");
+  assert.ok(label >= 0 && cmd >= 0 && link >= 0 && sub >= 0, "label, command, link and sub-line are all in the closer");
+  assert.ok(label < cmd && cmd < link && link < sub, "order: label, command, link, sub-line");
+  assert.equal((html.match(/href="\/verify"/g) ?? []).length, 1, "one /verify link on the stage");
+});
+
 test("slimRun keeps every field the view reads: same final HTML from slim and full runs", () => {
   assert.equal(finalHTML(RUNS.map(slimRun)), finalHTML([...RUNS]));
   const fat = JSON.stringify(RUNS).length, slim = JSON.stringify(RUNS.map(slimRun)).length;
