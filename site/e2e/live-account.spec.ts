@@ -230,7 +230,7 @@ test("no JS: the start card and the RECORDED link are in the HTML (never a blank
   await page.goto("/live");
   await expect(page.getByRole("heading", { name: "Be the buyer." })).toBeVisible();
   await expect(page.locator("[data-noscript]")).toContainText("The live run needs JavaScript.");
-  await expect(page.locator("[data-noscript] a")).toHaveAttribute("href", "/");
+  await expect(page.locator("[data-noscript] a")).toHaveAttribute("href", "/#demo");
   await expect(page.locator('[data-line="key"]')).toBeVisible();
   // Designer QA B1: the start button needs JS, so with JS off it is not shown; RECORDED is the only CTA.
   await expect(page.locator('[data-act="start"]')).toBeHidden();
