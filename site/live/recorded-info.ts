@@ -3,7 +3,8 @@
 // events come from site/data/recorded/run-1.json (the same job 1, recorded from testnet RPC); this adds the two things
 // the events don't carry: the revealed key (canonical JSON) and the signed findings, so the page shows each finding next
 // to the key with the same grader the live path uses. /verify bundles the full receipt and regrades it offline.
-// Reads from process.cwd() for the same Turbopack reason as pack-info.ts. recorded-info.test.ts pins it to the file.
+// Reads from process.cwd() for the same Turbopack reason as pack-info.ts. review.test.ts pins it to the file (review L-8).
+// T-037: step 4 reads recorded/pack-3.json (job 2, the repeat buyer) the same way.
 // Skills used: karpathy-guidelines
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +19,7 @@ export type RecordedInfo = {
 
 export function recordedInfo(file: string = join(process.cwd(), "recorded", "pack-2.json")): RecordedInfo {
   const r = JSON.parse(readFileSync(/* turbopackIgnore: true */ file, "utf8"));
-  if (commit(r.reveal.key, r.reveal.salt) !== r.commit_hash) throw new Error("recorded/pack-2.json: the revealed key doesn't match its commit");
+  if (commit(r.reveal.key, r.reveal.salt) !== r.commit_hash) throw new Error(`${file}: the revealed key doesn't match its commit`);
   const findings = (Array.isArray(r.findings) ? r.findings : []).slice(0, 10)
     .map((f: { file: string; line: number; category: string }) => ({ file: String(f.file), line: Number(f.line), category: String(f.category) }));
   return {

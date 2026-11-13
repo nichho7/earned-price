@@ -21,6 +21,8 @@ import { canonicalJson, findingsFromResponse, sha256Hex } from "../../grader/gra
 // @ts-expect-error plain CLI module, no type declarations
 import { formulaLine } from "../../cli/quote.js";
 // @ts-expect-error plain CLI module, no type declarations
+import { classifyClose } from "../../cli/step4.js";
+// @ts-expect-error plain CLI module, no type declarations
 import { outcomeOf, parseTxOutcome } from "../../cli/tx.js";
 
 const H = (n: number) => baseEncode(new Uint8Array(32).fill(n));
@@ -107,6 +109,30 @@ test("the RECORDED run's key + findings (build time, recorded/pack-2.json) regra
   const g = checksOf(r.K, r.findings);
   assert.deepEqual([g.grade!.found, g.grade!.total, g.grade!.passed, g.grade!.false_positives], [5, 5, true, 1]);
   assert.ok(r.findings.every((f) => Object.keys(f).sort().join() === "category,file,line"));
+});
+
+test("T-037 step 4 RECORDED: job 2 (recorded/pack-3.json) regrades 4/5 with B5 missed; run-2's settle + get_record reads classify as the repeat pass, quote held 0.040", () => {
+  const r = recordedInfo(new URL("../../recorded/pack-3.json", import.meta.url).pathname);
+  assert.deepEqual([r.job_id, r.pack_id], ["2", "pack-3"]);
+  const g = checksOf(r.K, r.findings);
+  assert.deepEqual([g.grade!.found, g.grade!.total, g.grade!.passed], [4, 5, true]);
+  assert.deepEqual(g.rows.map((x) => [x.bug_id, x.hit]), [["B1", true], ["B2", true], ["B3", true], ["B4", true], ["B5", false]]);
+  const run2 = JSON.parse(readFileSync(new URL("../data/recorded/run-2.json", import.meta.url), "utf8"));
+  const ev = (type: string, phase?: string) => run2.events.find((e: { type: string; data: { phase?: string } }) => e.type === type && (!phase || e.data.phase === phase));
+  const settled = ev("settled");
+  const before = ev("quote", "before").data;
+  const after = ev("quote", "after").data;
+  // the receipt's txs are the replay's txs (review L-8, for job 2)
+  assert.equal(run2.events.find((e: { type: string; data: { action?: string } }) => e.type === "tx_confirmed" && e.data.action === "reveal").tx_hash, r.txs.reveal);
+  assert.equal(settled.data.outcome, "paid_seller");
+  const close = classifyClose({ kind: "settled" }, before.record, after.record);
+  assert.deepEqual([close.kind, close.counts_unique_buyer], ["repeat", false]);
+  assert.deepEqual([before.quote_mnear, after.quote_mnear], [40, 40]);
+  assert.equal(formulaLine(after.record), "0.030 + 0.010×1 − 0.005×0 = 0.040 NEAR");
+  // a refund is the fail state, never the repeat state; a first pass from a new buyer is not a repeat
+  assert.equal(classifyClose({ kind: "refunded_fail" }, after.record, { ...after.record, fails: 1, jobs: 3 }).kind, "fail");
+  assert.equal(classifyClose({ kind: "settled" }, before.record, { ...after.record, unique_buyers: 2 }).kind, "first_pass");
+  assert.equal(classifyClose({ kind: "settled" }, before.record, { ...after.record, jobs: 3 }).kind, "unclear");
 });
 
 test("reviewMatches / stageOf / findingsCount / the review cache", () => {
