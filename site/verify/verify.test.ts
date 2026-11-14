@@ -134,7 +134,9 @@ test("security L-1: check details are capped at 240 characters, and no PASS row 
   const vb = verifyView(asReceipt(big), false);
   assert.equal(vb.checks[1].ok, false);
   for (const c of vb.checks) assert.ok(c.detail.length <= 241, `check ${c.n}: ${c.detail.length} chars`);
-  assert.ok(vb.checks[1].detail.endsWith("…"));
+  // T-090: the claim is now cut at the source (verify/receipt.js claim(), 64 + "…"), so the row keeps its reason
+  assert.ok(vb.checks[1].detail.includes(`${"M".repeat(64)}…;`) && !vb.checks[1].detail.includes("M".repeat(65)), vb.checks[1].detail);
+  assert.match(vb.checks[1].detail, /the escrow accepts only /);
   // h11: the genuine review relabelled as an unofficial pack whose name reads like a verdict (commit recomputed)
   // @ts-expect-error plain .js grader, no type declarations
   const { commit } = await import("../../grader/grade.js");

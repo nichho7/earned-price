@@ -5,7 +5,7 @@
 // or the pack is not official (the sample-0 fixture), 2 usage or unreadable / non-receipt file.
 // Every printed line goes through printable(): receipt text can't inject escapes or fake lines.
 import { readReceipt } from "./receipt-file.js";
-import { ReceiptError, printable, tamperReceipt, verifyReceipt } from "../verify/receipt.js";
+import { ReceiptError, claim, printable, tamperReceipt, verifyReceipt } from "../verify/receipt.js";
 
 const USAGE = "usage: earned verify <receipt.json> [--tamper] [--json]";
 
@@ -41,7 +41,7 @@ export async function runVerify({ path, tamper, json, out: write = (l) => consol
     write(printableJson(JSON.stringify(edit ? { ...v, tampered: edit } : v, null, 2)));
     return v;
   }
-  out(`Verifying ${path}: job ${receipt.job_id}, ${receipt.pack_id}, ${receipt.network} (offline, no key)`);
+  out(`Verifying ${path}: job ${claim(receipt.job_id)}, ${claim(receipt.pack_id)}, ${claim(receipt.network)} (offline, no key)`); // T-090: claims cut
   if (edit) {
     const show = (c) => (c === "" ? "nothing" : JSON.stringify(c));
     out(`Tampered copy (the file is unchanged): ${edit.field} byte ${edit.offset} ${show(edit.from)} -> ${show(edit.to)}`);
