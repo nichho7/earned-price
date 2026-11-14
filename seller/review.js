@@ -135,7 +135,7 @@ export async function reviewJob({ job, pack, budgetMs = DEFAULT_BUDGET_MS, ...op
  * One signed TEE review of an exact request body (a string). Use it through reviewJob; called
  * directly, notBeforeNs (the job's accepted_at_ns) is required. deadlineMs is an absolute epoch-ms
  * deadline (default now + DEFAULT_BUDGET_MS). Returns
- * { request_body, response_body, findings, check, misses, attempts, created, tee }.
+ * { request_body, response_body, findings, check, misses, attempts, attempt_usage, created, tee }.
  * check is { ok: true, list } or { ok: false, error: malformed_finding | too_many_findings }.
  */
 export async function teeReview({
@@ -204,6 +204,9 @@ export async function teeReview({
   const auth = { Authorization: `Bearer ${key}` };
   let best = null;
   let attempts = 0;
+  // T-105: each attempt's token usage as NEAR AI reported it (its billing basis), or null when the
+  // attempt failed or its usage can't be read. The site's spend counter books the worst case for a null.
+  const attemptUsage = [];
   while (attempts < maxAttempts) {
     const chatMs = Math.min(CHAT_TIMEOUT_MS, left() - SIGNATURE_RESERVE_MS);
     if (attempts > 0 && chatMs < RETRY_MIN_MS) {
@@ -217,9 +220,11 @@ export async function teeReview({
       a = await chatOnce(io, requestBody, auth, chatMs);
     } catch (e) {
       if (!best || !(e instanceof ReviewError)) throw e;
+      attemptUsage.push(null);
       log(`[seller] review attempt ${attempts}/${maxAttempts} failed (${e.code}); submitting the earlier signed attempt`);
       break;
     }
+    attemptUsage.push(usageOf(a.resp));
     if (a.problem === null) best = a;
     if (a.problem === null && a.check.ok) break;
     log(`[seller] review attempt ${attempts}/${maxAttempts}: ${a.problem ?? a.check.error}${attempts < maxAttempts ? ", retrying" : ""}`);
@@ -259,6 +264,7 @@ export async function teeReview({
     check,
     misses,
     attempts,
+    attempt_usage: attemptUsage,
     created,
     tee: {
       model,
@@ -312,6 +318,13 @@ async function readJson(res, code, what) {
   } catch {
     throw new ReviewError(code, `NEAR AI ${what} body is not JSON.`);
   }
+}
+
+/** { prompt_tokens, completion_tokens } from a chat response, or null unless both are non-negative integers. */
+function usageOf(resp) {
+  const u = resp?.usage;
+  const ok = (n) => Number.isSafeInteger(n) && n >= 0;
+  return u && typeof u === "object" && ok(u.prompt_tokens) && ok(u.completion_tokens) ? { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens } : null;
 }
 
 function parseObject(body) {

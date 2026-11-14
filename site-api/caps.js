@@ -18,9 +18,12 @@
 //      earmarked there), not on a dedicated $2 key, so nothing outside this code stops at $1.75.
 //      Each request first RESERVES the worst case (reviewReserveMicro: every attempt at max_tokens)
 //      with an atomic INCRBY and is refused if that would pass SPEND_STOP_MICRO_USD; only then may it
-//      call NEAR AI. After the review, settle() lowers the reservation to the worst case of the
-//      attempts actually used (review.js); it never raises it, and a review that fails after a paid
-//      call keeps its full reservation. So the counter only over-counts real spend.
+//      call NEAR AI. After the review, settle() lowers the reservation to the measured cost x
+//      SETTLE_MARGIN (actualReviewMicro: each attempt's usage tokens x catalog price, which is what
+//      NEAR AI bills, plus 50% for price or usage-report drift; the per-attempt worst case for any
+//      attempt whose usage is unknown or implausible). It never raises it, and a review that fails
+//      after a paid call keeps its full reservation. So the counter over-counts real spend unless
+//      NEAR AI's real charge drifts more than 50% above the recorded price and reported usage.
 //   2. The on-chain floor (floorMicro below, from the seller's get_record) covers a store that lost
 //      its data (a reset or wiped Upstash database): (passes + fails) x FLOOR_REVIEW_MICRO. It used the
 //      full worst-case reserve per graded job (~$0.0095), which stopped live reviews after ~183 jobs
@@ -50,6 +53,11 @@ export const FLOOR_REVIEW_MICRO = 1_500;
 // NEAR AI catalog price for deepseek-ai/DeepSeek-V4.1-Flash-1017 (cloud-api.near.ai/v1/model/list,
 // recorded in packs/results/round-4/summary.json on 2026-11-11): $0.30 in / $1.20 out per M tokens.
 export const PRICE_USD_PER_TOKEN = { in: 0.3e-6, out: 1.2e-6 };
+// T-105 security M-1: settle() books measured cost x 1.5, a buffer for a NEAR AI price rise or a usage
+// report that misses billed tokens. The shared key has no outside stop at $1.75, so the counter must
+// not be exactly right only at today's price. At ~$0.0008 measured that books ~$0.0012 a review, so
+// the counter allows ~1,450 reviews and the floor (~1,160) still binds first. Still capped at the reserve.
+export const SETTLE_MARGIN = 1.5;
 export const JOB_LOCK_S = 15 * 60; // longer than a job's whole review window (7 min)
 // T-084 fix round 1 (security M-1): declines a day, site-wide, across every GLOBAL_REFUSALS reason.
 // Each decline prepays 30 Tgas (~0.003 NEAR of the seller FC key's allowance, estimate), and unused
@@ -97,6 +105,37 @@ export function floorMicroFromRecord(rec) {
     return Number.isSafeInteger(x) && x > 0 ? x : 0;
   };
   return (n(rec?.passes) + n(rec?.fails)) * FLOOR_REVIEW_MICRO;
+}
+
+/**
+ * The fewest prompt tokens a real usage report for this pack can show (security L-1): request bytes / 8.
+ * Real BPE runs ~3 bytes a token (pack 1: ~6.6 KB, 2,025 tokens), so a lower count is a broken report.
+ */
+export function minPromptTokens(pack) {
+  return Math.max(1, Math.floor(Buffer.byteLength(buildReviewRequest(pack.reviewFiles)) / 8));
+}
+
+/**
+ * What a finished review costs, in micro-USD, for settle(): each attempt's reported usage x
+ * PRICE_USD_PER_TOKEN x SETTLE_MARGIN, or the per-attempt worst case (reserveMicro /
+ * DEFAULT_MAX_ATTEMPTS) for an attempt whose usage is missing, unreadable, below minPrompt prompt
+ * tokens (it may still have been billed; security L-1). An attempt that measures above its worst case,
+ * or `attempts` outside 1..DEFAULT_MAX_ATTEMPTS, keeps the whole reserve (security I-3, L-2). Never above reserveMicro.
+ */
+export function actualReviewMicro({ reserveMicro, attempts, usage, minPrompt = 1 }) {
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > DEFAULT_MAX_ATTEMPTS) return reserveMicro;
+  const worst = reserveMicro / DEFAULT_MAX_ATTEMPTS;
+  const floor = Math.max(1, Number.isSafeInteger(minPrompt) ? minPrompt : 1);
+  const ok = (v) => Number.isSafeInteger(v) && v >= 0;
+  let total = 0;
+  for (let i = 0; i < attempts; i++) {
+    const u = Array.isArray(usage) ? usage[i] : null;
+    const known = u && typeof u === "object" && ok(u.prompt_tokens) && ok(u.completion_tokens) && u.prompt_tokens >= floor;
+    const cost = known ? (u.prompt_tokens * PRICE_USD_PER_TOKEN.in + u.completion_tokens * PRICE_USD_PER_TOKEN.out) * 1e6 : Infinity;
+    if (known && cost > worst) return reserveMicro; // the reserve model no longer holds: keep it all (security re-check Low)
+    total += cost <= worst ? Math.min(cost * SETTLE_MARGIN, worst) : worst; // an attempt never books past its worst case
+  }
+  return Math.min(reserveMicro, Math.ceil(total));
 }
 
 /** Per-instance store (see the top of the file for what that does and doesn't guarantee). */

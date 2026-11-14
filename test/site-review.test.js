@@ -10,7 +10,7 @@ import { ReviewError, reviewJob, DEFAULT_BUDGET_MS } from "../seller/review.js";
 import { ethAddress } from "../verify/nearai-verify.js";
 import { KeyPair } from "near-api-js";
 import { signReviewAuth } from "../site-api/buyer-auth.js";
-import { memoryStore, reviewReserveMicro, CapStoreError, DAILY_DECLINE_CAP, DAILY_LIVE_CAP, FLOOR_REVIEW_MICRO, SPEND_STOP_MICRO_USD, TEE_DOWN_KEY, TEE_DOWN_S, VISITOR_DAILY_CAP } from "../site-api/caps.js";
+import { memoryStore, reviewReserveMicro, CapStoreError, DAILY_DECLINE_CAP, DAILY_LIVE_CAP, FLOOR_REVIEW_MICRO, PRICE_USD_PER_TOKEN, SETTLE_MARGIN, SPEND_STOP_MICRO_USD, TEE_DOWN_KEY, TEE_DOWN_S, VISITOR_DAILY_CAP } from "../site-api/caps.js";
 import { COPY, GLOBAL_REFUSALS, INTERNAL_REPLAY, handleReview, MAX_BODY_BYTES, REPLAY_REASONS } from "../site-api/review.js";
 import { visitorId } from "../site-api/visitor.js";
 import { depsFromEnv, maxDuration, toWebResponse, fromWebRequest, handleWebRequest } from "../site-api/vercel.js";
@@ -410,6 +410,23 @@ test("T-105: 183 graded jobs (where the worst-case floor used to stop live revie
   const reserve = reviewReserveMicro(loadPack("1"));
   const lastLive = Math.floor((SPEND_STOP_MICRO_USD - reserve) / FLOOR_REVIEW_MICRO);
   assert.ok(lastLive >= 1_150 && lastLive <= 1_166, `floor allows ${lastLive} graded jobs`);
+});
+
+test("T-105: settle books the measured usage (tokens x catalog price x SETTLE_MARGIN), not the worst case", async () => {
+  const usage = { prompt_tokens: 3_100, completion_tokens: 250 };
+  const { deps } = setup({ review: (a) => ({ ...goodReview(a), attempts: 1, attempt_usage: [usage] }) });
+  assert.equal((await handleReview(req(), deps)).body.mode, "live");
+  const measured = (usage.prompt_tokens * PRICE_USD_PER_TOKEN.in + usage.completion_tokens * PRICE_USD_PER_TOKEN.out) * 1e6 * SETTLE_MARGIN;
+  assert.equal(await deps.store.get("spend:micro"), Math.ceil(measured), "measured cost x SETTLE_MARGIN (security M-1)");
+  // A retry whose first attempt has no readable usage books that attempt at its worst case.
+  const reserve = reviewReserveMicro(loadPack("1"));
+  const two = setup({ review: (a) => ({ ...goodReview(a), attempts: 2, attempt_usage: [null, usage] }) });
+  assert.equal((await handleReview(req(), two.deps)).body.mode, "live");
+  assert.equal(await two.deps.store.get("spend:micro"), Math.ceil(reserve / 2 + measured));
+  // Security L-1: an implausibly small prompt count for this pack books the worst case.
+  const tiny = setup({ review: (a) => ({ ...goodReview(a), attempts: 1, attempt_usage: [{ prompt_tokens: 5, completion_tokens: 1 }] }) });
+  assert.equal((await handleReview(req(), tiny.deps)).body.mode, "live");
+  assert.equal(await tiny.deps.store.get("spend:micro"), Math.ceil(reserve / 2));
 });
 
 test("a failed get_record does not block a live review (the floor is a backstop)", async () => {

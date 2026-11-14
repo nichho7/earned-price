@@ -6,6 +6,10 @@ import {
   DAILY_DECLINE_CAP,
   DAILY_LIVE_CAP,
   FLOOR_REVIEW_MICRO,
+  PRICE_USD_PER_TOKEN,
+  SETTLE_MARGIN,
+  actualReviewMicro,
+  minPromptTokens,
   floorMicroFromRecord,
   TEE_DOWN_KEY,
   TEE_DOWN_S,
@@ -43,6 +47,38 @@ test("T-105 floor: $0.0015 per graded job, so the lifetime floor lasts ~1,166 gr
   for (const bad of [null, undefined, {}, { passes: -5, fails: "x" }, { passes: 1.5 }]) assert.equal(floorMicroFromRecord(bad), 0, JSON.stringify(bad));
   // The floor stays far below the worst-case reserve it replaced: the reservation, not the floor, is the meter.
   assert.ok(FLOOR_REVIEW_MICRO < reviewReserveMicro(loadPack("1")) / 4);
+});
+
+test("T-105 settle amount: usage x catalog price x SETTLE_MARGIN per attempt; worst case per attempt where usage is unknown; never above the reserve", () => {
+  assert.equal(SETTLE_MARGIN, 1.5);
+  const reserveMicro = 9_400; // 2 attempts, 4,700 each
+  const u = { prompt_tokens: 3_000, completion_tokens: 300 }; // 900 + 360 = 1,260 micro-USD measured
+  const cost = (3_000 * PRICE_USD_PER_TOKEN.in + 300 * PRICE_USD_PER_TOKEN.out) * 1e6;
+  const one = cost * SETTLE_MARGIN; // ~1,890
+  assert.equal(Math.ceil(one), 1_890);
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [u] }), Math.ceil(one), "security M-1: measured cost x 1.5");
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 2, usage: [u, u] }), Math.ceil(2 * one));
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 2, usage: [null, u] }), Math.ceil(4_700 + one), "a failed attempt may still be billed: worst case");
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 2, usage: [u] }), Math.ceil(one + 4_700), "a missing entry: worst case");
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1 }), 4_700, "no usage at all: the old per-attempt settle");
+  for (const bad of [undefined, 0, -1, 1.5, "1", 3, 9]) {
+    assert.equal(actualReviewMicro({ reserveMicro, attempts: bad, usage: [u, u, u] }), reserveMicro, `security L-2: attempts ${bad} keeps the whole reserve`);
+  }
+  for (const bad of [{ prompt_tokens: 0, completion_tokens: 10 }, { prompt_tokens: -1, completion_tokens: 10 }, { prompt_tokens: 1.5, completion_tokens: 1 }, { prompt_tokens: "3000", completion_tokens: 300 }, { prompt_tokens: 3_000 }]) {
+    assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [bad] }), 4_700, JSON.stringify(bad));
+  }
+  // Security L-1: a prompt count below the pack's plausible minimum is a broken report: worst case.
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [{ prompt_tokens: 1, completion_tokens: 0 }], minPrompt: 828 }), 4_700);
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [u], minPrompt: 828 }), Math.ceil(one));
+  // Security I-3 + re-check Low: an attempt that measures above its own worst case keeps the whole reserve.
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [{ prompt_tokens: 1e9, completion_tokens: 1e9 }] }), reserveMicro);
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 2, usage: [u, { prompt_tokens: 1e9, completion_tokens: 0 }] }), reserveMicro);
+  assert.equal(actualReviewMicro({ reserveMicro: 2_000, attempts: 1, usage: [{ prompt_tokens: 3_000, completion_tokens: 0 }] }), 1_000, "900 measured x 1.5 = 1,350 is capped at the 1,000 per-attempt worst case");
+});
+
+test("minPromptTokens: request bytes / 8, well under a real report (pack 1 reported 1,922-2,025 prompt tokens)", () => {
+  const m = minPromptTokens(loadPack("1"));
+  assert.ok(Number.isInteger(m) && m > 500 && m < 1_500, `min ${m}`);
 });
 
 test("reviewReserveMicro: worst case of 2 attempts at catalog price, a few tenths of a cent", () => {
