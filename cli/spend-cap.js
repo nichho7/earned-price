@@ -1,11 +1,12 @@
-// Spend cap for the throwaway buyer account (S-020 / T-014).
+// Spend cap for the throwaway buyer account (S-020 / T-014; raised 0.2 -> 0.3 NEAR by A-029, T-104,
+// so two live jobs always fit: 2 x (max quote 0.100 + gas reserve 0.043) = 0.286 NEAR).
 // The cap lives in code, not in the key file: editing the file cannot raise it.
 // The faucet may fund the account with more than the cap; every CLI spend must
 // pass assertCanSpend() first and recordSpend() after the tx lands.
 
 export const YOCTO_PER_NEAR = 10n ** 24n;
-export const SPEND_CAP_NEAR = "0.2";
-export const SPEND_CAP_YOCTO = 2n * 10n ** 23n; // 0.2 NEAR
+export const SPEND_CAP_NEAR = "0.3";
+export const SPEND_CAP_YOCTO = 3n * 10n ** 23n; // 0.3 NEAR
 
 export class SpendCapError extends Error {
   constructor(message) {
@@ -28,7 +29,7 @@ export function spentYocto(state) {
   return BigInt(s);
 }
 
-/** Throws SpendCapError unless spending `amount` keeps the total at or under 0.2 NEAR. */
+/** Throws SpendCapError unless spending `amount` keeps the total at or under the cap (SPEND_CAP_NEAR). */
 export function assertCanSpend(state, amount) {
   const amt = toYocto(amount);
   if (amt < 0n) throw new SpendCapError("amount must be positive");

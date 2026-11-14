@@ -152,7 +152,7 @@ public faucet funds it; testnet NEAR has no value). The key stays in `.earned/bu
 0600, gitignored); set `EARNED_HOME` to keep it elsewhere.
 
 1. Do: `node cli/earned.js init`. See: `Created testnet buyer earned-price-buyer-<8 hex>.testnet`,
-   its create tx, `spend cap: 0.2 NEAR`, the three packs with their sha256, then `SEE: step 1 PASS`.
+   its create tx, `spend cap: 0.3 NEAR`, the three packs with their sha256, then `SEE: step 1 PASS`.
 2. Do: `node cli/earned.js pick 2`. See: the sealed key's commit hash, today's quote, the buyer's
    0.020 offer refused (`Refused 0.020 NEAR: below my cost floor 0.025 NEAR.`), the quote accepted,
    `Escrow create: job <N>, <quote> NEAR locked`, its create tx, then `SEE: step 2 PASS`. The price

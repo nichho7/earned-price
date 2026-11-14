@@ -78,7 +78,7 @@ test("drift: faucet URL, RPC list, seller, contract and gas match the CLI; the c
   assert.equal(JOB_GAS_RESERVE_YOCTO, 43n * MILLI);
 });
 
-/** "0.2" -> 2n * 10n ** 23n: exact decimal NEAR -> yocto, no float. */
+/** "0.3" -> 3n * 10n ** 23n: exact decimal NEAR -> yocto, no float. */
 const yoctoOf = (near: string): bigint => {
   assert.match(near, /^\d+(\.\d{1,24})?$/);
   const [whole, frac = ""] = near.split(".");
@@ -90,6 +90,15 @@ test("drift (code review R-1): cli/spend-cap.js's two cap constants agree, so a 
   assert.equal(SPEND_CAP_YOCTO, yoctoOf(SPEND_CAP_NEAR));
   assert.equal(near3(SPEND_CAP_YOCTO), near3(yoctoOf(SPEND_CAP_NEAR)));
   assert.equal(yoctoOf("0.2"), 2n * 10n ** 23n); // the parser itself
+});
+
+test("A-029 (T-104): the cap is 0.3 NEAR, so two live jobs always fit even at the max quote", () => {
+  assert.equal(SPEND_CAP_NEAR, "0.3");
+  assert.equal(SPEND_CAP_YOCTO, 3n * 10n ** 23n);
+  // /live steps 3 and 4 are two jobs from one buyer; each holds quote + gas reserve. The quote maxes at 0.100
+  // (cli/quote.js CAP_MNEAR), so 2 x (0.100 + 0.043) = 0.286 must fit under the cap.
+  const maxJob = 100n * MILLI + JOB_GAS_RESERVE_YOCTO;
+  assert.ok(2n * maxJob <= SPEND_CAP_YOCTO, `2 x ${near3(maxJob)} over the ${near3(SPEND_CAP_YOCTO)} cap`);
 });
 
 test("R-1: no NEAR amount is hardcoded in the /live copy (every cap number comes from cli/spend-cap.js)", () => {

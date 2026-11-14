@@ -2,6 +2,7 @@
 // `earned` CLI. Commands land story by story (S-020 init first).
 import { BRAND, CLI_BIN, CONTRACT_ACCOUNT, NETWORK } from "./names.js";
 import { errorLine } from "./errors.js";
+import { SPEND_CAP_NEAR } from "./spend-cap.js";
 
 const args = process.argv.slice(2);
 const [cmd] = args;
@@ -67,7 +68,7 @@ if (cmd === "names") {
   }
 } else {
   console.log(`${BRAND} (${CLI_BIN})  contract ${CONTRACT_ACCOUNT} on ${NETWORK}`);
-  console.log(`usage: ${CLI_BIN} init     create or reuse a throwaway testnet buyer (0.2 NEAR cap)`);
+  console.log(`usage: ${CLI_BIN} init     create or reuse a throwaway testnet buyer (${SPEND_CAP_NEAR} NEAR cap)`);
   console.log(`       ${CLI_BIN} quote <seller.testnet> [--offer 0.02]   seller's quote from its on-chain record`);
   console.log(`       ${CLI_BIN} pick <1|2|3> [--offer 0.02] [--seller s.testnet --yes]   seal the pack's key, haggle, lock the price in escrow`);
   console.log(`       ${CLI_BIN} hire [--pack <1|2|3>] [--local-seller]   the seller reviews in the TEE, you reveal, the escrow settles; writes the receipt (--pack opens that pack's job first)`);

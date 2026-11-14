@@ -226,7 +226,7 @@ test("pick 2 on a fresh seller: prints quote + formula, 0.02 refused, 0.03 accep
   // The pin check and the quote reads all happen before the create.
   assert.deepEqual(f.calls.views, ["review_pins", "get_record", "quote"]);
 
-  // Spend recorded against the 0.2 NEAR cap.
+  // Spend recorded against the 0.3 NEAR cap.
   assert.equal(loadState(f.dir).spent_yocto, (30n * YOCTO_PER_MNEAR).toString());
 
   // Job file keeps K + salt byte-for-byte for the reveal, 0600.
@@ -288,12 +288,12 @@ test("pin pre-flight: local review request differs from the live pin -> refused,
   assert.equal(PINS.packs.find((p) => p.pack_id === "pack-2").request_sha256, requestSha256(loadPack("2")));
 });
 
-test("spend cap: a create that would pass 0.2 NEAR is refused before sending", async () => {
-  const f = fakes({ dir: buyerHome((180n * YOCTO_PER_MNEAR).toString()) });
+test("spend cap: a create that would pass 0.3 NEAR is refused before sending", async () => {
+  const f = fakes({ dir: buyerHome((280n * YOCTO_PER_MNEAR).toString()) }); // 0.280 + quote 0.030 > 0.3
   await assert.rejects(runPick({ ...f.deps, pack: "2" }), { code: "SPEND_CAP" });
   assert.equal(f.calls.sends.length, 0);
   assert.equal(existsSync(jobFilePath(f.dir)), false);
-  assert.equal(loadState(f.dir).spent_yocto, (180n * YOCTO_PER_MNEAR).toString());
+  assert.equal(loadState(f.dir).spent_yocto, (280n * YOCTO_PER_MNEAR).toString());
 });
 
 test("create refused by the contract: CREATE_FAILED, spend released, job marked failed, a new pick is allowed", async () => {

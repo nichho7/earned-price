@@ -21,7 +21,7 @@ import { closeSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, ope
 import { dirname, join } from "node:path";
 import { CONTRACT_ACCOUNT, NETWORK } from "./names.js";
 import { RPC_RETRIES, RPC_URLS, assertTestnet, assertTestnetRpc, loadState, redact, saveState, stateDir } from "./init.js";
-import { formatNear } from "./spend-cap.js";
+import { SPEND_CAP_NEAR, formatNear } from "./spend-cap.js";
 import { YOCTO_PER_MNEAR, fetchQuote, formatMilli, parseRecord, quoteMilli, viewFunction } from "./quote.js";
 import { EXPLORER, REUSABLE_STATUSES, UNRESOLVED_STATUSES, acquirePickLock, defaultPickDeps, jobFilePath, loadJob, reconcileCreate, runPick, saveJob, sendCreateTx } from "./pick.js";
 import { releaseSpend } from "./spend-cap.js";
@@ -597,7 +597,7 @@ class Hire {
     if (mine.length) throw this.closeTxUnconfirmed(mine);
     this.save({ ...this.job, status: "closed", outcome: "closed_elsewhere" });
     this.say(`Job ${this.jobId} is closed on-chain (get_job returns null), but this CLI did not see the closing tx. Find the outcome at ${EXPLORER}/address/${this.contractId}.`);
-    this.say(`If it was a refund (decline or timeout), the ${formatNear(BigInt(this.job.price_yocto))} NEAR still counts against your 0.2 NEAR cap in this CLI.`);
+    this.say(`If it was a refund (decline or timeout), the ${formatNear(BigInt(this.job.price_yocto))} NEAR still counts against your ${SPEND_CAP_NEAR} NEAR cap in this CLI.`);
     this.say("Job file closed; run `earned pick <1|2|3>` for a new job.");
     return { job: this.job, outcome: null, receiptPath: null, verify: null, pass: false };
   }

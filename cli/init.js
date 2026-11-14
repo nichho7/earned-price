@@ -2,7 +2,7 @@
 //
 // Rules: testnet only (mainnet refused); the private key lives only in a 0600
 // file inside a gitignored `.earned/` folder and is never printed or logged;
-// spend is capped at 0.2 NEAR in code (cli/spend-cap.js); re-running reuses
+// spend is capped at 0.3 NEAR in code (cli/spend-cap.js); re-running reuses
 // the local account. All network access is injected so tests never touch it.
 //
 // Account creation uses the NEAR testnet faucet helper the official near-cli-rs

@@ -11,7 +11,7 @@ const RPCS = ["https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"];
 const KEY = "earned-price.buyer.v1";
 const TX = "J4dHYPypVYJkVeL4pbgGDrDKLnm2n9fPyvpidMmFmCJ6";
 const MILLI = 10n ** 21n;
-const CAP = near3(SPEND_CAP_YOCTO); // "0.200" today
+const CAP = near3(SPEND_CAP_YOCTO); // "0.300" today (A-029)
 const GAS = near3(JOB_GAS_RESERVE_YOCTO, true); // "0.043": create + reveal + timeout (T-035, M-2)
 const SEEDED_PUB = "ed25519:" + "8".repeat(44);
 const enc = (v: unknown) => Array.from(new TextEncoder().encode(JSON.stringify(v)));

@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import { HERO } from "../data/hero.ts";
 import { LIVE_TRIAL, trialCopy } from "../home/live-trial.ts";
+import { SPEND_CAP_NEAR } from "../live/account.js";
 
 const HERO_LINE = "Pay AI agents only when their work passes. Their track record sets the price.";
 const SETTLE = { 1: "9ibVLq9bV3xPkKVjbdKcw4yuhh6FMLPrNAprmcrBuwmB", 2: "3skWKYL7tpPwtzgYcfrTkhgxDv4HaYdAMg9axFLNB5Rw" } as const;
@@ -63,12 +64,13 @@ test("no-JS HTML (what crawlers get) holds the whole final state, copy v2 and re
 test("live trial block: says what /live really does today, links /live and /verify", async ({ page }) => {
   await page.goto("/");
   const t = page.locator(".try");
-  const copy = trialCopy(LIVE_TRIAL, "0.2");
+  const copy = trialCopy(LIVE_TRIAL, SPEND_CAP_NEAR); // "0.3" since A-029 (T-104)
   await expect(t).toHaveAttribute("data-live-trial", LIVE_TRIAL);
   await expect(t.locator('[data-try="live"]')).toHaveAttribute("href", "/live");
   await expect(t.locator('[data-try="live"]')).toHaveText(copy.primary);
   await expect(t.locator('[data-try="verify"]')).toHaveAttribute("href", "/verify");
   for (const p of copy.body) await expect(t).toContainText(p);
+  await expect(t.locator(".try-note")).toHaveText(copy.note); // the cap number comes from cli/spend-cap.js
   // the "Try it live on testnet" link in the final CTA appears only when the live path is real (copy v2 §10)
   await expect(page.locator('.cta a[href="/live"]')).toHaveCount(LIVE_TRIAL === "full" ? 1 : 0);
 });
