@@ -19,7 +19,7 @@ import {
   tamperReceipt,
   verifyReceipt,
 } from "../verify/receipt.js";
-import { sample0Inputs } from "../scripts/receipt-fixture.mjs";
+import { sample0Inputs } from "../scripts/receipt-fixture-lib.mjs";
 import { TRUST } from "../verify/trust-anchors.js";
 import { loadPack } from "../packs/packs.js";
 import { buildReviewRequest } from "../seller/review-prompt.js";

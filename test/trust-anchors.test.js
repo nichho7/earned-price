@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { TRUST } from "../verify/trust-anchors.js";
-import { TRUST_FILE, buildTrustAnchors, trustAnchorsSource } from "../scripts/trust-anchors.mjs";
+import { TRUST_FILE, buildTrustAnchors, trustAnchorsSource } from "../scripts/trust-anchors-lib.mjs";
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 

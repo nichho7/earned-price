@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { MACOS_SDK_HINT, STEPS, childEnv, formulaExplains, parseArgs, run, runSelfCheck, summaryLine } from "../scripts/self-check.mjs";
+import { MACOS_SDK_HINT, STEPS, childEnv, formulaExplains, parseArgs, run, runSelfCheck, summaryLine } from "../scripts/self-check-lib.mjs";
 
 const README = readFileSync(fileURLToPath(new URL("../README.md", import.meta.url)), "utf8");
 const OFFLINE = ["node", "install", "cli", "verify-2", "verify-3", "tamper", "recorded"];
