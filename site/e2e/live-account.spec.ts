@@ -62,6 +62,24 @@ const live = (page: Page) => page.locator("[data-live-state]");
 // role=alert, found by its data hook: Next's own route announcer is also role=alert on every page.
 const notice = (page: Page) => page.locator("[data-notice][role=alert]");
 
+// T-092 (T-034 security L-3): /live sends its own CSP (connect-src = self + faucet + both RPCs, nothing else) and
+// the frame / nosniff / referrer headers; / is untouched and /verify keeps its own stricter connect-src.
+test("security L-3: /live sends CSP (connect-src self + faucet + 2 testnet RPCs), frame-ancestors none, nosniff, Referrer-Policy; / and /verify unchanged", async ({ request }) => {
+  const h = (await request.get("/live")).headers();
+  const csp = h["content-security-policy"] ?? "";
+  const connect = csp.split("; ").find((d) => d.startsWith("connect-src "));
+  expect(connect).toBe(`connect-src 'self' https://helper.nearprotocol.com ${RPCS.join(" ")}`);
+  for (const d of ["default-src 'self'", "script-src 'self' 'unsafe-inline'", "img-src 'self' data:", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'"]) {
+    expect(csp, d).toContain(d);
+  }
+  expect(csp).not.toContain("unsafe-eval");
+  expect(h["x-content-type-options"]).toBe("nosniff");
+  expect(h["x-frame-options"]).toBe("DENY");
+  expect(h["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+  expect((await request.get("/")).headers()["content-security-policy"], "/ unchanged").toBeUndefined();
+  expect((await request.get("/verify")).headers()["content-security-policy"]).toContain("connect-src 'self';");
+});
+
 test("AC1: start makes a testnet account in this browser; only the public key leaves; cap from cli/spend-cap.js; step 1 PASS", async ({ page, baseURL }) => {
   const chain = await mockChain(page);
   const requests: Request[] = [];

@@ -143,6 +143,36 @@ test("your own receipt: pack-3 passes; not JSON, not a receipt and over 8 MB are
   await expect(state(page)).toHaveAttribute("data-vf-state", "idle");
 });
 
+// T-090 (code review O-4): a slow read of file A that lands after file B was picked never replaces B (nor the
+// recorded receipt after "Use the recorded receipt"). slow.json's text() is held back 1.5 s in the page.
+test("O-4: file A (slow) then file B: when A's read lands last, B stays the source; same after back to recorded", async ({ page }) => {
+  await page.addInitScript(() => {
+    const text = Blob.prototype.text;
+    File.prototype.text = function (this: File) {
+      const t = text.call(this);
+      return this.name === "slow.json" ? t.then((v) => new Promise<string>((ok) => setTimeout(() => ok(v), 1500))) : t;
+    };
+  });
+  await open(page);
+  const input = page.locator("[data-act=file]");
+  const slow = { name: "slow.json", mimeType: "application/json", buffer: Buffer.from("not json") };
+  await input.setInputFiles(slow);
+  await input.setInputFiles({ name: "pack-3.json", mimeType: "application/json", buffer: PACK3 });
+  await expect(page.locator("[data-file-name]")).toHaveText("pack-3.json");
+  await page.waitForTimeout(2000); // A's read has landed by now
+  await expect(page.locator("[data-file-name]")).toHaveText("pack-3.json");
+  await expect(page.locator("[data-error]")).toHaveCount(0);
+  await page.click("[data-act=verify]");
+  await expect(state(page)).toHaveAttribute("data-vf-state", "pass");
+  await expect(page.locator("[data-line]")).toContainText("official pack-3 request");
+
+  await input.setInputFiles(slow);
+  await page.click("[data-act=recorded]");
+  await page.waitForTimeout(2000);
+  await expect(page.locator("[data-file-name]")).toHaveText("recorded/pack-2.json");
+  await expect(page.locator("[data-error]")).toHaveCount(0);
+});
+
 // Security review M-1: a refused file becomes the current source, so Verify re-shows the refusal. Before the fix,
 // Verify silently re-checked the previous receipt and showed "Authentic." one click after a hostile file.
 for (const [what, file, reason] of [

@@ -1,7 +1,9 @@
 // T-029: receipt writer (version 1) + offline verify (4 checks in order) + tamper.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
@@ -13,13 +15,16 @@ import {
   NOT_PROVEN_OFFLINE,
   RECEIPT_VERSION,
   ReceiptError,
+  CLAIM_CUT,
   buildReceipt,
+  claim,
   printable,
   receiptJson,
   tamperReceipt,
   verifyReceipt,
 } from "../verify/receipt.js";
 import { sample0Inputs } from "../scripts/receipt-fixture.mjs";
+import { runVerify } from "../cli/verify-cmd.js";
 import { TRUST } from "../verify/trust-anchors.js";
 import { loadPack } from "../packs/packs.js";
 import { buildReviewRequest } from "../seller/review-prompt.js";
@@ -561,4 +566,60 @@ test("T-039 security L-1: a check 1 PASS line never echoes the receipt's pack_id
   assert.match(v.checks[0].detail, /\(not an official pack\)/);
   // an official pack still names itself (a trust-map key, so a known string)
   assert.match(verifyReceipt(readJson("recorded/pack-2.json")).checks[0].detail, /\(pack-2, the official answer key\)/);
+});
+
+// --- T-090 (T-039 security L-1 layer 2): receipt claims are cut at the source --------------------
+
+test("T-090: claim() is printable, cut to 64 code points + an ellipsis, and leaves short values alone", () => {
+  assert.equal(CLAIM_CUT, 64);
+  assert.equal(claim("deepseek-ai/DeepSeek-V4.1-Flash-1017"), "deepseek-ai/DeepSeek-V4.1-Flash-1017");
+  assert.equal(claim("x".repeat(64)), "x".repeat(64));
+  assert.equal(claim("x".repeat(65)), "x".repeat(64) + "…");
+  assert.equal(claim("😀".repeat(70)), "😀".repeat(64) + "…", "never splits a surrogate pair");
+  assert.equal(claim("a\nPASS"), "a\\u000aPASS");
+  assert.equal(claim(1763000000), "1763000000");
+  assert.equal(claim(undefined), "undefined");
+});
+
+test("T-090: every receipt claim a check detail names is cut (1 MB model, signer, created, grade error, found, pack_id, attestation signer)", () => {
+  const MB = "m".repeat(1 << 20);
+  const cases = {
+    "tee.model": (r) => { r.tee.model = MB; },
+    "tee.signing_address": (r) => { r.tee.signing_address = MB; },
+    "tee.created": (r) => { r.tee.created = MB; },
+    "grade.error": (r) => { r.grade = { ...r.grade, error: MB }; },
+    "grade.found": (r) => { r.grade = { ...r.grade, found: MB }; },
+    "reveal.key.pack_id": (r) => { r.reveal.key.pack_id = MB; r.commit_hash = commit(r.reveal.key, r.reveal.salt); },
+    "attestation signer vs tee signer": (r) => {
+      const other = ethAddress(secp256k1.getPublicKey(secp256k1.utils.randomSecretKey()));
+      r.tee.attestation.model_attestations = [fakeEntry(other, nonce, { model_name: MODEL })];
+      r.tee.signing_address = MB;
+    },
+  };
+  for (const [name, edit] of Object.entries(cases)) {
+    const r = pack2Receipt();
+    edit(r);
+    const v = verifyT(r);
+    assert.equal(v.ok, false, name);
+    assert.ok(v.checks.some((c) => !c.ok && c.detail.includes("…")), `${name}: a FAIL names the cut claim`);
+    for (const c of v.checks) assert.ok(c.detail.length <= 300, `${name}: check ${c.n} detail is ${c.detail.length} chars`);
+  }
+});
+
+test("T-090 AC: earned verify on a receipt with a 1 MB tee.model prints no line over 300 chars", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "t090-"));
+  try {
+    const r = pack2Receipt();
+    r.tee.model = "M".repeat(1 << 20);
+    r.pack_id = "p".repeat(1 << 20); // the header line names pack_id too
+    const path = join(dir, "r.json");
+    writeFileSync(path, receiptJson(r));
+    const lines = [];
+    const v = await runVerify({ path, tamper: false, json: false, out: (l) => lines.push(l) });
+    assert.equal(v.ok, false);
+    assert.match(lines.join("\n"), /FAIL  2 /);
+    for (const l of lines) assert.ok(l.length - path.length <= 300, `a ${l.length}-char line: ${l.slice(0, 80)}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

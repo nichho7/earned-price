@@ -77,6 +77,18 @@ const NOT_OFFICIAL = "NOT AN OFFICIAL PACK (fixture): checks shown for demonstra
 export const printable = (s) =>
   String(s).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
+/**
+ * A receipt claim for a check detail (T-090, T-039 L-1 layer 2): printable, cut to CLAIM_CUT code points plus "…".
+ * Every receipt-controlled value a FAIL detail names goes through it, so a 7 MB tee.model costs one short line in
+ * `earned verify` too, not only on the page (verify-model.ts DETAIL_CUT). Cuts before escaping: O(CLAIM_CUT).
+ */
+export const CLAIM_CUT = 64;
+export const claim = (v) => {
+  const s = String(v);
+  const head = Array.from(s.slice(0, CLAIM_CUT * 2)).slice(0, CLAIM_CUT).join("");
+  return printable(head) + (head.length < s.length ? "…" : "");
+};
+
 /** code: BAD_INPUT (writer), NOT_A_RECEIPT (verify/tamper input is not a version 1 receipt). */
 export class ReceiptError extends Error {
   constructor(code, message) {
@@ -89,7 +101,7 @@ export class ReceiptError extends Error {
 const HEX64 = /^[0-9a-f]{64}$/;
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const isStr = (v) => typeof v === "string" && v !== "";
-const short = (h) => (typeof h === "string" ? `${h.slice(0, 12)}…` : String(h));
+const short = (h) => (typeof h === "string" ? `${printable(h.slice(0, 12))}…` : claim(h));
 // An own property of a trust map, never an inherited one (pack_id "constructor" is not a pack).
 const own = (map, k) => (typeof k === "string" && Object.hasOwn(map, k) ? map[k] : undefined);
 const isWellFormed = (s) => (typeof s.isWellFormed === "function" ? s.isWellFormed() : !/[\uD800-\uDFFF]/u.test(s));
@@ -209,14 +221,14 @@ function run(def, fn) {
   try {
     return { ...def, ...fn() };
   } catch (e) {
-    return { ...def, ok: false, detail: e instanceof Error ? e.message : String(e) };
+    return { ...def, ok: false, detail: claim(e instanceof Error ? e.message : e) };
   }
 }
 
 const pass = (detail, more = {}) => ({ ok: true, detail, ...more });
 const fail = (detail, more = {}) => ({ ok: false, detail, ...more });
 const gradeLine = (g) =>
-  isObj(g) ? (g.error ? `fixed fail (${g.error})` : `${g.found}/${g.total} found, ${g.passed ? "passed" : "failed"}`) : "no grade";
+  isObj(g) ? (g.error ? `fixed fail (${claim(g.error)})` : `${claim(g.found)}/${claim(g.total)} found, ${g.passed ? "passed" : "failed"}`) : "no grade";
 
 function checkCommit(r, trust) {
   const key = r.reveal?.key;
@@ -226,7 +238,7 @@ function checkCommit(r, trust) {
   if (!verifyReveal(r.commit_hash, key, r.reveal.salt)) {
     return fail(`sha256(len ‖ key ‖ salt) does not match the committed hash ${short(r.commit_hash)}`);
   }
-  if (key.pack_id !== r.pack_id) return fail(`the key is for ${key.pack_id}, the job is for ${r.pack_id}`);
+  if (key.pack_id !== r.pack_id) return fail(`the key is for ${claim(key.pack_id)}, the job is for ${claim(r.pack_id)}`);
   const keyPin = own(trust.key_sha256, r.pack_id);
   if (keyPin !== undefined && sha256Hex(canonicalJson(key)) !== keyPin) {
     return fail(`the revealed key is not the official ${r.pack_id} answer key`, { key_pinned: false });
@@ -250,11 +262,11 @@ function checkSignature(r, trust) {
   for (const k of ["model", "signed_text", "signature", "signing_address"]) {
     if (!isStr(t[k])) return fail(`the receipt has no tee.${k}`);
   }
-  if (t.model !== trust.review_model) return fail(`the review names model ${t.model}; the escrow accepts only ${trust.review_model}`);
+  if (t.model !== trust.review_model) return fail(`the review names model ${claim(t.model)}; the escrow accepts only ${trust.review_model}`);
   // The signer must come from the trust anchors, never from the receipt (C-1).
   const allowed = trust.signers.find((s) => s === t.signing_address.toLowerCase());
   if (!allowed) {
-    return fail(`signer ${t.signing_address} is not an allowlisted NEAR AI TEE signer (the escrow's deploy-time allowlist, contract/tee-signers.json)`, {
+    return fail(`signer ${claim(t.signing_address)} is not an allowlisted NEAR AI TEE signer (the escrow's deploy-time allowlist, contract/tee-signers.json)`, {
       signer_allowlisted: false,
     });
   }
@@ -273,7 +285,7 @@ function checkSignature(r, trust) {
     }
     return fail(`the signed text is not "<model>:<sha256 request>:<sha256 response>" for the stored request and model`);
   }
-  if (!v.signer_ok || !v.ok) return fail(`the signature was not made by ${t.signing_address} (recovers to ${v.recovered_signer})`);
+  if (!v.signer_ok || !v.ok) return fail(`the signature was not made by ${claim(t.signing_address)} (recovers to ${claim(v.recovered_signer)})`);
   if (t.request_sha256 !== v.request_sha256 || t.response_sha256 !== v.response_sha256) {
     return fail("tee.request_sha256 / tee.response_sha256 do not match the stored review text");
   }
@@ -288,7 +300,7 @@ function checkSignature(r, trust) {
   }
   if (shown !== signed) return fail("the receipt's findings differ from the findings in the signed review");
   const created = signedCreated(t.response_body);
-  if ((t.created ?? null) !== created) return fail(`tee.created (${t.created}) is not the created time in the signed review (${created})`);
+  if ((t.created ?? null) !== created) return fail(`tee.created (${claim(t.created)}) is not the created time in the signed review (${created})`);
   const pin = own(trust.request_pins, r.pack_id);
   if (pin !== undefined && v.request_sha256 !== pin) {
     return fail(`the review request is not the official ${r.pack_id} request (prompt v${trust.prompt_version}): the escrow refuses any other prompt`, {
@@ -324,9 +336,9 @@ function checkAttestation(r, trust) {
   }
   if (!bindingOk(checkAttestationBinding(modelAtt, t.nonce))) return fail(`the model quote does not bind nonce ${short(t.nonce)} and its signer`, scope);
   if (String(modelAtt.signing_address).toLowerCase() !== t.signing_address.toLowerCase()) {
-    return fail(`the model quote binds ${modelAtt.signing_address}, not the review signer ${t.signing_address}`, scope);
+    return fail(`the model quote binds ${claim(modelAtt.signing_address)}, not the review signer ${claim(t.signing_address)}`, scope);
   }
-  return pass(`signer ${t.signing_address} and nonce ${short(t.nonce)} are in both TDX quotes (binding only)`, scope);
+  return pass(`signer ${claim(t.signing_address)} and nonce ${short(t.nonce)} are in both TDX quotes (binding only)`, scope);
 }
 
 function checkRegrade(r) {
@@ -335,7 +347,7 @@ function checkRegrade(r) {
   try {
     validateKey(key);
   } catch (e) {
-    return fail(`the revealed key is not a valid answer key: ${e.message}`);
+    return fail(`the revealed key is not a valid answer key: ${claim(e.message)}`);
   }
   const regrade = grade(key, findingsFromResponse(r.tee.response_body));
   let same = false;

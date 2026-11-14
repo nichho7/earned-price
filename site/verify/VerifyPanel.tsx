@@ -59,6 +59,7 @@ export function VerifyPanel() {
   const shk = useRef<HTMLDivElement>(null);
   const code = useRef<HTMLElement>(null);
   const runs = useRef(0);
+  const picks = useRef(0); // T-090 (code review O-4): only the latest pick may set the source
   const anims = useRef<Animation[]>([]);
 
   const rec = recordedReceipt();
@@ -109,13 +110,16 @@ export function VerifyPanel() {
     const f = e.target.files?.[0];
     e.target.value = ""; // picking the same file again still fires
     if (!f) return;
+    const pick = ++picks.current;
     const l = await loadFile(f);
+    if (pick !== picks.current) return; // a later pick (or "back to recorded") won: drop this slow read
     setRes(null);
     setErr(l.ok ? null : l.error);
     setSrc({ kind: "file", loaded: l, name: fileName(f.name) });
   }
 
   function backToRecorded() {
+    picks.current++; // a file still being read must not replace the recorded receipt
     setSrc({ kind: "recorded" });
     setRes(null);
     setErr(null);
