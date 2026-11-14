@@ -223,6 +223,19 @@ test("malformed first, well-formed on retry: the well-formed response is used", 
   assert.equal(r.response_body, PACK1_RUN.response_body);
 });
 
+test("T-105: attempt_usage reports each attempt's usage tokens (null when unreadable) for the site's spend counter", async () => {
+  const created = createdOf(PACK1_RUN.response_body);
+  const tee = mockTee({ chat: [{ body: chatBody("```json\n[]\n```", created) }, { body: PACK1_RUN.response_body }] });
+  const { opts } = baseOpts(tee, created);
+  const r = await reviewJob({ job: acceptedJob(created), pack: pack1(), ...opts });
+  assert.equal(r.attempts, 2);
+  const u = JSON.parse(PACK1_RUN.response_body).usage;
+  assert.deepEqual(r.attempt_usage, [null, { prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens }]);
+  const one = mockTee({ chat: [{ body: PACK1_RUN.response_body }] });
+  const r1 = await reviewJob({ job: acceptedJob(created), pack: pack1(), ...baseOpts(one, created).opts });
+  assert.equal(r1.attempt_usage.length, r1.attempts);
+});
+
 test("more than 10 findings: too_many_findings, never truncated", async () => {
   const created = createdOf(PACK1_RUN.response_body);
   const eleven = Array.from({ length: 11 }, (_, i) => ({ file: "invoice.py", line: i + 1, category: "off-by-one" }));

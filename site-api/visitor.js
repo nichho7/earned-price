@@ -8,8 +8,9 @@
 // x-vercel-forwarded-for is always stripped could not be confirmed offline). Off Vercel (local dev) these headers are client-controlled; don't rely on the cap there.
 //
 // What it does NOT stop (say so, don't overclaim): a new IP resets it (VPN, mobile network, Tor,
-// another /64); people behind one NAT (an office, a venue) share 3. Clearing cookies or making a
-// new testnet buyer account does not reset it, and the handler also counts 3 per buyer account.
+// another /64); people behind one NAT (an office, a venue) share 10 (caps.js VISITOR_DAILY_CAP).
+// Clearing cookies or making a new testnet buyer account does not reset it, and the handler also
+// counts 10 per buyer account.
 import { createHmac } from "node:crypto";
 import { isIP } from "node:net";
 

@@ -38,12 +38,13 @@
 //                              redeploy turns them off. Unset (or anything but "1") = every request replays
 //                              not_configured, with no accept, no decline and no NEAR AI call. Applies to the
 //                              durable store only; the local memory-store opt-in below is unchanged.
-//   NEAR_AI_API_KEY            secret. A DEDICATED NEAR AI key for this function only, loaded with at
-//                              most $2 of credit (Nicho, A-003; security H-1). It is the real hard
-//                              spend stop: NEAR AI answers 402 (= replay) once it is empty, and
-//                              the pre-accept probe (T-084, check_api_key) then declines the open
-//                              job instead of accepting it. Never the main $5 key. Without it
-//                              every request replays (not_configured).
+//   NEAR_AI_API_KEY            secret. The SHARED NEAR Builders key (CFO t076 option a; T-105): its
+//                              $5-10 also funds our CLI and the sister project, so it is NOT a hard
+//                              stop at $1.75. The durable spend counter in site-api/caps.js (Upstash,
+//                              worst-case reservation settled to measured usage) is the spend guard.
+//                              NEAR AI answering 402 once the balance is empty is the last resort
+//                              (the pre-accept probe, T-084 check_api_key, then declines the open
+//                              job). Without it every request replays (not_configured).
 //   EARNED_SELLER_PRIVATE_KEY  secret, ed25519:... A FUNCTION-CALL access key of
 //                              seller.earned-price.testnet limited to the escrow's accept, decline
 //                              and submit_review, with a gas allowance (security M-2). Never the

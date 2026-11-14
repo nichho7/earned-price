@@ -13,10 +13,10 @@
 //
 // Allowance (estimate): each job prepays 30 Tgas (accept) + 300 Tgas (submit_review). At testnet's
 // minimum gas price (1e-4 NEAR per Tgas) that is ~0.033 NEAR of allowance per job, and the
-// allowance is charged on prepaid gas. A decline prepays 30 Tgas (~0.003 NEAR), at most 35 a day
-// (site-api/caps.js DAILY_DECLINE_CAP). 10 NEAR (A-028) covers ~300 jobs, or ~7.9 days at the
-// 35-a-day cap plus a full decline budget. When it runs out, txs are refused (the site replays); add
-// a fresh key with this script.
+// allowance is charged on prepaid gas. A decline prepays 30 Tgas (~0.003 NEAR), at most 100 a day
+// (site-api/caps.js DAILY_DECLINE_CAP). T-105: at the 100-a-day live cap plus a full decline budget
+// that is ~3.6 NEAR a day at most, ~18 NEAR for Nov 14-18 (5 UTC days), so the default is 20 NEAR
+// (~600 jobs). When it runs out, txs are refused (the site replays); add a fresh key with this script.
 // T-088: this is the library (tests and other scripts import it); `node scripts/seller-fc-key.mjs` is the CLI and always
 // runs main() (same lib/CLI split as fe4e769: no "am I the main module?" check, which skipped main() via a symlink).
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -25,7 +25,7 @@ import { CONTRACT_ACCOUNT } from "../cli/names.js";
 import { DEMO_SELLER } from "../cli/pick.js";
 import { SELLER_KEY_METHODS } from "../site-api/chain.js";
 
-export const DEFAULT_ALLOWANCE = "10 NEAR"; // A-028
+export const DEFAULT_ALLOWANCE = "20 NEAR"; // T-105 (was 10 NEAR, A-028)
 
 /** The near-cli-rs command (argv) that adds `publicKey` as a scoped function-call key. */
 export function fcKeyCommand(publicKey, { seller = DEMO_SELLER, contract = CONTRACT_ACCOUNT, allowance = DEFAULT_ALLOWANCE } = {}) {

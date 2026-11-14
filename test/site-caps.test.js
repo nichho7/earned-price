@@ -5,6 +5,12 @@ import assert from "node:assert/strict";
 import {
   DAILY_DECLINE_CAP,
   DAILY_LIVE_CAP,
+  FLOOR_REVIEW_MICRO,
+  PRICE_USD_PER_TOKEN,
+  SETTLE_MARGIN,
+  actualReviewMicro,
+  minPromptTokens,
+  floorMicroFromRecord,
   TEE_DOWN_KEY,
   TEE_DOWN_S,
   markTeeDown,
@@ -27,10 +33,52 @@ const day = "2026-11-12";
 const base = { day, reserveMicro: 10_000, floorMicro: 0 };
 const take = (store, over = {}) => reserveLive({ store, jobId: "1", visitor: "v1", buyer: "b1.testnet", ...base, ...over });
 
-test("caps match the approved numbers: 35/day (A-028), 3 per visitor, stop at $1.75", () => {
-  assert.equal(DAILY_LIVE_CAP, 35);
-  assert.equal(VISITOR_DAILY_CAP, 3);
+test("caps match the approved numbers: 100/day and 10 per visitor (T-105), stop at $1.75", () => {
+  assert.equal(DAILY_LIVE_CAP, 100);
+  assert.equal(VISITOR_DAILY_CAP, 10);
   assert.equal(SPEND_STOP_MICRO_USD, 1_750_000);
+});
+
+test("T-105 floor: $0.0015 per graded job, so the lifetime floor lasts ~1,166 graded jobs", () => {
+  assert.equal(FLOOR_REVIEW_MICRO, 1_500);
+  assert.equal(Math.floor(SPEND_STOP_MICRO_USD / FLOOR_REVIEW_MICRO), 1_166);
+  assert.equal(floorMicroFromRecord({ passes: 2, fails: 1, jobs: 3 }), 4_500);
+  assert.equal(floorMicroFromRecord({ passes: "7", fails: 0 }), 10_500, "u64 counts may arrive as strings");
+  for (const bad of [null, undefined, {}, { passes: -5, fails: "x" }, { passes: 1.5 }]) assert.equal(floorMicroFromRecord(bad), 0, JSON.stringify(bad));
+  // The floor stays far below the worst-case reserve it replaced: the reservation, not the floor, is the meter.
+  assert.ok(FLOOR_REVIEW_MICRO < reviewReserveMicro(loadPack("1")) / 4);
+});
+
+test("T-105 settle amount: usage x catalog price x SETTLE_MARGIN per attempt; worst case per attempt where usage is unknown; never above the reserve", () => {
+  assert.equal(SETTLE_MARGIN, 1.5);
+  const reserveMicro = 9_400; // 2 attempts, 4,700 each
+  const u = { prompt_tokens: 3_000, completion_tokens: 300 }; // 900 + 360 = 1,260 micro-USD measured
+  const cost = (3_000 * PRICE_USD_PER_TOKEN.in + 300 * PRICE_USD_PER_TOKEN.out) * 1e6;
+  const one = cost * SETTLE_MARGIN; // ~1,890
+  assert.equal(Math.ceil(one), 1_890);
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [u] }), Math.ceil(one), "security M-1: measured cost x 1.5");
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 2, usage: [u, u] }), Math.ceil(2 * one));
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 2, usage: [null, u] }), Math.ceil(4_700 + one), "a failed attempt may still be billed: worst case");
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 2, usage: [u] }), Math.ceil(one + 4_700), "a missing entry: worst case");
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1 }), 4_700, "no usage at all: the old per-attempt settle");
+  for (const bad of [undefined, 0, -1, 1.5, "1", 3, 9]) {
+    assert.equal(actualReviewMicro({ reserveMicro, attempts: bad, usage: [u, u, u] }), reserveMicro, `security L-2: attempts ${bad} keeps the whole reserve`);
+  }
+  for (const bad of [{ prompt_tokens: 0, completion_tokens: 10 }, { prompt_tokens: -1, completion_tokens: 10 }, { prompt_tokens: 1.5, completion_tokens: 1 }, { prompt_tokens: "3000", completion_tokens: 300 }, { prompt_tokens: 3_000 }]) {
+    assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [bad] }), 4_700, JSON.stringify(bad));
+  }
+  // Security L-1: a prompt count below the pack's plausible minimum is a broken report: worst case.
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [{ prompt_tokens: 1, completion_tokens: 0 }], minPrompt: 828 }), 4_700);
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [u], minPrompt: 828 }), Math.ceil(one));
+  // Security I-3 + re-check Low: an attempt that measures above its own worst case keeps the whole reserve.
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 1, usage: [{ prompt_tokens: 1e9, completion_tokens: 1e9 }] }), reserveMicro);
+  assert.equal(actualReviewMicro({ reserveMicro, attempts: 2, usage: [u, { prompt_tokens: 1e9, completion_tokens: 0 }] }), reserveMicro);
+  assert.equal(actualReviewMicro({ reserveMicro: 2_000, attempts: 1, usage: [{ prompt_tokens: 3_000, completion_tokens: 0 }] }), 1_000, "900 measured x 1.5 = 1,350 is capped at the 1,000 per-attempt worst case");
+});
+
+test("minPromptTokens: request bytes / 8, well under a real report (pack 1 reported 1,922-2,025 prompt tokens)", () => {
+  const m = minPromptTokens(loadPack("1"));
+  assert.ok(Number.isInteger(m) && m > 500 && m < 1_500, `min ${m}`);
 });
 
 test("reviewReserveMicro: worst case of 2 attempts at catalog price, a few tenths of a cent", () => {
@@ -44,33 +92,33 @@ test("utcDay is the UTC calendar day", () => {
   assert.equal(utcDay(Date.UTC(2026, 10, 13, 0, 0, 0)), "2026-11-13");
 });
 
-test("a visitor gets 3 live reviews a day, then cap_visitor; counters roll back on refusal", async () => {
+test("a visitor gets 10 live reviews a day, then cap_visitor; counters roll back on refusal", async () => {
   const store = memoryStore();
-  for (let i = 1; i <= 3; i++) assert.equal((await take(store, { jobId: String(i) })).ok, true);
-  const r = await take(store, { jobId: "4" });
+  for (let i = 1; i <= 10; i++) assert.equal((await take(store, { jobId: String(i) })).ok, true);
+  const r = await take(store, { jobId: "11" });
   assert.deepEqual([r.ok, r.reason], [false, "cap_visitor"]);
-  assert.equal(await store.get(`day:${day}`), 3, "refused request leaves no daily count");
-  assert.equal(await store.get("spend:micro"), 30_000, "refused request reserves no spend");
-  assert.equal(await store.setNx("job:4", 60), true, "refused request releases its job lock");
+  assert.equal(await store.get(`day:${day}`), 10, "refused request leaves no daily count");
+  assert.equal(await store.get("spend:micro"), 100_000, "refused request reserves no spend");
+  assert.equal(await store.setNx("job:11", 60), true, "refused request releases its job lock");
   // Next UTC day: fresh allowance.
-  assert.equal((await take(store, { jobId: "5", day: "2026-11-13" })).ok, true);
+  assert.equal((await take(store, { jobId: "12", day: "2026-11-13" })).ok, true);
 });
 
 test("a new buyer account from the same visitor does not reset the cap (cap_visitor), nor a new IP with the same buyer (cap_buyer)", async () => {
   const store = memoryStore();
-  for (let i = 1; i <= 3; i++) await take(store, { jobId: String(i), buyer: `b${i}.testnet` });
-  assert.equal((await take(store, { jobId: "9", buyer: "fresh.testnet" })).reason, "cap_visitor");
+  for (let i = 1; i <= 10; i++) await take(store, { jobId: String(i), buyer: `b${i}.testnet` });
+  assert.equal((await take(store, { jobId: "99", buyer: "fresh.testnet" })).reason, "cap_visitor");
   const store2 = memoryStore();
-  for (let i = 1; i <= 3; i++) await take(store2, { jobId: String(i), visitor: `ip${i}` });
-  assert.equal((await take(store2, { jobId: "9", visitor: "ip-new" })).reason, "cap_buyer");
+  for (let i = 1; i <= 10; i++) await take(store2, { jobId: String(i), visitor: `ip${i}` });
+  assert.equal((await take(store2, { jobId: "99", visitor: "ip-new" })).reason, "cap_buyer");
 });
 
-test("site-wide 35 live reviews a day, then cap_daily", async () => {
+test("site-wide 100 live reviews a day, then cap_daily", async () => {
   const store = memoryStore();
-  for (let i = 0; i < 35; i++) assert.equal((await take(store, { jobId: `j${i}`, visitor: `v${i}`, buyer: `b${i}` })).ok, true);
+  for (let i = 0; i < 100; i++) assert.equal((await take(store, { jobId: `j${i}`, visitor: `v${i}`, buyer: `b${i}` })).ok, true);
   const r = await take(store, { jobId: "x", visitor: "vx", buyer: "bx" });
   assert.deepEqual([r.ok, r.reason], [false, "cap_daily"]);
-  assert.equal(await store.get(`day:${day}`), 35, "the refused 36th leaves no count");
+  assert.equal(await store.get(`day:${day}`), 100, "the refused 101st leaves no count");
 });
 
 test("spend stop: refused once reserved spend would pass $1.75 (lifetime, not daily)", async () => {
@@ -80,6 +128,36 @@ test("spend stop: refused once reserved spend would pass $1.75 (lifetime, not da
   const r = await take(store, { jobId: "b", visitor: "v2", buyer: "b2", day: "2026-11-20" });
   assert.deepEqual([r.ok, r.reason], [false, "cap_spend"]);
   assert.equal(await store.get("spend:micro"), SPEND_STOP_MICRO_USD);
+});
+
+test("spend stop under concurrency: parallel reservations near $1.75 never push the counter past it", async () => {
+  const store = memoryStore();
+  await store.incrBy("spend:micro", SPEND_STOP_MICRO_USD - 3 * 10_000);
+  const rs = await Promise.all(Array.from({ length: 12 }, (_, i) => take(store, { jobId: `c${i}`, visitor: `v${i}`, buyer: `b${i}` })));
+  assert.equal(rs.filter((r) => r.ok).length, 3);
+  assert.ok(rs.filter((r) => !r.ok).every((r) => r.reason === "cap_spend"));
+  assert.equal(await store.get("spend:micro"), SPEND_STOP_MICRO_USD);
+});
+
+test("security M-2: a store error halfway through a refusal's rollback never decrements a counter twice", async () => {
+  const inner = memoryStore();
+  let failOnce = true;
+  const store = {
+    ...inner,
+    async incrBy(key, n, ttlS) {
+      if (failOnce && n < 0 && key.startsWith("buyer:")) {
+        failOnce = false;
+        throw new CapStoreError("blip");
+      }
+      return inner.incrBy(key, n, ttlS);
+    },
+  };
+  const start = SPEND_STOP_MICRO_USD - 5_000;
+  await inner.incrBy("spend:micro", start);
+  await assert.rejects(take(store, { reserveMicro: 10_000 }), (e) => e instanceof CapStoreError);
+  assert.equal(await inner.get("spend:micro"), start, "spend back exactly where it started (was 10,000 below before the fix)");
+  for (const k of [`day:${day}`, `visitor:${day}:v1`, `buyer:${day}:b1.testnet`]) assert.equal(await inner.get(k), 0, k);
+  assert.equal(await inner.setNx("job:1", 60), true, "job lock released");
 });
 
 test("spend stop also holds against the durable on-chain floor when the store forgot (cold start)", async () => {
@@ -160,8 +238,8 @@ const UP = { url: "https://eu1-fine-cat-123.upstash.io", token: "upstash-token-D
 test("upstash store: the same cap logic over /pipeline with a Bearer token", async () => {
   const up = fakeUpstash();
   const store = upstashStore({ ...UP, fetch: up.fetch });
-  for (let i = 1; i <= 3; i++) assert.equal((await take(store, { jobId: String(i) })).ok, true);
-  assert.equal((await take(store, { jobId: "4" })).reason, "cap_visitor");
+  for (let i = 1; i <= 10; i++) assert.equal((await take(store, { jobId: String(i) })).ok, true);
+  assert.equal((await take(store, { jobId: "11" })).reason, "cap_visitor");
   assert.equal(up.calls[0].url, `${UP.url}/pipeline`);
   assert.equal(up.calls[0].init.method, "POST");
   assert.equal(up.calls[0].init.headers.Authorization, `Bearer ${UP.token}`);
@@ -226,8 +304,8 @@ test("visitorId: keyed hash, never the raw IP; same /64 = same visitor; no IP = 
 });
 
 // ---- T-084 fix round 1 (security M-1, L-2) ----
-test("decline budget: 35 a day site-wide (CFO t076 sizing), then false; a new UTC day starts again", async () => {
-  assert.equal(DAILY_DECLINE_CAP, 35);
+test("decline budget: 100 a day site-wide (CFO t076 math at T-105's 100/day), then false; a new UTC day starts again", async () => {
+  assert.equal(DAILY_DECLINE_CAP, 100);
   const store = memoryStore();
   for (let i = 0; i < DAILY_DECLINE_CAP; i++) assert.equal(await takeDecline({ store, day }), true);
   assert.equal(await takeDecline({ store, day }), false);

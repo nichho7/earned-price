@@ -36,9 +36,9 @@
 // Secrets: the NEAR AI key (deps.apiKey) goes only into reviewJob; the seller key lives inside
 // deps.chain. Neither, nor the client IP, appears in a response or a log line. Error messages from
 // lower layers are never echoed: responses carry fixed codes and copy only.
-import { DEFAULT_BUDGET_MS, DEFAULT_MAX_ATTEMPTS, ReviewError } from "../seller/review.js";
+import { DEFAULT_BUDGET_MS, ReviewError } from "../seller/review.js";
 import { authShapeOk, checkReviewAuth } from "./buyer-auth.js";
-import { CapStoreError, markTeeDown, reserveLive, reviewReserveMicro, takeDecline, teeDown, utcDay } from "./caps.js";
+import { CapStoreError, actualReviewMicro, floorMicroFromRecord, markTeeDown, minPromptTokens, reserveLive, reviewReserveMicro, takeDecline, teeDown, utcDay } from "./caps.js";
 import { PROBE_TIMEOUT_MS } from "./tee-probe.js";
 import { header, visitorId } from "./visitor.js";
 
@@ -257,20 +257,21 @@ async function handle(req, deps) {
     declineStatus = d.status;
     return d.status === "landed" ? replay(reason, "declined", { decline_tx: d.txHash }, logExtra) : replay(reason, "open", { decline_tx: null }, logExtra);
   };
-  // H-1: no durable cap store (or no dedicated NEAR AI key) means no live review.
+  // H-1: no durable cap store (or no NEAR AI key) means no live review.
   if (!deps.apiKey || deps.liveEnabled === false) return declineOrReplay("not_configured");
 
   // A resumed (accepted, unreviewed) job needs enough of its review window left (S-2 / L-1).
   const windowLeft = (j) => nsToMs(j.review_by_ns) - SUBMIT_RESERVE_MS - now();
   if (job.status === "accepted" && windowLeft(job) < MIN_REVIEW_MS) return replay("timeout", "accepted_no_review");
 
-  // 5. Caps: job lock, 35/day (A-028), 3 per visitor and per buyer, $1.75 spend stop (with the on-chain floor).
+  // 5. Caps: job lock, 100/day and 10 per visitor and per buyer (T-105), $1.75 spend stop (worst-case
+  // reservation, settled to measured usage), with the on-chain floor at FLOOR_REVIEW_MICRO per graded job.
   const pack = deps.loadPack(packId.slice(5));
   const reserveMicro = reviewReserveMicro(pack);
   let floorMicro = 0;
   try {
     const rec = await within(deps.chain.getRecord(deps.sellerId), chainMs());
-    floorMicro = (Number(rec?.passes ?? 0) + Number(rec?.fails ?? 0)) * reserveMicro;
+    floorMicro = floorMicroFromRecord(rec); // T-105: a realistic per-job estimate, not the worst-case reserve
   } catch {
     // partial backstop only: the store counter still applies
   }
@@ -397,9 +398,9 @@ async function handle(req, deps) {
     s = await tx(deps.chain.submitReview(r.submit_args), Math.max(1, deadline - now()));
     if (s.status !== "not_sent" || deadline - now() < SUBMIT_RETRY_MIN_MS) break;
   }
-  const attempts = Number.isInteger(r.attempts) && r.attempts > 0 ? Math.min(r.attempts, DEFAULT_MAX_ATTEMPTS) : DEFAULT_MAX_ATTEMPTS;
   try {
-    await slot.settle((reserveMicro * attempts) / DEFAULT_MAX_ATTEMPTS); // after the submit (O-3)
+    // T-105: settle to the measured cost x SETTLE_MARGIN (worst case per attempt where unknown).
+    await slot.settle(actualReviewMicro({ reserveMicro, attempts: r.attempts, usage: r.attempt_usage, minPrompt: minPromptTokens(pack) })); // after the submit (O-3)
   } catch {
     // keeping the full reservation is the safe side
   }
