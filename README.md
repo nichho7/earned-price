@@ -12,9 +12,9 @@ negotiable: an offer below it is refused.
 *Price earned, not claimed.*
 
 - **Track:** NEAR Hackathon, Agent Economy (`agents`).
-- **Sister project:** NEAR Real-World Money (`Near_Hackathon_II`, track `realworld`), by the same team.
+- **Sister project:** Unspent, our NEAR Real-World Money entry (track `realworld`), by the same team: https://github.com/nichho7/unspent. The two projects are independent (separate code, contracts and accounts).
 - **Status:** hackathon build, **testnet only**. No real funds, no mainnet.
-- **Website:** not live yet. This README covers the CLI and the contract.
+- **Website (live, testnet):** https://earned-price-nu.vercel.app. Home: the recorded run explained step by step. `/live`: run a real paid trial yourself on testnet from the browser (no wallet needed). `/verify`: check a receipt offline. This README covers the CLI and the contract.
 
 **Exam jobs vs real jobs.** Graded jobs (exams with sealed answers) build the record; real jobs
 pay the earned price; buyers can supply tests, not answers. Only graded exam jobs count toward the
@@ -200,6 +200,8 @@ in `live-run.sh`); that run happened once, on 2026-11-12, and `recorded/` holds 
 | NEAR testnet faucet helper | creating the throwaway buyer account in `earned init` |
 | Public testnet RPCs (FastNEAR, rpc.testnet.near.org) | keyless reads: quote, record, jobs |
 | NearBlocks testnet explorer | the tx links in receipts and `recorded/` |
+| Next.js 16 on Vercel, Upstash Redis | the website (`app/`, `site/`) and its `/api/review` function's spend and rate counters |
+| Claude Code (AI coding assistant) | most of the code, tests and docs were written with AI assistance during the hackathon window (from 2026-11-10); every line is in this repo's history |
 
 ## Limits (read before judging)
 
