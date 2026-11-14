@@ -189,14 +189,14 @@ test("EARNED_HOME overrides the key folder", async () => {
   assert.equal(statSync(join(home, "buyer.json")).mode & 0o777, 0o600);
 });
 
-test("spend cap: 0.2 NEAR enforced in code, file cannot raise it", () => {
+test("spend cap: 0.3 NEAR (A-029) enforced in code, file cannot raise it", () => {
   const s = { spent_yocto: "0" };
-  assert.equal(SPEND_CAP_YOCTO, 200000000000000000000000n);
-  const s1 = recordSpend(s, 150000000000000000000000n); // 0.15
-  assert.equal(s1.spent_yocto, "150000000000000000000000");
-  assert.doesNotThrow(() => assertCanSpend(s1, 50000000000000000000000n)); // exactly 0.2
+  assert.equal(SPEND_CAP_YOCTO, 300000000000000000000000n);
+  const s1 = recordSpend(s, 250000000000000000000000n); // 0.25
+  assert.equal(s1.spent_yocto, "250000000000000000000000");
+  assert.doesNotThrow(() => assertCanSpend(s1, 50000000000000000000000n)); // exactly 0.3
   assert.throws(() => assertCanSpend(s1, 50000000000000000000001n), SpendCapError);
-  assert.throws(() => assertCanSpend({ spent_yocto: "0", spend_cap_yocto: "999" + "0".repeat(24) }, 3n * 10n ** 23n), SpendCapError);
+  assert.throws(() => assertCanSpend({ spent_yocto: "0", spend_cap_yocto: "999" + "0".repeat(24) }, 4n * 10n ** 23n), SpendCapError);
   assert.throws(() => assertCanSpend({ spent_yocto: "-1" }, 1n), SpendCapError);
   assert.throws(() => assertCanSpend(s, -1n), SpendCapError);
   assert.throws(() => assertCanSpend(s, 0.1), SpendCapError);

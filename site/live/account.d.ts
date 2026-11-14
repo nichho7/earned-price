@@ -78,7 +78,7 @@ export function maxGasYocto(method: SignMethod): bigint;
 export const JOB_GAS_RESERVE_YOCTO: bigint;
 export const KEY_CHECK_TRIES: number;
 export const SPEND_CAP_YOCTO: bigint;
-/** The same cap as a decimal NEAR string ("0.2"), for copy. */
+/** The same cap as a decimal NEAR string ("0.3"), for copy. */
 export const SPEND_CAP_NEAR: string;
 
 export class AccountError extends Error {

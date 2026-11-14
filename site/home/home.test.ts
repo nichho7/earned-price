@@ -82,10 +82,11 @@ test("tamper widget: Exam 2's function names from the revealed titles", () => {
 
 test("live trial: default never promises a live hire (A-032 honesty); full copy only behind the switch", () => {
   assert.equal(LIVE_TRIAL, "partial", "flip to full only with a real hire done on the deployed URL (see live-trial.ts)");
-  const p = trialCopy("partial", "0.2");
+  const p = trialCopy("partial", "0.3");
   assert.match(p.body.join(" "), /isn’t online for public jobs yet/);
   assert.match(p.body.join(" "), /comes back after the deadline/);
   assert.doesNotMatch(p.primary, /hire|live/i);
-  const f = trialCopy("full", "0.2");
+  const f = trialCopy("full", "0.3");
   assert.match(f.body.join(" "), /price move on chain/);
+  for (const c of [p, f]) assert.match(c.note, /won’t spend more than 0\.3 test NEAR/); // A-029 cap (T-104)
 });

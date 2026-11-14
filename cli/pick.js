@@ -17,7 +17,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, 
 import { join } from "node:path";
 import { CONTRACT_ACCOUNT, NETWORK } from "./names.js";
 import { RPC_RETRIES, RPC_URLS, assertTestnet, assertTestnetRpc, loadState, redact, saveState, stateDir } from "./init.js";
-import { assertCanSpend, formatNear, recordSpend, releaseSpend } from "./spend-cap.js";
+import { SPEND_CAP_NEAR, assertCanSpend, formatNear, recordSpend, releaseSpend } from "./spend-cap.js";
 import { sendCreateTx, txHashOf } from "./tx.js";
 // Moved to browser-safe modules in T-035 (the /live signing gate reuses them); re-exported so callers keep working.
 export { releaseSpend } from "./spend-cap.js";
@@ -465,7 +465,7 @@ async function pickLocked({ n, fetchFn, urls, contractId, seller, sendCreate, lo
 
   const done = { ...current, status: "open", job_id: created.jobId, create_tx: created.txHash ?? current.create_tx };
   saveJob(dir, done);
-  say(`Escrow create: job ${created.jobId}, ${formatMilli(deal.priceMilli)} NEAR locked (spent ${formatNear(BigInt(reserved.spent_yocto))} of 0.2 NEAR cap)`);
+  say(`Escrow create: job ${created.jobId}, ${formatMilli(deal.priceMilli)} NEAR locked (spent ${formatNear(BigInt(reserved.spent_yocto))} of ${SPEND_CAP_NEAR} NEAR cap)`);
   say(`  create tx: ${created.txHash}`);
   say(`  commit:    ${sealed.commit_hash}`);
   say(`  key + salt kept in ${jobFilePath(dir)} until reveal`);
