@@ -1,7 +1,13 @@
 # Earned Price: testnet escrow that pays agents only when a TEE grade passes.
 
-A seller agent haggles its price, is paid from testnet escrow only when a commit-reveal code
-grade passes its TEE-signed (NEAR AI Cloud) review, and every pass or fail moves its next quote.
+**Pay AI agents only when their work passes. Their track record sets the price.**
+
+A buyer pays a seller agent to pass a small exam before real work: a paid trial. The payment is
+held in testnet escrow until the exam is graded. The agent's review is signed inside a TEE (NEAR AI
+Cloud), then the escrow contract's own code grades it against answers the buyer locked in first
+(commit-reveal). A pass pays the agent, a fail refunds the buyer, and every result goes on the
+agent's public track record. The track record sets the agent's quote, and the quote is not
+negotiable: an offer below it is refused.
 
 *Price earned, not claimed.*
 
@@ -21,7 +27,7 @@ only (packs 1-3); paid real jobs are not built yet.
 | Tier | Who | Needs | Proves | Time |
 |---|---|---|---|---|
 | **1. Keyless** | anyone, an AI screener | Node 20+, git (Python 3 and Rust for 2 of the 13 steps) | the real recorded run is authentic, the contract is live with the approved code, the quote follows the record, a fail refunds and drops the price (local sandbox) | ~1 min with `--quick`, ~5-10 min in full |
-| **2. Your own job** | anyone with network | Tier 1 + the public testnet faucet (no key from us) | your own throwaway buyer, a sealed key, a haggle and real escrow on testnet; your job is refunded by timeout | ~4 min |
+| **2. Your own job** | anyone with network | Tier 1 + the public testnet faucet (no key from us) | your own throwaway buyer, a sealed key, a refused low offer and real escrow on testnet; your job is refunded by timeout | ~4 min |
 | **3. Full live loop** | the team | the seller's key + a NEAR AI Cloud key | a live TEE review, reveal and settle on the demo seller; today its quote goes 0.040 -> 0.050 -> 0.050 (not fresh, needs `--used-seller`) | ~2 min |
 
 **Live numbers move; recorded numbers don't.** The demo story (quote 0.030 -> 0.040 after a
@@ -203,9 +209,10 @@ in `live-run.sh`); that run happened once, on 2026-11-12, and `recorded/` holds 
 - **One registered verifier:** the escrow's allowlist holds one TEE signer, the NEAR AI Cloud
   address `0xfe0071895500a9755c18044948ab4f4e1a7f337e` (`contract/tee-signers.json`, `signers`
   view), managed by the contract owner (see "Trust and owner powers").
-- **We hold the contract account's full-access key.** We can still redeploy new code to
-  `earned-price.testnet`, which is a bigger power than the owner role; trusting the escrow means
-  trusting us (see "Trust and owner powers").
+- **We still hold a key that can replace the escrow's code.** It is the full-access key of
+  `earned-price.testnet`, a bigger power than the owner role, and new code could send the held money
+  anywhere. Until we give that key up, trusting the escrow means trusting us (see "Trust and owner
+  powers").
 - **A buyer can force a fail** by committing a valid but wrong answer key, and keep a free signed
   review (decision A-014; see "Threat model and known limits").
 - **Attestation is checked for binding only** (`earned verify` check 3); the Intel DCAP chain, the
@@ -416,8 +423,8 @@ catch.
 **The account key is a bigger power than the owner role.** The contract account
 still holds a full-access key (the one `scripts/deploy.sh` signs with). Whoever
 holds that key can deploy new code to the account, and new code can do anything,
-including sending the escrowed NEAR elsewhere. We have not locked the account
-(deleting its full-access keys) because we still redeploy during the hackathon.
+including sending the escrowed NEAR elsewhere. We have not given that key up
+(deleted the account's full-access keys) because we still redeploy during the hackathon.
 Until we do, trusting the escrow means trusting the key holder (us): this is a
 hackathon trust assumption, testnet only. You can check what code is live by
 comparing the account's code hash with the sha256 of a wasm you build yourself.
@@ -524,7 +531,7 @@ Other limits:
 
 ## Layout
 
-- `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (locks the buyer's deposit against a commit hash for one official pack), `accept`, `decline`, `submit_review` (pinned request + on-chain signature + allowlist + replay check + signed `created` inside the job window), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `review_pins` (the pinned request per pack, `contract/src/pins.rs`), `owner` / `signers` / `add_signer` / `remove_signer`.
+- `contract/`: NEAR escrow contract (Rust, near-sdk): `quote`, `create` (holds the buyer's deposit against a commit hash for one official pack), `accept`, `decline`, `submit_review` (pinned request + on-chain signature + allowlist + replay check + signed `created` inside the job window), `reveal` (commit check + on-chain grade, settle or refund), `timeout`, payout callback, `get_record` (passes, fails, unique buyers, jobs), `get_job`, `next_job_id`, `review_pins` (the pinned request per pack, `contract/src/pins.rs`), `owner` / `signers` / `add_signer` / `remove_signer`.
 - `cli/`: the `earned` CLI (Node, ESM): `earned init` creates a throwaway testnet buyer account; `earned quote` prints a seller's record-driven quote. `cli/quote.js` is the shared, browser-safe quote module (CLI and website).
 - `verify/`: browser-safe (no `node:` imports) receipt writer and offline verify. `verify/receipt.js` builds the version 1 receipt and runs the four checks of `earned verify`; `verify/nearai-verify.js` holds the NEAR AI signature and attestation-binding helpers; `verify/trust-anchors.js` is the only thing offline verify trusts besides the code (review model, request pins, official answer-key hashes, deploy-time signer allowlist), generated by `scripts/trust-anchors.mjs` from the contract's own sources and checked by `npm test`.
 - `grader/`: the commit-reveal code grader (`findingsFromResponse` reads a TEE response the same way the contract does).

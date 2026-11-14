@@ -80,7 +80,7 @@ case "$SIGNER" in
 esac
 [ "$WASM" = "target/near/earned_price.wasm" ] || die "wasm path '$WASM' is not the pinned target/near/earned_price.wasm"
 view() { node scripts/testnet-view.mjs "$@"; }
-node --input-type=module -e "(await import('./scripts/testnet-view.mjs')).rpcUrls()" 2>/dev/null \
+node --input-type=module -e "(await import('./scripts/testnet-view-lib.mjs')).rpcUrls()" 2>/dev/null \
   || die "EARNED_RPC_URL '${EARNED_RPC_URL:-}' is not a known testnet RPC"
 # One-time init args (A-012): owner = the contract account, signers = the seeded
 # NEAR AI TEE signer allowlist. Checked before anything is built or signed.

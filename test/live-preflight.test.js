@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { KeyPair } from "near-api-js";
-import { EXPECTED_CODE_HASH, printChecks, runPreflight } from "../scripts/live-preflight.mjs";
+import { EXPECTED_CODE_HASH, printChecks, runPreflight } from "../scripts/live-preflight-lib.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SELLER = "seller.earned-price.testnet";

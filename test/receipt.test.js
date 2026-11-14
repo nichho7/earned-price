@@ -23,7 +23,7 @@ import {
   tamperReceipt,
   verifyReceipt,
 } from "../verify/receipt.js";
-import { sample0Inputs } from "../scripts/receipt-fixture.mjs";
+import { sample0Inputs } from "../scripts/receipt-fixture-lib.mjs";
 import { runVerify } from "../cli/verify-cmd.js";
 import { TRUST } from "../verify/trust-anchors.js";
 import { loadPack } from "../packs/packs.js";

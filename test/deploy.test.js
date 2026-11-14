@@ -9,7 +9,7 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { wasmInfo, base58 } from "../scripts/wasm-info.mjs";
+import { wasmInfo, base58 } from "../scripts/wasm-info-lib.mjs";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const vector = JSON.parse(readFileSync(join(repo, "test-vectors/commit.json"), "utf8"));
@@ -83,7 +83,7 @@ const WASM = wasmInfo(fixtureWasm(CONTRACT_EXPORTS));
 function sandbox(namesPatch = {}, { exports = CONTRACT_EXPORTS, nearVersion = "near-cli-rs 0.31.1", createOut = '"7"', cargo = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "earned-deploy-"));
   for (const d of ["scripts", "contract", "test-vectors", "bin"]) mkdirSync(join(dir, d));
-  for (const f of ["scripts/deploy.sh", "scripts/testnet-view.mjs", "scripts/wasm-info.mjs", "test-vectors/commit.json", "test-vectors/review-pins.json", "contract/tee-signers.json"]) {
+  for (const f of ["scripts/deploy.sh", "scripts/testnet-view.mjs", "scripts/testnet-view-lib.mjs", "scripts/wasm-info.mjs", "scripts/wasm-info-lib.mjs", "test-vectors/commit.json", "test-vectors/review-pins.json", "contract/tee-signers.json"]) {
     copyFileSync(join(repo, f), join(dir, f));
   }
   chmodSync(join(dir, "scripts/deploy.sh"), 0o755);
@@ -502,7 +502,7 @@ test("deploy.sh --help prints the usage without comment markers", async () => {
 });
 
 test("testnet-view refuses non-testnet accounts and RPCs", async () => {
-  const { rpcUrls, assertTestnet } = await import("../scripts/testnet-view.mjs");
+  const { rpcUrls, assertTestnet } = await import("../scripts/testnet-view-lib.mjs");
   assert.doesNotThrow(() => assertTestnet("smoke-seller.earned-price.testnet"));
   for (const bad of ["earned-price.testnet.near", "Earned.testnet", "a..b.testnet", 'x".testnet', `${"a".repeat(60)}.testnet`]) {
     assert.throws(() => assertTestnet(bad), /not a \.testnet account/);

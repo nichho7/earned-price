@@ -10,7 +10,7 @@ import { PACKS_DIR, readIndex } from "../packs/packs.js";
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fcKeyCommand } from "../scripts/seller-fc-key.mjs";
+import { fcKeyCommand } from "../scripts/seller-fc-key-lib.mjs";
 
 const CONTRACT = "earned-price.testnet";
 const SELLER = "seller.earned-price.testnet";
