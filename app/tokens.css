@@ -23,8 +23,9 @@
   --mask-on: #000;
   --mask-off: #0000;
 
-  /* 2.2 type: next/font sets --font-*; metric-adjusted fallbacks come with it */
-  --serif: var(--font-serif), "Iowan Old Style", Georgia, serif;
+  /* 2.2 type: next/font sets --font-*; metric-adjusted fallbacks come with it. "EP Serif Fallback"
+     (below) covers machines without Times New Roman (Linux, CI) so the swap-loaded serif never shifts. */
+  --serif: var(--font-serif), "EP Serif Fallback", "Iowan Old Style", Georgia, serif;
   --serif-italic: var(--font-serif-italic), "Iowan Old Style", Georgia, serif;
   --sans: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
@@ -129,4 +130,14 @@
   --r-xl: 20px;
   --r-pill: 999px;
   --perf-hole: 9px;        /* section perforation radius */
+}
+
+/* [CoS] CLS on Linux: next/font sizes the Instrument Serif fallback against local(Times New Roman), which
+   Linux lacks, so the headline shifted when the swap font landed (CLS 0.008 on the GitHub runner, 0 on macOS).
+   Liberation Serif / Tinos are metric-compatible with Times New Roman, so next/font's own overrides apply as-is
+   (copied from its generated "Instrument Serif Fallback" face). Local faces only: nothing is downloaded. */
+@font-face {
+  font-family: "EP Serif Fallback";
+  src: local("Liberation Serif"), local("LiberationSerif"), local("Tinos");
+  ascent-override: 117.94%; descent-override: 36.93%; line-gap-override: 0%; size-adjust: 83.94%;
 }

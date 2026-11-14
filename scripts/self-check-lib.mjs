@@ -222,7 +222,15 @@ export const STEPS = [
       const count = (k) => lines(r.stdout).map((l) => l.match(new RegExp(`^ℹ ${k} (\\d+)$`))).find(Boolean)?.[1];
       const skipped = count("skipped") ?? "?";
       const note = skipped !== "0" ? ` (skips include the headless-Chrome tests when no Chrome is found; REQUIRE_BROWSER=1 makes that a FAIL)` : "";
-      return r.status === 0 && count("fail") === "0" ? pass(`${count("pass")} pass, 0 fail, ${skipped} skipped${note}`) : fail(`exit ${r.status}${r.timedOut ? " (timed out)" : ""}, fail ${count("fail") ?? "?"}, ${skipped} skipped`);
+      if (r.status === 0 && count("fail") === "0") return pass(`${count("pass")} pass, 0 fail, ${skipped} skipped${note}`);
+      // Name the failing tests (node --test spec reporter: "test at <file:line>" then "✖ <name>"), so a CI
+      // summary says which test broke without re-running it.
+      const out = lines(r.stdout);
+      const at = out.indexOf("✖ failing tests:");
+      const rest = at < 0 ? [] : out.slice(at + 1).map((l) => l.trim());
+      const named = rest.flatMap((l, i) => (/^✖ /.test(l) ? [rest[i - 1]?.replace(/^test at /, ""), l, rest[i + 1]?.slice(0, 160)] : []))
+        .filter(Boolean).map((l) => l.replace(/\|/g, "/")).slice(0, 9);
+      return fail(`exit ${r.status}${r.timedOut ? " (timed out)" : ""}, fail ${count("fail") ?? "?"}, ${skipped} skipped${named.length ? `: ${named.join(" · ")}` : ""}`);
     },
   },
   {
