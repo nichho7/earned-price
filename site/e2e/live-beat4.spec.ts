@@ -9,7 +9,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { CONTRACT_ID } from "../live/account.js";
-import { JOB_ID, JOB_KEY, allFive, mockChain, type Chain } from "./live-mock.ts";
+import { JOB_ID, JOB_KEY, allFive, mockChain, watchCsp, type Chain } from "./live-mock.ts";
 
 const SHOTS = process.env.T037_SHOTS;
 type Key = { pack_id: string; bugs: { id: string; title: string; file: string; line_start: number; category: string }[] };
@@ -51,6 +51,42 @@ async function beat3ThenHire4(page: Page) {
   await expect(hire4(page).locator('[data-line="repeat-buyer"]')).toContainText("unique buyers so far: 1");
   await hire4(page).getByRole("button", { name: "Hire for pack 3 at 0.040 →" }).click();
 }
+
+// T-092 (T-034 security L-3): /live runs steps 1 -> 4 under its CSP with no unexpected violation. Chromium checks CSP before
+// page.route sees a request, so a connect-src missing the faucet or an RPC fails here even on the mocks. The real
+// hosts behind the mocks are pinned to connect-src by site/headers.test.ts.
+test("security L-3: steps 1 -> 4 on /live run under its CSP with no unexpected securitypolicyviolation; an off-list host is blocked even when mocked", async ({ page }) => {
+  test.setTimeout(120_000);
+  const violations = await watchCsp(page);
+  const resp = page.waitForResponse((r) => new URL(r.url()).pathname === "/live" && r.request().resourceType() === "document");
+  await mockChain(page, { review: "fn", reviewDelayMs: 2500, findings: pack3Hits(4) });
+  await beat3ThenHire4(page);
+  expect((await (await resp).allHeaders())["content-security-policy"]).toContain("connect-src 'self' https://helper.nearprotocol.com");
+  await expect(step4(page)).toHaveAttribute("data-step4", "reviewed", { timeout: 25_000 });
+  await step4(page).getByRole("button", { name: "Reveal the key →" }).click();
+  await expect(step4(page)).toHaveAttribute("data-step4", "settled", { timeout: 20_000 });
+  await expect(step4(page).locator("[role=status]")).toContainText("step 4 done", { timeout: 20_000 });
+  // One known, harmless report: Next's browser `util` polyfill (next/dist/compiled/util, bundled for a client
+  // dependency that imports node's util) runs is-generator-function's probe `Function("return function*() {}")` in try/catch;
+  // without 'unsafe-eval' it falls back to a toString check. It is allowed only from a chunk that holds that exact
+  // probe. Everything else must be clean, and the flow above completing proves nothing needed eval.
+  const PROBE = 'Function("return function*() {}")';
+  const clean = async () => {
+    const out: string[] = [];
+    for (const v of await violations()) {
+      const m = /^script-src eval @ (http:\/\/127\.0\.0\.1:\d+\/_next\/static\/chunks\/[\w-]+\.js):\d+:\d+$/.exec(v);
+      if (!m || !(await (await page.request.get(m[1])).text()).includes(PROBE)) out.push(v);
+    }
+    return out;
+  };
+  expect(await clean()).toEqual([]);
+  // the listener works, and CSP is enforced before page.route: an off-list host that IS mocked is still refused
+  let reached = false;
+  await page.route("https://example.com/x", (route) => { reached = true; return route.fulfill({ status: 200, body: "{}", headers: { "access-control-allow-origin": "*" } }); });
+  expect(await page.evaluate(() => fetch("https://example.com/x").then(() => "ok", () => "refused"))).toBe("refused");
+  expect(reached, "the mock never sees a CSP-blocked request").toBe(false);
+  await expect.poll(clean).toEqual([expect.stringContaining("connect-src https://example.com")]);
+});
 
 test("beat 4: same buyer, pack 3 -> 4/5 with B5 missed next to the key -> settle tx -> 'Held.' quote 0.040 unchanged (repeat buyer) -> inputs from get_record + fail line -> step 4 PASS", async ({ page }) => {
   test.setTimeout(120_000);

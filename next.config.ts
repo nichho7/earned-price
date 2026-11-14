@@ -8,18 +8,34 @@ import type { NextConfig } from "next";
 // future <img src={claim}> leak, and frame-ancestors stops framing. Dev needs 'unsafe-eval' (same guide).
 // `/` is left alone on purpose: T-034 adds wallet / RPC calls there, which a copied policy would block.
 const dev = process.env.NODE_ENV === "development";
-const VERIFY_CSP = [
+const csp = (connect: string, form: string) => [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${dev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self'",
-  "connect-src 'self'",
+  `connect-src ${connect}`,
   "object-src 'none'",
   "base-uri 'none'",
-  "form-action 'none'",
+  `form-action ${form}`,
   "frame-ancestors 'none'",
 ].join("; ");
+export const VERIFY_CSP = csp("'self'", "'none'");
+
+// T-092 (T-034 security L-3): /live holds the browser buyer's testnet key in localStorage, so the same CSP with
+// connect-src opened to exactly the hosts /live calls: 'self' (POST /api/review, site/live/review.js REVIEW_URL),
+// the faucet (site/live/account.js FAUCET_URL) and both testnet RPCs incl. the fallback (account.js RPC_URLS, also
+// used by near-api-js JsonRpcProvider for send_tx). A drift test (site/headers.test.ts) fails if those constants
+// change and this list does not. nearblocks.io is only ever a link (navigation), never fetched, so it is not here.
+export const LIVE_CONNECT = ["https://helper.nearprotocol.com", "https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"];
+export const LIVE_CSP = csp(["'self'", ...LIVE_CONNECT].join(" "), "'self'");
+
+const strict = (policy: string, referrer: string) => [
+  { key: "Content-Security-Policy", value: policy },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Referrer-Policy", value: referrer },
+];
 
 const config: NextConfig = {
   poweredByHeader: false,
@@ -28,15 +44,9 @@ const config: NextConfig = {
   outputFileTracingIncludes: { "/api/review": ["./packs/**"] },
   async headers() {
     return [
-      {
-        source: "/verify",
-        headers: [
-          { key: "Content-Security-Policy", value: VERIFY_CSP },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "X-Frame-Options", value: "DENY" },
-          { key: "Referrer-Policy", value: "no-referrer" },
-        ],
-      },
+      { source: "/verify", headers: strict(VERIFY_CSP, "no-referrer") },
+      // strict-origin-when-cross-origin (the auditor's L-3 value): the faucet and RPCs see our origin only, never a path.
+      { source: "/live", headers: strict(LIVE_CSP, "strict-origin-when-cross-origin") },
     ];
   },
 };

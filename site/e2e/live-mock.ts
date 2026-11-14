@@ -66,6 +66,18 @@ export type Chain = {
 /** All five planted bugs, at their first line (5/5). */
 export const allFive: Chain["findings"] = (key) => key.bugs.map((b) => ({ file: b.file, line: b.line_start, category: b.category }));
 
+/** T-092: records every securitypolicyviolation (from the first script on), plus page errors. Read with the getter. */
+export async function watchCsp(page: Page): Promise<() => Promise<string[]>> {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(`pageerror ${e.message}`));
+  await page.addInitScript(() => {
+    const w = window as unknown as { __csp: string[] };
+    w.__csp = [];
+    document.addEventListener("securitypolicyviolation", (e) => w.__csp.push(`${e.violatedDirective} ${e.blockedURI} @ ${e.sourceFile}:${e.lineNumber}:${e.columnNumber}`));
+  });
+  return async () => [...(await page.evaluate(() => (window as unknown as { __csp: string[] }).__csp)), ...errors];
+}
+
 /** The mocked testnet. Chain time = wall clock; a block every 500 ms. */
 export async function mockChain(page: Page, over: Partial<Chain> = {}): Promise<Chain> {
   const c: Chain = {
