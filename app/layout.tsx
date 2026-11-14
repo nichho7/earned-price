@@ -6,8 +6,11 @@
 // logged in ADR-001 B5 (2026-11-12).
 // S-028 (M1): one inline head script adds `ep-js`, so the server's final stage stays hidden until the
 // player mounts and starts at READY (no flash of the final state). No JS = the final state, as is (R6).
+// T-103: icons and the social card are App Router files next to this layout (favicon.ico, icon.png, apple-icon.png,
+// opengraph-image.png, twitter-image.png + .alt.txt); metadataBase makes their URLs absolute (site/site-url.ts).
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, IBM_Plex_Sans, Instrument_Serif } from "next/font/google";
+import { siteOrigin } from "../site/site-url.ts";
 import "./tokens.css";
 import "./base.css";
 import "../site/earn/earn-stage.css";
@@ -18,6 +21,7 @@ const sans = IBM_Plex_Sans({ weight: ["400", "500"], subsets: ["latin"], display
 const mono = IBM_Plex_Mono({ weight: ["400", "500"], subsets: ["latin"], display: "optional", variable: "--font-mono" });
 
 export const metadata: Metadata = {
+  metadataBase: siteOrigin(),
   title: "Earned Price: the record sets the price",
   description:
     "A seller agent is paid from testnet escrow only when a graded review passes, and every pass or fail moves its next quote. Testnet only, no real funds.",

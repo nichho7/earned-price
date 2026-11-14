@@ -4,11 +4,11 @@
 
 /* ============ grounds: each section sets its own roles ============ */
 .hm [data-ground] { background: var(--bg); color: var(--fg); }
-.hm [data-ground="violet"] { --bg: var(--violet); --fg: var(--cream); --fg-2: var(--cream-2); --em: var(--canary); --link: var(--cream); --hair: var(--line); --focus: var(--canary); --btn-bg: var(--canary); --btn-fg: var(--ink); }
-.hm [data-ground="night"] { --bg: var(--night); --fg: var(--cream); --fg-2: var(--night-mute); --em: var(--canary); --link: var(--canary); --hair: var(--hair-night); --focus: var(--canary); --btn-bg: var(--canary); --btn-fg: var(--ink); }
-.hm [data-ground="cream"] { --bg: var(--cream); --fg: var(--ink); --fg-2: var(--ink-2); --em: var(--violet); --link: var(--violet); --hair: var(--rule); --focus: var(--violet); --btn-bg: var(--violet); --btn-fg: var(--cream); }
-.hm [data-ground="paper"] { --bg: var(--paper); --fg: var(--ink); --fg-2: var(--ink-2); --em: var(--violet); --link: var(--violet); --hair: var(--rule); --focus: var(--violet); --btn-bg: var(--violet); --btn-fg: var(--cream); }
-.hm [data-ground="lilac"] { --bg: var(--lilac); --fg: var(--ink); --fg-2: var(--ink-2); --em: var(--violet); --link: var(--violet); --hair: var(--hair-lilac); --focus: var(--violet); --btn-bg: var(--violet); --btn-fg: var(--cream); }
+.hm [data-ground="violet"] { --mark-stamp: var(--cream); --mark-ink: var(--violet); --bg: var(--violet); --fg: var(--cream); --fg-2: var(--cream-2); --em: var(--canary); --link: var(--cream); --hair: var(--line); --focus: var(--canary); --btn-bg: var(--canary); --btn-fg: var(--ink); }
+.hm [data-ground="night"] { --mark-stamp: var(--cream); --mark-ink: var(--violet); --bg: var(--night); --fg: var(--cream); --fg-2: var(--night-mute); --em: var(--canary); --link: var(--canary); --hair: var(--hair-night); --focus: var(--canary); --btn-bg: var(--canary); --btn-fg: var(--ink); }
+.hm [data-ground="cream"] { --mark-stamp: var(--violet); --mark-ink: var(--canary); --bg: var(--cream); --fg: var(--ink); --fg-2: var(--ink-2); --em: var(--violet); --link: var(--violet); --hair: var(--rule); --focus: var(--violet); --btn-bg: var(--violet); --btn-fg: var(--cream); }
+.hm [data-ground="paper"] { --mark-stamp: var(--violet); --mark-ink: var(--canary); --bg: var(--paper); --fg: var(--ink); --fg-2: var(--ink-2); --em: var(--violet); --link: var(--violet); --hair: var(--rule); --focus: var(--violet); --btn-bg: var(--violet); --btn-fg: var(--cream); }
+.hm [data-ground="lilac"] { --mark-stamp: var(--violet); --mark-ink: var(--canary); --bg: var(--lilac); --fg: var(--ink); --fg-2: var(--ink-2); --em: var(--violet); --link: var(--violet); --hair: var(--hair-lilac); --focus: var(--violet); --btn-bg: var(--violet); --btn-fg: var(--cream); }
 
 /* ============ base ============ */
 html:has(.hm) { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; scroll-padding-top: 80px; }
