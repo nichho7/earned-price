@@ -15,6 +15,7 @@ import {
 import { LIVE_TRIAL, trialCopy } from "./live-trial.ts";
 import { tamperKey, tamperText } from "./tamper.ts";
 import { HomeMotion } from "./HomeMotion.tsx";
+import { BrandMark } from "../view/BrandMark.tsx";
 
 const raw = (html: string) => ({ dangerouslySetInnerHTML: { __html: html } });
 
@@ -37,13 +38,6 @@ const P = {
   doc: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 14l2 2 4-4"/>',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
 };
-
-const MarkIcon = () => (
-  <svg viewBox="0 0 32 32" aria-hidden="true">
-    <rect x="3" y="3" width="26" height="26" rx="2" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="3 2.2" />
-    <path d="M10 16.5l4 4 8-9" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
 
 function Postmark({ id, ring, words, className, size = 17 }: { id: string; ring: string; words: string[]; className?: string; size?: number }) {
   const two = words.length > 1;
@@ -85,7 +79,7 @@ export function Home({ hero, jobs, repoUrl, capNear, recordedAt }: HomeProps) {
       {/* ======================= HEADER ======================= */}
       <header className="hdr" data-ground="violet" id="hdr">
         <div className="wrap">
-          <a className="mark" href="#top" aria-label="Earned Price, home"><MarkIcon /><span>Earned Price</span></a>
+          <a className="mark" href="/#top" aria-label="Earned Price" data-brand=""><BrandMark /><span>Earned Price</span></a>
           <nav className="nav" aria-label="Sections">
             <a href="#problem">The problem</a>
             <a href="#how">How it works</a>
@@ -487,7 +481,7 @@ export function Home({ hero, jobs, repoUrl, capNear, recordedAt }: HomeProps) {
         <div className="wrap">
           <div className="foot-grid">
             <div>
-              <a className="mark" href="#top"><MarkIcon /><span>Earned Price</span></a>
+              <a className="mark" href="#top"><BrandMark /><span>Earned Price</span></a>
               <p className="small foot-fine">Built at NEAR HACKATHON, on NEAR testnet. Test tokens only, no real money. MIT license.</p>
             </div>
             <div><h4>The site</h4><ul><li><a href="#how">How it works</a></li><li><a href="#demo">Watch a real run</a></li><li><a href="/verify">Check a receipt</a></li>{LIVE_TRIAL === "full" && <li><a href="/live">Try it live on testnet</a></li>}</ul></div>

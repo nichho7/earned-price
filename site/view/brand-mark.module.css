@@ -1,0 +1,9 @@
+/* [CTO] T-103 · logo mark paint + the Designer's optional hover (README "Header"): pointer-only, no autoplay,
+   nothing under prefers-reduced-motion. Colours are tokens only (app/tokens.css: --mark-stamp, --mark-ink). */
+.mark { display: block; flex: none; overflow: visible; }
+.stamp { fill: var(--mark-stamp); }
+.ink { fill: none; stroke: var(--mark-ink); }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .mark { transition: transform 250ms var(--ease-stamp); }
+  a:hover > .mark { transform: translateY(-2px); }
+}

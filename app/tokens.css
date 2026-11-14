@@ -16,6 +16,9 @@
   --line: #9C86EE;         /* decorative hairlines on violet only (2.39:1, never text) */
   --ink-2: #5C574D;        /* secondary text on the sheet */
   --rule: #CFC7B5;         /* decorative dashed rules inside the receipt */
+  /* T-103 logo mark (A-033): default = mark-reverse (violet / night grounds); light grounds swap in home.css */
+  --mark-stamp: var(--cream);
+  --mark-ink: var(--violet);
   /* masks (alpha only, not visible colour): the receipt's perforated edge */
   --mask-on: #000;
   --mask-off: #0000;
