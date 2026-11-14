@@ -47,6 +47,12 @@ test("self-check runs through a symlinked absolute path (README Tier 1)", () => 
   assert.equal(cli("self-check", ["--bogus"]).status, 2, "bad usage is exit 2, not a silent 0");
 });
 
+test("self-check-summary (T-089 CI job) runs through a symlinked absolute path: no result file is exit 1, NO RESULT", () => {
+  const r = cli("self-check-summary", [join(TMP, "missing.json")]);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.stdout, /^## README Tier 1 self-check: NO RESULT$/m);
+});
+
 test("live-preflight runs through a symlinked absolute path and fails closed (exit 3) when the RPC is unreachable", () => {
   const preload = 'globalThis.fetch = async () => { throw new Error("no network in this test"); };';
   const home = join(TMP, "buyer-home");

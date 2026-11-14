@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { MACOS_SDK_HINT, STEPS, childEnv, formulaExplains, parseArgs, run, runSelfCheck, summaryLine } from "../scripts/self-check-lib.mjs";
+import { MACOS_SDK_HINT, STEPS, childEnv, formulaExplains, meetsBar, parseArgs, run, runSelfCheck, summaryLine, summaryMain, summaryMarkdown } from "../scripts/self-check-lib.mjs";
 
 const README = readFileSync(fileURLToPath(new URL("../README.md", import.meta.url)), "utf8");
 const OFFLINE = ["node", "install", "cli", "verify-2", "verify-3", "tamper", "recorded"];
@@ -106,4 +106,34 @@ test("self-check: argument parsing", () => {
   assert.deepEqual(parseArgs(["--quick", "--json", "--only", "4,11"]), { quick: true, json: true, only: [4, 11] });
   assert.throws(() => parseArgs(["--only", "0"]), /step numbers/);
   assert.throws(() => parseArgs(["--live"]), /unknown argument/);
+});
+
+// T-089 (S-025 AC2): the Tier 1 CI job writes this summary and fails below 13/13.
+test("self-check summary (CI job): 13/13 passes; any FAIL, SKIP, partial run or missing JSON fails the job", async () => {
+  const all = (status) => async () => (status === "SKIP" ? { skip: "tool missing" } : status === "PASS" ? { ok: true, detail: "ok | fine" } : { ok: false, detail: "bad" });
+  const steps = (status13) => STEPS.map((st, i) => ({ ...st, check: all(i === 12 ? status13 : "PASS") }));
+  const full = await runSelfCheck({ steps: steps("PASS") });
+  assert.equal(meetsBar(full), true);
+  const md = summaryMarkdown(full);
+  assert.match(md, /^## README Tier 1 self-check: 13\/13 steps PASS \(100%\)\n/);
+  assert.ok(md.includes("`SELF-CHECK: 13/13 steps PASS (100%), 0 FAIL`"));
+  assert.ok(md.includes(`| 13 | ${STEPS[12].title} | PASS | ok \\| fine |`), "titles from STEPS; a | in the detail is escaped");
+  for (const [s, why] of [
+    [await runSelfCheck({ steps: steps("FAIL") }), "a FAIL"],
+    [await runSelfCheck({ steps: steps("SKIP") }), "a SKIP (missing Rust)"],
+    [await runSelfCheck({ steps: steps("PASS"), quick: true }), "--quick"],
+    [await runSelfCheck({ steps: steps("PASS"), only: [1] }), "--only"],
+  ]) {
+    assert.equal(meetsBar(s), false, why);
+    assert.match(summaryMarkdown(s), /\(below 13\/13: FAIL\)/, why);
+  }
+  assert.match(summaryMarkdown(await runSelfCheck({ steps: steps("SKIP") })), /\| 13 \| .* \| \*\*SKIP\*\* \| tool missing \|/);
+  let out = "";
+  assert.equal(summaryMain(["x.json"], { read: () => JSON.stringify(full), write: (t) => (out += t) }), 0);
+  assert.ok(out.startsWith("## README Tier 1 self-check: 13/13"));
+  for (const read of [() => "", () => "not json", () => { throw new Error("ENOENT"); }, () => "{}"]) {
+    out = "";
+    assert.equal(summaryMain(["x.json"], { read, write: (t) => (out += t) }), 1);
+    assert.match(out, /NO RESULT/);
+  }
 });

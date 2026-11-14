@@ -317,6 +317,40 @@ export function summaryLine(s) {
   return `${head}, ${s.fail} FAIL${extra ? `, ${extra}` : ""}`;
 }
 
+/** T-089: a full run with every step PASS, the only result the Tier 1 CI job accepts (S-025 AC2). */
+export const meetsBar = (s) => Boolean(s && s.ok && !s.partial && s.steps_all === STEPS.length && s.pass === STEPS.length);
+
+/** T-089: the Tier 1 CI job summary (Markdown) for a `--json` result; null or junk input says so. */
+export function summaryMarkdown(s) {
+  if (!s || !Array.isArray(s.steps)) return "## README Tier 1 self-check: NO RESULT\n\nThe self-check printed no JSON summary (see the step log).\n";
+  const cell = (v) => String(v ?? "").replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
+  const rows = s.steps.map((r) => `| ${r.n} | ${cell(STEPS[r.n - 1]?.title ?? r.id)} | ${r.status === "PASS" ? "PASS" : `**${r.status}**`} | ${cell(r.detail)}${r.hint ? ` (hint: ${cell(r.hint)})` : ""} |`);
+  return [
+    `## README Tier 1 self-check: ${s.pass}/${s.steps_all} steps PASS (${s.pct}%)${meetsBar(s) ? "" : " (below 13/13: FAIL)"}`,
+    "",
+    `\`${summaryLine(s)}\``,
+    "",
+    "| # | Step | Result | Got |",
+    "|---|---|---|---|",
+    ...rows,
+    "",
+    `Node ${cell(s.node)} · ${cell(s.platform)} · ${cell(s.at)}. The % is over all ${s.steps_all} steps (the north-star number for metrics.md).`,
+    "",
+  ].join("\n");
+}
+
+/** T-089 CLI (`node scripts/self-check-summary.mjs self-check.json`): prints the summary; exit 0 only at 13/13. */
+export function summaryMain([file], { read = (f) => readFileSync(f, "utf8"), write = (t) => process.stdout.write(t) } = {}) {
+  let s = null;
+  try {
+    s = JSON.parse(read(file));
+  } catch {
+    s = null;
+  }
+  write(summaryMarkdown(s));
+  return meetsBar(s) ? 0 : 1;
+}
+
 /** The CLI: prints the table (or --json) and returns the exit code. */
 export async function main(argv) {
   let opts;

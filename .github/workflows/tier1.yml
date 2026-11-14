@@ -1,0 +1,61 @@
+# [CTO] T-089 · S-025 AC2: the README Tier 1 path on a clean runner, on every push to main and once a day.
+# It runs what a judge runs: a fresh checkout, `npm ci` (README Setup), then the full self-check
+# (`node scripts/self-check.mjs`, all 13 steps, REQUIRE_BROWSER=1 so a missing Chrome fails step 12), and writes
+# the pass % to the job summary (the north-star number, copied into metrics.md). The job fails below 13/13.
+# No secrets, no deploy, nothing signed or sent. Network use is read-only: npm, crates.io and the cargo-near
+# release (installs); steps 9-11 are keyless testnet RPC view calls; step 13 downloads near-sandbox and runs a
+# local sandbox chain on the runner. Actions are pinned by commit SHA (code review N-2); the comment names the release.
+name: tier1
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * *" # daily 06:17 UTC (off the hour: top-of-hour schedules queue longest)
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tier1-${{ github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash # bash -eo pipefail
+jobs:
+  tier1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REQUIRE_BROWSER: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 24 } # no npm cache: every run installs from scratch, like a judge
+      # README Prerequisites for step 13: Rust stable + wasm32-unknown-unknown, cargo-near 0.23.x.
+      - name: Rust stable + wasm32 target, cargo-near 0.23.0
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+          rustup default stable
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/download/cargo-near-v0.23.0/cargo-near-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      # Ubuntu 24.04 restricts unprivileged user namespaces, which Chrome's sandbox needs (step 12's two
+      # headless-browser tests launch the runner's /usr/bin/google-chrome without --no-sandbox).
+      - name: Allow Chrome's sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Tool versions
+        run: |
+          node --version
+          python3 --version
+          cargo --version
+          cargo near --version
+          google-chrome --version
+      - name: npm ci (README Setup)
+        run: npm ci
+      - name: README Tier 1 self-check (full, 13 steps)
+        run: |
+          set +e
+          node scripts/self-check.mjs --json > self-check.json
+          echo "self-check exit code $?"
+      - name: Pass % to the job summary; fail below 13/13
+        if: always()
+        run: node scripts/self-check-summary.mjs self-check.json | tee -a "$GITHUB_STEP_SUMMARY"
