@@ -1,7 +1,7 @@
-// T-028: spend and fairness caps for the live review function (Nicho-approved T-003 numbers,
-// daily cap lowered by A-028 / T-079):
-//   35 live reviews a day site-wide, 3 per visitor a day, and a lifetime stop at $1.75 estimated
-//   NEAR AI spend (of the $2.00 this project may use from the $5 key).
+// T-028: spend and fairness caps for the live review function. Numbers: T-003, then A-028 / T-079,
+// then T-105 (Nicho, 2026-11-14: judges should be able to take several live tests through judging):
+//   100 live reviews a day site-wide, 10 per visitor (hashed IP) and 10 per buyer account a day, and
+//   a lifetime stop at $1.75 of NEAR AI spend, counted durably in the cap store.
 //
 // Where the counters live (Vercel Hobby, $0, no paid KV):
 //   - Upstash Redis over its REST API when UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN (or the
@@ -12,12 +12,26 @@
 //     counts as "not configured" and the function never runs a live review on it (security H-1,
 //     Nicho 2026-11-12; enforced in site-api/vercel.js).
 //
-// None of this is the hard spend stop. The on-chain floor the handler passes in ((passes + fails) x
-// the per-review reserve, from get_record) is only a partial backstop: a buyer who never reveals
-// ends in timeout "no_reveal", which leaves the record unchanged, so those jobs are never counted.
-// The real hard stop is outside this code: Vercel uses its OWN NEAR AI key loaded with at most $2
-// (NEAR_AI_API_KEY, loaded by Nicho at A-003), so NEAR AI answers 402 (= replay) once that credit is
-// gone, even if every counter here fails.
+// The spend guards, in the order they matter (T-105):
+//   1. The durable spend counter (SPEND_KEY, Upstash) is THE spend guard. Vercel runs on the SHARED
+//      NEAR Builders key (NEAR_AI_API_KEY; its $5-10 also funds our CLI and the sister project, ~$3
+//      earmarked there), not on a dedicated $2 key, so nothing outside this code stops at $1.75.
+//      Each request first RESERVES the worst case (reviewReserveMicro: every attempt at max_tokens)
+//      with an atomic INCRBY and is refused if that would pass SPEND_STOP_MICRO_USD; only then may it
+//      call NEAR AI. After the review, settle() lowers the reservation to the worst case of the
+//      attempts actually used (review.js); it never raises it, and a review that fails after a paid
+//      call keeps its full reservation. So the counter only over-counts real spend.
+//   2. The on-chain floor (floorMicro below, from the seller's get_record) covers a store that lost
+//      its data (a reset or wiped Upstash database): (passes + fails) x FLOOR_REVIEW_MICRO. It used the
+//      full worst-case reserve per graded job (~$0.0095), which stopped live reviews after ~183 jobs
+//      although real reviews cost ~$0.0007 (T-013). T-105 counts it at FLOOR_REVIEW_MICRO, a
+//      realistic estimate with ~2x margin, so it lasts ~1,160 graded jobs. That is safe because the
+//      floor is a backstop, not the meter: guard 1 still books every request at its worst case
+//      until the real usage is known. The floor stays partial: a buyer who never reveals ends in
+//      timeout "no_reveal", which leaves the record unchanged, so those jobs are never counted.
+//   3. Outside this code: NEAR AI answers 402 once the shared key's balance is empty (the pre-accept
+//      probe then declines the open job; a 402 mid-review means no review, so no more spend). That is
+//      the last resort only, because by then the sister project's share is gone too.
 //
 // Every check is increment-then-compare with a rollback, so concurrent requests can't both slip
 // under a limit (INCRBY is atomic in Redis and in the single-threaded memory store).
@@ -25,22 +39,27 @@ import { worstRunUsd } from "../scripts/review-spend.mjs";
 import { buildReviewRequest } from "../seller/review-prompt.js";
 import { DEFAULT_MAX_ATTEMPTS } from "../seller/review.js";
 
-export const DAILY_LIVE_CAP = 35; // A-028 (Nicho, 2026-11-12): was 100
-export const VISITOR_DAILY_CAP = 3;
+export const DAILY_LIVE_CAP = 100; // T-105 (Nicho, 2026-11-14): was 35 (A-028), and 100 before that
+export const VISITOR_DAILY_CAP = 10; // T-105 (Nicho, 2026-11-14): was 3. Per visitor AND per buyer account
 export const SPEND_STOP_MICRO_USD = 1_750_000; // $1.75, in micro-USD so counters stay integers
+// T-105 (Nicho, 2026-11-14): what the on-chain floor books per graded job, in micro-USD. A realistic
+// estimate, not the worst case: real reviews cost ~$0.0007 (T-013, reasoning off), and $0.0015 also
+// covers a retry. 1,750,000 / 1,500 = ~1,166 graded jobs, lifetime, our own runs included. The
+// per-request reservation stays worst case (reviewReserveMicro); see guard 2 above.
+export const FLOOR_REVIEW_MICRO = 1_500;
 // NEAR AI catalog price for deepseek-ai/DeepSeek-V4.1-Flash-1017 (cloud-api.near.ai/v1/model/list,
 // recorded in packs/results/round-4/summary.json on 2026-11-11): $0.30 in / $1.20 out per M tokens.
 export const PRICE_USD_PER_TOKEN = { in: 0.3e-6, out: 1.2e-6 };
 export const JOB_LOCK_S = 15 * 60; // longer than a job's whole review window (7 min)
 // T-084 fix round 1 (security M-1): declines a day, site-wide, across every GLOBAL_REFUSALS reason.
 // Each decline prepays 30 Tgas (~0.003 NEAR of the seller FC key's allowance, estimate), and unused
-// gas does not go back to the allowance. Sizing (CFO t076, A-028): 35 live jobs x ~0.033 NEAR +
-// 35 declines x ~0.003 NEAR = ~1.26 NEAR a day at most, so the 10 NEAR key lasts ~7.9 days (past
-// Nov 18 even if made Nov 12); declines add at most ~9% to the live jobs' own drawdown. 35 also
-// matches the honest demand: one decline per live slot covers a day of over-cap visitors or an outage
-// at judging traffic (CFO mid case: 25 public jobs a day). Past it the job is left open and refunds
+// gas does not go back to the allowance. Sizing (CFO t076 math, re-run for T-105): 100 live jobs x
+// ~0.033 NEAR + 100 declines x ~0.003 NEAR = ~3.6 NEAR a day at most, so the key needs ~18 NEAR of
+// allowance for Nov 14-18 (5 UTC days); scripts/seller-fc-key-lib.mjs prints a 20 NEAR key. Declines
+// still add at most ~9% to the live jobs' own drawdown. One decline per live slot covers a day of
+// over-cap visitors or an outage at judging traffic. Past it the job is left open and refunds
 // through timeout (no fail for the seller), so only the refund's speed degrades.
-export const DAILY_DECLINE_CAP = 35;
+export const DAILY_DECLINE_CAP = 100;
 // Optional breaker (security M-1): after a probe says NEAR AI is down, requests in the next minute
 // neither probe nor decline; the open job refunds through timeout.
 export const TEE_DOWN_S = 60;
@@ -66,6 +85,18 @@ export const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 export function reviewReserveMicro(pack, attempts = DEFAULT_MAX_ATTEMPTS) {
   const perAttempt = worstRunUsd(buildReviewRequest(pack.reviewFiles), PRICE_USD_PER_TOKEN);
   return Math.ceil(perAttempt * attempts * 1e6);
+}
+
+/**
+ * The lifetime on-chain floor in micro-USD: graded jobs on the seller's record x FLOOR_REVIEW_MICRO.
+ * Anything unreadable counts as 0 graded jobs (the floor is a backstop; the spend counter still applies).
+ */
+export function floorMicroFromRecord(rec) {
+  const n = (v) => {
+    const x = Number(v ?? 0);
+    return Number.isSafeInteger(x) && x > 0 ? x : 0;
+  };
+  return (n(rec?.passes) + n(rec?.fails)) * FLOOR_REVIEW_MICRO;
 }
 
 /** Per-instance store (see the top of the file for what that does and doesn't guarantee). */
@@ -207,9 +238,14 @@ export async function reserveLive({ store, jobId, visitor, buyer, day, reserveMi
   const lockKey = `job:${jobId}`;
   if (!(await store.setNx(lockKey, JOB_LOCK_S))) return { ok: false, reason: "job_busy" };
   const taken = []; // [key, n] to undo
+  // Newest first; an entry leaves `taken` only after its own decrement succeeded, so a second undo()
+  // after a store error can't decrement it twice (T-105 security M-2).
   const undo = async () => {
-    for (const [k, n] of taken.reverse()) await store.incrBy(k, -n);
-    taken.length = 0;
+    while (taken.length) {
+      const [k, n] = taken[taken.length - 1];
+      await store.incrBy(k, -n);
+      taken.pop();
+    }
   };
   const refuse = async (reason) => {
     await undo();

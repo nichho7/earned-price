@@ -74,8 +74,8 @@ Assume the lower $5 limit and that the key may stop at claims close (~Nov 14).
 Budget the worst case at $0.005 per review (above the observed max, room for bigger real packs).
 - This project: $2.00 of the $5 (the rest for Nicho's other project and headroom).
 - $2.00 / 4 days (Nov 11-14) = $0.50/day = 100 live reviews per day, site-wide (proposed here;
-  **lowered to 35/day by A-028, 2026-11-12**, so live reviews last to Nov 18), plus
-  **3 live reviews per visitor per day**.
+  **lowered to 35/day by A-028, 2026-11-12**, so live reviews last to Nov 18; **raised to
+  100/day by T-105, 2026-11-14**), plus **3 live reviews per visitor per day** (**10 from T-105**).
 - A server-side counter of estimated spend (tokens x catalog price) stops live reviews at
   $1.75 cumulative, whichever comes first.
 

@@ -223,7 +223,7 @@ test("seller-fc-key: near CLI command adds a function-call key for the escrow's 
   assert.deepEqual(argv.slice(0, 5), ["near", "account", "add-key", SELLER, "grant-function-call-access"]);
   assert.equal(at("--contract-account-id"), CONTRACT);
   assert.equal(at("--function-names"), "accept, decline, submit_review");
-  assert.equal(at("--allowance"), "10 NEAR", "A-028: the 10 NEAR-allowance key");
+  assert.equal(at("--allowance"), "20 NEAR", "T-105: a 20 NEAR-allowance key (100 live jobs + 100 declines a day, Nov 14-18)");
   assert.equal(at("use-manually-provided-public-key"), PK);
   assert.ok(!argv.includes("grant-full-access"));
   assert.equal(at("network-config"), "testnet");

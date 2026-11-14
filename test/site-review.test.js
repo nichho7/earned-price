@@ -10,7 +10,7 @@ import { ReviewError, reviewJob, DEFAULT_BUDGET_MS } from "../seller/review.js";
 import { ethAddress } from "../verify/nearai-verify.js";
 import { KeyPair } from "near-api-js";
 import { signReviewAuth } from "../site-api/buyer-auth.js";
-import { memoryStore, reviewReserveMicro, CapStoreError, DAILY_DECLINE_CAP, DAILY_LIVE_CAP, SPEND_STOP_MICRO_USD, TEE_DOWN_KEY, TEE_DOWN_S } from "../site-api/caps.js";
+import { memoryStore, reviewReserveMicro, CapStoreError, DAILY_DECLINE_CAP, DAILY_LIVE_CAP, FLOOR_REVIEW_MICRO, SPEND_STOP_MICRO_USD, TEE_DOWN_KEY, TEE_DOWN_S, VISITOR_DAILY_CAP } from "../site-api/caps.js";
 import { COPY, GLOBAL_REFUSALS, INTERNAL_REPLAY, handleReview, MAX_BODY_BYTES, REPLAY_REASONS } from "../site-api/review.js";
 import { visitorId } from "../site-api/visitor.js";
 import { depsFromEnv, maxDuration, toWebResponse, fromWebRequest, handleWebRequest } from "../site-api/vercel.js";
@@ -361,8 +361,8 @@ test("replay review_failed on any other review error (e.g. SIGNATURE_INVALID) or
 });
 
 for (const [name, prep, reason] of [
-  ["visitor cap", async (d) => d.store.incrBy(`visitor:2026-11-12:${visitorId(new Headers({ "x-vercel-forwarded-for": IP }), "s")}`, 3), "cap_visitor"],
-  ["buyer cap", async (d) => d.store.incrBy("buyer:2026-11-12:judge1.testnet", 3), "cap_buyer"],
+  ["visitor cap", async (d) => d.store.incrBy(`visitor:2026-11-12:${visitorId(new Headers({ "x-vercel-forwarded-for": IP }), "s")}`, VISITOR_DAILY_CAP), "cap_visitor"],
+  ["buyer cap", async (d) => d.store.incrBy("buyer:2026-11-12:judge1.testnet", VISITOR_DAILY_CAP), "cap_buyer"],
 ]) {
   test(`replay ${reason} (${name}, per caller) before accept: the open job is NOT declined (M-1), no TEE call`, async () => {
     const { deps, calls, reviewCalls } = setup();
@@ -395,10 +395,21 @@ for (const [name, prep, reason] of [
 
 test("replay cap_spend from the on-chain floor (seller's graded jobs; a partial backstop) even with an empty store", async () => {
   const reserve = reviewReserveMicro(loadPack("1"));
-  const jobs = Math.ceil(SPEND_STOP_MICRO_USD / reserve);
-  const { deps, calls } = setup({ chainOpts: { record: { passes: jobs, fails: 0, jobs } } });
+  // T-105: the floor books FLOOR_REVIEW_MICRO per graded job; refused once floor + this reserve passes $1.75.
+  const jobs = Math.floor((SPEND_STOP_MICRO_USD - reserve) / FLOOR_REVIEW_MICRO) + 1;
+  const { deps, calls } = setup({ chainOpts: { record: { passes: jobs - 3, fails: 3, jobs } } });
   const r = await handleReview(req(), deps);
   assertReplay(r, "cap_spend", calls);
+  const under = setup({ chainOpts: { record: { passes: jobs - 1, fails: 0, jobs: jobs - 1 } } });
+  assert.equal((await handleReview(req(), under.deps)).body.mode, "live", "one graded job fewer still runs live");
+});
+
+test("T-105: 183 graded jobs (where the worst-case floor used to stop live reviews) still run live; the floor lasts ~1,160", async () => {
+  const { deps } = setup({ chainOpts: { record: { passes: 170, fails: 13, jobs: 183 } } });
+  assert.equal((await handleReview(req(), deps)).body.mode, "live");
+  const reserve = reviewReserveMicro(loadPack("1"));
+  const lastLive = Math.floor((SPEND_STOP_MICRO_USD - reserve) / FLOOR_REVIEW_MICRO);
+  assert.ok(lastLive >= 1_150 && lastLive <= 1_166, `floor allows ${lastLive} graded jobs`);
 });
 
 test("a failed get_record does not block a live review (the floor is a backstop)", async () => {
@@ -924,7 +935,7 @@ test("T-084: probe down but the decline doesn't land -> replay tee_unavailable, 
 
 test("T-084: a per-caller cap refuses before the probe (no probe, no decline, job left open)", async () => {
   const { deps, calls } = withProbe({ verdict: "unavailable", status: 402 });
-  await deps.store.incrBy("buyer:2026-11-12:judge1.testnet", 3);
+  await deps.store.incrBy("buyer:2026-11-12:judge1.testnet", VISITOR_DAILY_CAP);
   const r = await handleReview(req(), deps);
   assertReplay(r, "cap_buyer", calls);
   assert.ok(!calls.some((c) => c[0] === "teeProbe" || c[0] === "decline"));
@@ -1016,14 +1027,15 @@ test("integration (T-084): real probe ok, then the chat call 402s -> the residua
   noSecrets(r.body, logs);
 });
 
-test("T-079: the 35th live review of the day runs, the 36th replays cap_daily and declines the open job", async () => {
-  const s35 = setup();
-  await s35.deps.store.incrBy("day:2026-11-12", 34);
-  assert.equal((await handleReview(req(), s35.deps)).body.mode, "live");
-  const s36 = setup();
-  await s36.deps.store.incrBy("day:2026-11-12", 35);
-  const r = await handleReview(req(), s36.deps);
-  assertReplay(r, "cap_daily", s36.calls);
+test("T-105: the 100th live review of the day runs, the 101st replays cap_daily and declines the open job", async () => {
+  assert.equal(DAILY_LIVE_CAP, 100);
+  const last = setup();
+  await last.deps.store.incrBy("day:2026-11-12", DAILY_LIVE_CAP - 1);
+  assert.equal((await handleReview(req(), last.deps)).body.mode, "live");
+  const over = setup();
+  await over.deps.store.incrBy("day:2026-11-12", DAILY_LIVE_CAP);
+  const r = await handleReview(req(), over.deps);
+  assertReplay(r, "cap_daily", over.calls);
   assert.equal(r.body.job_state, "declined");
 });
 
@@ -1047,7 +1059,7 @@ for (const [name, reason, prep] of [
   });
 }
 
-test("M-1: the budget is site-wide: the 35th decline of the day is sent, the 36th is not, whoever asks", async () => {
+test("M-1: the budget is site-wide: the last decline of the day (DAILY_DECLINE_CAP, 100) is sent, the next is not, whoever asks", async () => {
   const a = setup();
   await a.deps.store.incrBy("day:2026-11-12", DAILY_LIVE_CAP);
   await a.deps.store.incrBy("declines:2026-11-12", DAILY_DECLINE_CAP - 1);
@@ -1067,7 +1079,7 @@ test("M-1: per-caller refusals and live reviews never draw on the decline budget
   assert.equal((await handleReview(req(), live.deps)).body.mode, "live");
   assert.equal(await live.deps.store.get("declines:2026-11-12"), 0);
   const capped = setup();
-  await capped.deps.store.incrBy("buyer:2026-11-12:judge1.testnet", 3);
+  await capped.deps.store.incrBy("buyer:2026-11-12:judge1.testnet", VISITOR_DAILY_CAP);
   assert.equal((await handleReview(req(), capped.deps)).body.reason, "cap_buyer");
   assert.equal(await capped.deps.store.get("declines:2026-11-12"), 0);
 });
