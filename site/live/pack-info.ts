@@ -16,16 +16,16 @@ const read = (p: string) => readFileSync(/* turbopackIgnore: true */ p, "utf8");
 const list = (p: string) => readdirSync(/* turbopackIgnore: true */ p);
 
 export function packInfo(root: string = join(process.cwd(), "packs")): PackInfo[] {
-  const index = JSON.parse(read(join(root, "index.json"))).packs as IndexEntry[];
+  const index = JSON.parse(read(/* turbopackIgnore: true */ join(root, "index.json"))).packs as IndexEntry[];
   return index.map((e) => {
-    const dir = join(root, e.dir);
+    const dir = join(/* turbopackIgnore: true */ root, e.dir);
     const files = list(dir).filter((f) => !f.startsWith(".") && f !== "__pycache__").sort()
-      .map((path) => ({ path, sha256: sha256Hex(read(join(dir, path))) }));
+      .map((path) => ({ path, sha256: sha256Hex(read(/* turbopackIgnore: true */ join(dir, path))) }));
     const hash = sha256Hex(canonicalJson({ pack_id: `pack-${e.id}`, files }));
-    const key = JSON.parse(read(join(dir, "answer-key.json")));
+    const key = JSON.parse(read(/* turbopackIgnore: true */ join(dir, "answer-key.json")));
     validateKey(key);
     const file = e.review_files[0];
-    const source = read(join(dir, file));
+    const source = read(/* turbopackIgnore: true */ join(dir, file));
     return { id: e.id, name: e.name, level: e.level, file, lines: source.split("\n").length - (source.endsWith("\n") ? 1 : 0), hash: e.hash, hashOk: hash === e.hash, key };
   });
 }
